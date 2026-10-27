@@ -1,0 +1,465 @@
+// Package store reads and writes the two eval lanes on disk. It never runs anything: it is the
+// only place that touches <root>/evals/trigger-evals.json and <root>/<skill>/evals/evals.json.
+package store
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"evalctl/internal/model"
+)
+
+const (
+	LaneTrigger = "trigger"
+	LaneOutput  = "output"
+
+	TriggerFileName = "trigger-evals.json"
+)
+
+// Skill is one stage skill: its name, its case file and the cases in it.
+type Skill struct {
+	Name     string
+	Dir      string // <root>/<name>
+	FilePath string // <root>/<name>/evals/evals.json
+	Output   model.OutputFile
+	OnDisk   bool // evals.json exists (a trigger-only skill may not)
+}
+
+// Store is the whole eval tree in memory. Edits mutate it; writes are explicit and atomic.
+type Store struct {
+	Root        string
+	TriggerPath string
+	Trigger     model.TriggerFile
+	TriggerOK   bool // trigger file exists and parsed
+	Skills      []*Skill
+}
+
+// Open loads the tree rooted at dir (walking up if dir is inside one).
+func Open(dir string) (*Store, error) {
+	root, err := FindRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	s := &Store{Root: root, TriggerPath: filepath.Join(root, "evals", TriggerFileName)}
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || e.Name() == "evals" {
+			continue
+		}
+		path := filepath.Join(root, e.Name(), "evals", "evals.json")
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		sk := &Skill{Name: e.Name(), Dir: filepath.Join(root, e.Name()), FilePath: path}
+		if err := readJSON(path, &sk.Output); err != nil {
+			return nil, fmt.Errorf("%s: %w", rel(root, path), err)
+		}
+		if sk.Output.SkillName == "" {
+			sk.Output.SkillName = e.Name()
+		}
+		sk.OnDisk = true
+		for i := range sk.Output.Evals {
+			if sk.Output.Evals[i].Files == nil {
+				sk.Output.Evals[i].Files = []string{}
+			}
+		}
+		s.Skills = append(s.Skills, sk)
+	}
+	sort.Slice(s.Skills, func(i, j int) bool { return s.Skills[i].Name < s.Skills[j].Name })
+
+	if _, err := os.Stat(s.TriggerPath); err == nil {
+		if err := readJSON(s.TriggerPath, &s.Trigger); err != nil {
+			return nil, fmt.Errorf("%s: %w", rel(root, s.TriggerPath), err)
+		}
+		s.TriggerOK = true
+	}
+	return s, nil
+}
+
+// FindRoot walks up from start to the project root: the dir holding evals/run.py, or failing
+// that the dir holding stage skills with their own evals/evals.json.
+func FindRoot(start string) (string, error) {
+	abs, err := filepath.Abs(start)
+	if err != nil {
+		return "", err
+	}
+	if info, err := os.Stat(abs); err == nil && !info.IsDir() {
+		abs = filepath.Dir(abs)
+	}
+	dir := abs
+	for {
+		if isFile(filepath.Join(dir, "evals", "run.py")) || hasSkillDirs(dir) {
+			return dir, nil
+		}
+		if filepath.Base(dir) == "evals" && isFile(filepath.Join(dir, "run.py")) {
+			return filepath.Dir(dir), nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("no eval tree found at or above %s (expected evals/run.py or <skill>/evals/evals.json)", abs)
+		}
+		dir = parent
+	}
+}
+
+func hasSkillDirs(root string) bool {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() && isFile(filepath.Join(root, e.Name(), "evals", "evals.json")) {
+			return true
+		}
+	}
+	return false
+}
+
+func isFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+// ---------------------------------------------------------------- lookups
+
+// SkillNames lists stage skills in alphabetical order.
+func (s *Store) SkillNames() []string {
+	out := make([]string, 0, len(s.Skills))
+	for _, sk := range s.Skills {
+		out = append(out, sk.Name)
+	}
+	return out
+}
+
+// Skill looks a stage skill up, creating an empty in-memory one if it is new but legal.
+func (s *Store) Skill(name string) *Skill {
+	name = strings.TrimSpace(name)
+	for _, sk := range s.Skills {
+		if sk.Name == name {
+			return sk
+		}
+	}
+	return nil
+}
+
+// EnsureSkill returns the skill, adding an in-memory entry (written on save) when missing.
+func (s *Store) EnsureSkill(name string) *Skill {
+	if sk := s.Skill(name); sk != nil {
+		return sk
+	}
+	if name == "" || strings.ContainsAny(name, `/\`) {
+		return nil
+	}
+	sk := &Skill{
+		Name:     name,
+		Dir:      filepath.Join(s.Root, name),
+		FilePath: filepath.Join(s.Root, name, "evals", "evals.json"),
+		Output:   model.OutputFile{SkillName: name},
+	}
+	s.Skills = append(s.Skills, sk)
+	sort.Slice(s.Skills, func(i, j int) bool { return s.Skills[i].Name < s.Skills[j].Name })
+	return sk
+}
+
+// KnownSkills is every skill name the tree mentions: on-disk stage skills plus anything the
+// trigger file already references. Used for editor pickers so an orphaned row stays editable.
+func (s *Store) KnownSkills() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(n string) {
+		if n != "" && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	for _, sk := range s.Skills {
+		add(sk.Name)
+	}
+	for _, q := range s.Trigger.Queries {
+		add(q.Skill)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (s *Store) TriggerPathFor() string { return s.TriggerPath }
+
+func (s *Store) OutputPathFor(skill string) string {
+	sk := s.Skill(skill)
+	if sk == nil {
+		return filepath.Join(s.Root, skill, "evals", "evals.json")
+	}
+	return sk.FilePath
+}
+
+// FixtureDir is <skill>/evals/files/<slug>/ — the run root mirror for one case.
+func (s *Store) FixtureDir(skill, slug string) string {
+	return filepath.Join(s.Root, skill, "evals", "files", slug)
+}
+
+// FixtureFiles lists the fixture dir relative to itself, sorted; nil when it does not exist.
+func (s *Store) FixtureFiles(skill, slug string) []string {
+	dir := s.FixtureDir(skill, slug)
+	var out []string
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		out = append(out, rel(dir, path))
+		return nil
+	})
+	sort.Strings(out)
+	return out
+}
+
+func (s *Store) FixtureExists(skill, slug string) bool {
+	info, err := os.Stat(s.FixtureDir(skill, slug))
+	return err == nil && info.IsDir()
+}
+
+// ---------------------------------------------------------------- writes
+
+// SaveTrigger writes the trigger lane, backing up whatever was there.
+func (s *Store) SaveTrigger() error {
+	b, err := json.MarshalIndent(s.Trigger, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := s.writeFile(s.TriggerPath, append(b, '\n')); err != nil {
+		return err
+	}
+	s.TriggerOK = true
+	return nil
+}
+
+// SaveSkill writes one stage skill's case file.
+func (s *Store) SaveSkill(name string) error {
+	sk := s.Skill(name)
+	if sk == nil {
+		return fmt.Errorf("unknown skill %q", name)
+	}
+	sk.Output.SkillName = sk.Name
+	b, err := json.MarshalIndent(sk.Output, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := s.writeFile(sk.FilePath, append(b, '\n')); err != nil {
+		return err
+	}
+	sk.OnDisk = true
+	return nil
+}
+
+// SaveAll writes both lanes. A lane whose file does not exist is not created.
+func (s *Store) SaveAll() error {
+	var errs []string
+	if s.TriggerOK {
+		if err := s.SaveTrigger(); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	for _, sk := range s.Skills {
+		if sk.OnDisk {
+			if err := s.SaveSkill(sk.Name); err != nil {
+				errs = append(errs, err.Error())
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func (s *Store) writeFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+		if err := s.backup(path); err != nil {
+			return err
+		}
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".evalctl-*.json")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(name, mode); err != nil {
+		return err
+	}
+	return os.Rename(name, path)
+}
+
+// backup copies the previous bytes of path into .evalctl/backups so a bad trim is undoable.
+func (s *Store) backup(path string) error {
+	old, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(s.Root, ".evalctl", "backups")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	stamp := time.Now().Format("20060102-150405.000000")
+	name := fmt.Sprintf("%s--%s.json", stamp, strings.ReplaceAll(rel(s.Root, path), string(os.PathSeparator), "_"))
+	if err := os.WriteFile(filepath.Join(dir, name), old, 0o644); err != nil {
+		return err
+	}
+	return pruneBackups(dir, 200)
+}
+
+func pruneBackups(dir string, keep int) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	var files []os.DirEntry
+	for _, e := range entries {
+		if !e.IsDir() {
+			files = append(files, e)
+		}
+	}
+	if len(files) <= keep {
+		return nil
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
+	for _, e := range files[:len(files)-keep] {
+		_ = os.Remove(filepath.Join(dir, e.Name()))
+	}
+	return nil
+}
+
+// DeleteFixture removes a case's fixture dir. Refuses to leave evals/files/ entirely.
+func (s *Store) DeleteFixture(skill, slug string) error {
+	dir := s.FixtureDir(skill, slug)
+	if !strings.HasPrefix(filepath.Clean(dir), filepath.Clean(filepath.Join(s.Root, skill, "evals", "files"))+string(os.PathSeparator)) {
+		return fmt.Errorf("refusing to delete outside the fixture dir: %s", dir)
+	}
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return os.RemoveAll(dir)
+}
+
+// RenameFixture moves a fixture dir when a case's slug changes.
+func (s *Store) RenameFixture(skill, oldSlug, newSlug string) error {
+	if oldSlug == newSlug || oldSlug == "" || newSlug == "" {
+		return nil
+	}
+	from := s.FixtureDir(skill, oldSlug)
+	to := s.FixtureDir(skill, newSlug)
+	if _, err := os.Stat(from); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if _, err := os.Stat(to); err == nil {
+		return fmt.Errorf("fixture dir for %q already exists: %s", newSlug, rel(s.Root, to))
+	}
+	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+		return err
+	}
+	return os.Rename(from, to)
+}
+
+// MoveFixture carries a case's fixture dir to another skill when the case moves skills.
+func (s *Store) MoveFixture(fromSkill, toSkill, slug string) error {
+	if fromSkill == toSkill {
+		return nil
+	}
+	from := s.FixtureDir(fromSkill, slug)
+	to := s.FixtureDir(toSkill, slug)
+	if _, err := os.Stat(from); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if _, err := os.Stat(to); err == nil {
+		return fmt.Errorf("%s already has a fixture dir for %q", toSkill, slug)
+	}
+	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+		return err
+	}
+	return os.Rename(from, to)
+}
+
+// ---------------------------------------------------------------- ids
+
+// NextTriggerID is max(id)+1: ids stay stable forever, deletions leave gaps on purpose so old
+// result dirs (q<id>-<skill>) keep pointing at the same query.
+func (s *Store) NextTriggerID() int {
+	max := 0
+	for _, q := range s.Trigger.Queries {
+		if q.ID > max {
+			max = q.ID
+		}
+	}
+	return max + 1
+}
+
+// NextCaseID is max(id)+1 for one skill's cases.
+func (s *Store) NextCaseID(skill string) int {
+	sk := s.Skill(skill)
+	if sk == nil {
+		return 1
+	}
+	max := 0
+	for _, c := range sk.Output.Evals {
+		if c.ID > max {
+			max = c.ID
+		}
+	}
+	return max + 1
+}
+
+// ---------------------------------------------------------------- helpers
+
+func readJSON(path string, v any) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(b, v); err != nil {
+		return fmt.Errorf("invalid JSON: %w", err)
+	}
+	return nil
+}
+
+func rel(base, path string) string {
+	r, err := filepath.Rel(base, path)
+	if err != nil {
+		return path
+	}
+	return r
+}
+
+// AtoiField parses a CLI numeric argument with a clearer error than strconv.
+func AtoiField(name, val string) (int, error) {
+	n, err := strconv.Atoi(strings.TrimSpace(val))
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a number, got %q", name, val)
+	}
+	return n, nil
+}
