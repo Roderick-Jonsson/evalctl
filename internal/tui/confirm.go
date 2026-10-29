@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -130,10 +131,12 @@ func clipLine(s string, n int) string {
 // ---------------------------------------------------------------- viewer
 
 type viewerState struct {
-	kind  string // "profiles" enables the u = ensure action
-	title string
-	lines []string
-	top   int
+	kind   string // "profiles" enables the u = ensure action, "activity" is a live tail
+	title  string
+	lines  []string
+	top    int
+	path   string // activity.log behind a live view; re-read on every tick
+	follow bool   // pinned to the newest line
 }
 
 // newIssueViewer lists what validation found, in the same scrollable pane as a row.
@@ -256,24 +259,35 @@ func (m *Model) updateViewer(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	h := max(4, m.height-6)
 	switch msg.String() {
 	case "esc", "q", "v":
-		m.mode = screenList
+		// A live activity tail belongs to the run table it came from.
+		if v.kind == "activity" && m.runActive {
+			m.mode = screenRunProgress
+		} else {
+			m.mode = screenList
+		}
 		m.viewer = nil
 	case "down", "j":
 		if v.top < len(v.lines)-h {
 			v.top++
 		}
+		v.follow = v.top >= len(v.lines)-h
 	case "up", "k":
 		if v.top > 0 {
 			v.top--
 		}
+		v.follow = false
 	case "pgdown", "ctrl+d", " ":
 		v.top = min(len(v.lines)-h, v.top+h/2)
+		v.follow = v.top >= len(v.lines)-h
 	case "pgup", "ctrl+u":
 		v.top = max(0, v.top-h/2)
+		v.follow = false
 	case "g":
 		v.top = 0
+		v.follow = false
 	case "G":
 		v.top = max(0, len(v.lines)-h)
+		v.follow = true
 	case "u":
 		if v.kind == "profiles" {
 			message := m.ensureProfiles()
@@ -286,11 +300,34 @@ func (m *Model) updateViewer(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (v *viewerState) view(width, height int) string {
 	h := max(4, height-6)
-	end := min(len(v.lines), v.top+h)
-	body := strings.Join(v.lines[v.top:end], "\n")
+	// A followed log grows under the reader: anchor on the newest line instead of a fixed offset.
+	start := v.top
+	if v.follow {
+		start = len(v.lines)
+	}
+	if start > len(v.lines)-h {
+		start = len(v.lines) - h
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := min(len(v.lines), start+h)
+	body := strings.Join(v.lines[start:end], "\n")
 	if len(v.lines) == 0 {
 		body = dimStyle.Render("(empty)")
 	}
 	foot := dimStyle.Render(fmt.Sprintf("  %d/%d · j k scroll · esc close", min(end, len(v.lines)), len(v.lines)))
 	return titleStyle.Render(v.title) + "\n\n" + body + "\n\n" + foot
+}
+
+// refresh re-reads a live activity log. The file is the source of truth: the pane mirrors it.
+func (v *viewerState) refresh() {
+	if v.path == "" {
+		return
+	}
+	b, err := os.ReadFile(v.path)
+	if err != nil {
+		return
+	}
+	v.lines = textLines(string(b))
 }

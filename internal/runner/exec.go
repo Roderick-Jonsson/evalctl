@@ -179,26 +179,39 @@ func (r *Runner) RunArm(ctx context.Context, c Case, arm, armDir string, o Optio
 	if err != nil {
 		return ArmResult{}, err
 	}
-	select {
-	case <-proc.done:
-		code := proc.code
-		exitCode = &code
-		if proc.err != nil {
-			msg := proc.err.Error()
-			runErr = &msg
-		}
-	case <-runCtx.Done():
-		proc.stop()
-		code := proc.code
-		exitCode = &code
-		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-			msg := fmt.Sprintf("timeout after %s", o.Budget)
-			runErr = &msg
-		} else {
-			msg := "cancelled"
-			runErr = &msg
+	// The child is writing; tail its stream so the run is watchable while it happens.
+	act := r.startActivity(stream, filepath.Join(armDir, "activity.log"), c.Slug, arm, o.Log)
+	ticker := time.NewTicker(activityPoll)
+	defer ticker.Stop()
+loop:
+	for {
+		select {
+		case <-proc.done:
+			code := proc.code
+			exitCode = &code
+			if proc.err != nil {
+				msg := proc.err.Error()
+				runErr = &msg
+			}
+			break loop
+		case <-runCtx.Done():
+			act.poll()
+			proc.stop()
+			code := proc.code
+			exitCode = &code
+			if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+				msg := fmt.Sprintf("timeout after %s", o.Budget)
+				runErr = &msg
+			} else {
+				msg := "cancelled"
+				runErr = &msg
+			}
+			break loop
+		case <-ticker.C:
+			act.poll()
 		}
 	}
+	act.close()
 
 	guard := RootGuard(guardBefore, RootSnapshot(r.Profiles.MasterclassRoot), r.Profiles.MasterclassRoot)
 	after, err := Inventory(runRoot)
@@ -401,25 +414,30 @@ func (r *Runner) RunTriggerCase(ctx context.Context, c TriggerCase, runDir strin
 	if err != nil {
 		return TriggerRecord{}, err
 	}
+	// A trigger observation is a one-turn conversation whose only outcome is a load, so the same
+	// tail that feeds the log decides the early stop: one read of the stream instead of two.
+	act := r.startActivity(stream, filepath.Join(runDir, "activity.log"), caseDirName(c), "trigger", o.Log)
 	var earlyStop, runErr *string
 	var exitCode *int
 	cancelled := false
+	var loadedSoFar []string
 
 loop:
 	for {
-		if hit, ok := firstLoaded(stream, stopOn); ok {
-			msg := hit + " loaded"
+		loadedSoFar = mergeLoaded(loadedSoFar, LoadedFromEvents(act.poll(), stopOn))
+		if len(loadedSoFar) > 0 {
+			msg := loadedSoFar[0] + " loaded"
 			earlyStop = &msg
-			break
+			break loop
 		}
 		if code, exited := proc.exitCode(); exited {
 			exitCode = &code
-			break
+			break loop
 		}
 		select {
 		case <-ctx.Done():
 			cancelled = true
-		case <-time.After(250 * time.Millisecond):
+		case <-time.After(activityPoll):
 		}
 		if cancelled {
 			msg := "cancelled"
@@ -432,7 +450,9 @@ loop:
 			break loop
 		}
 	}
+	act.poll()
 	proc.stop()
+	act.close()
 	if exitCode == nil {
 		code := proc.code
 		exitCode = &code
@@ -483,15 +503,6 @@ loop:
 		return TriggerRecord{}, err
 	}
 	return record, nil
-}
-
-// firstLoaded reports the first stop-on skill already present in the stream.
-func firstLoaded(stream string, stopOn []string) (string, bool) {
-	loaded := LoadedFromEvents(IterEvents(stream), stopOn)
-	if len(loaded) == 0 {
-		return "", false
-	}
-	return loaded[0], true
 }
 
 // process wraps one child with exactly one Wait: the trigger lane polls it while it runs, and a

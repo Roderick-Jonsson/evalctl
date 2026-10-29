@@ -281,6 +281,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tickMsg:
 		if m.runActive {
+			// A followed activity log is re-read every tick: the pane shows the arm as it runs.
+			if m.mode == screenViewer && m.viewer != nil && m.viewer.path != "" {
+				m.viewer.refresh()
+			}
 			return m, tickEvery()
 		}
 		return m, nil
@@ -521,6 +525,8 @@ var (
 	statusBad  = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	titleStyle = lipgloss.NewStyle().Bold(true)
 	dimStyle   = lipgloss.NewStyle().Faint(true)
+	// activityTool colours the tool-call lines of a live activity log.
+	activityTool = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 )
 
 func (m *Model) View() string {
@@ -765,6 +771,7 @@ func (m *Model) helpView() string {
 		"  L            results: every iteration under evals/results, enter opens its report.md",
 		"  P            profiles: check the four sandboxes, u runs ensure on what fails",
 		"  esc          in a run table: back to the list, the run keeps going; x cancels it",
+		"  v / a        agent activity: v in the run table (live), a in the results browser",
 		"",
 		"  q            quit (warns once if unsaved)",
 		"",

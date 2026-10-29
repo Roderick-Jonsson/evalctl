@@ -80,6 +80,8 @@ type Options struct {
 	Runs      int
 	Threshold float64
 	MaxTurns  int
+	// Log is how much of the agent's own stream reaches activity.log and the progress view.
+	Log ActivityLevel
 }
 
 // Normalize fills in the lane defaults: a trigger run gets the trigger lane's shorter budget.
@@ -120,6 +122,9 @@ func (o *Options) Normalize() error {
 	if o.Threshold <= 0 {
 		o.Threshold = DefaultTriggerThreshold
 	}
+	if o.Log == ActivityUnset {
+		o.Log = ActivityFull
+	}
 	return nil
 }
 
@@ -131,6 +136,7 @@ type Event struct {
 	Arm     string
 	Message string
 	Result  *ArmResult
+	Path    string // activity.log behind an EventActivity line
 	Err     error
 }
 
@@ -141,6 +147,7 @@ const (
 	EventCase       = "case"
 	EventArmStart   = "arm-start"
 	EventArmDone    = "arm-done"
+	EventActivity   = "activity"
 	EventTriggerRun = "trigger-run"
 	EventMessage    = "message"
 	EventScored     = "scored"

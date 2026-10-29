@@ -3,8 +3,12 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"sort"
 	"strings"
 	"time"
+
+	"path/filepath"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -41,6 +45,7 @@ type launcherState struct {
 	isolate   bool
 	dryRun    bool
 	split     string
+	activity  string // full, tools or off — how much of the agent's stream is shown
 	runs      int
 	threshold float64
 	maxTurns  int
@@ -67,6 +72,7 @@ func (m *Model) openLauncher() {
 	l := &launcherState{
 		lane: lane, arms: "both", resume: false, force: false, verify: true,
 		isolate: true, split: m.filter.Split, runs: 0, threshold: 0, maxTurns: 0,
+		activity: "full",
 	}
 	if l.split == "" {
 		l.split = "all"
@@ -148,6 +154,7 @@ func (m *Model) options() []struct{ label, value string } {
 			struct{ label, value string }{"force", onOff(l.force)},
 			struct{ label, value string }{"dry run", onOff(l.dryRun)},
 			struct{ label, value string }{"model", orDashText(l.model)},
+			struct{ label, value string }{"activity", l.activity},
 			struct{ label, value string }{"budget", fmt.Sprintf("%ds", l.budget)},
 		)
 		return rows
@@ -167,6 +174,7 @@ func (m *Model) options() []struct{ label, value string } {
 		struct{ label, value string }{"isolate", onOff(l.isolate)},
 		struct{ label, value string }{"dry run", onOff(l.dryRun)},
 		struct{ label, value string }{"model", orDashText(l.model)},
+		struct{ label, value string }{"activity", l.activity},
 		struct{ label, value string }{"budget", fmt.Sprintf("%ds", l.budget)},
 	)
 	return rows
@@ -308,6 +316,15 @@ func (m *Model) adjustOption(dir int) {
 		if l.threshold > 0.95 {
 			l.threshold = 0.95
 		}
+	case "activity":
+		order := []string{"full", "tools", "off"}
+		index := 0
+		for i, name := range order {
+			if name == l.activity {
+				index = i
+			}
+		}
+		l.activity = order[(index+dir+len(order))%len(order)]
 	case "max turns":
 		l.maxTurns += dir
 		if l.maxTurns < 1 {
@@ -370,7 +387,7 @@ func (m *Model) optionsOf() runner.Options {
 		Split: l.split, Model: l.model, Budget: time.Duration(l.budget) * time.Second,
 		Resume: l.resume, Force: l.force, NoVerify: !l.verify, Isolate: l.isolate,
 		DryRun: l.dryRun, Iteration: l.iteration, Runs: l.runs, Threshold: l.threshold,
-		MaxTurns: l.maxTurns,
+		MaxTurns: l.maxTurns, Log: activityLevel(l.activity),
 	}
 	switch l.arms {
 	case "with":
@@ -405,9 +422,20 @@ type progressState struct {
 	cases   []progressCase
 	index   map[string]int
 	log     []string
+	logPath string // activity.log of the arm whose lines are newest
+	logArm  string
 	cancel  context.CancelFunc
 	err     error
 	summary string
+}
+
+// activityLevel reads the form's verbosity; "" is full, the same default the CLI uses.
+func activityLevel(s string) runner.ActivityLevel {
+	level, err := runner.ParseActivity(s)
+	if err != nil || level == runner.ActivityUnset {
+		return runner.ActivityFull
+	}
+	return level
 }
 
 func (p *progressState) caseAt(name string) *progressCase {
@@ -501,6 +529,17 @@ func (m *Model) applyEvent(e runner.Event) {
 			detail = e.Message
 		}
 		updateArm(pc, e.Arm, status, detail)
+	case runner.EventActivity:
+		// The arm's own stream: tool calls, results and its running text, folded straight into
+		// the log box. Lines are kept plain and coloured at render time so a clipped line never
+		// cuts an escape sequence.
+		if text := strings.TrimSpace(e.Message); text != "" {
+			p.log = append(p.log, text)
+		}
+		if e.Path != "" {
+			p.logPath = e.Path
+			p.logArm = strings.TrimSpace(e.Case + " " + e.Arm)
+		}
 	case runner.EventScored, runner.EventDone:
 		p.summary = e.Message
 		if e.Case != "" {
@@ -578,8 +617,30 @@ func (m *Model) updateProgress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.openReportFor(p.runRef)
 		}
 		return m, nil
+	case "v":
+		m.openActivity(p.logPath, p.logArm)
+		return m, nil
 	}
 	return m, nil
+}
+
+// openActivity shows one arm's activity.log in full, following it while the arm still writes.
+func (m *Model) openActivity(path, label string) {
+	if path == "" {
+		m.setStatus("no activity yet — nothing has reached the stream", false)
+		return
+	}
+	text, err := os.ReadFile(path)
+	if err != nil {
+		m.setStatus("cannot read "+path+": "+err.Error(), true)
+		return
+	}
+	v := &viewerState{kind: "activity", path: path, title: label + " · activity.log",
+		lines: textLines(string(text))}
+	v.refresh()
+	v.follow = m.runActive
+	m.viewer = v
+	m.mode = screenViewer
 }
 
 func (m *Model) progressView() string {
@@ -633,10 +694,10 @@ func (m *Model) progressView() string {
 	b.WriteString(styleOn.Render(counter) + "\n")
 
 	if len(p.log) > 0 {
-		b.WriteString("\n" + dimStyle.Render("  log") + "\n")
+		b.WriteString("\n" + dimStyle.Render("  activity") + "\n")
 		start := max(0, len(p.log)-8)
 		for _, line := range p.log[start:] {
-			b.WriteString("  " + clipLine(line, max(30, m.width-6)) + "\n")
+			b.WriteString("  " + activityStyled(line, max(30, m.width-6)) + "\n")
 		}
 	}
 	if p.err != nil {
@@ -644,12 +705,29 @@ func (m *Model) progressView() string {
 	} else if p.summary != "" && !m.runActive {
 		b.WriteString("\n" + styleOn.Render("  "+p.summary) + "\n")
 	}
-	foot := "  esc back · o open report"
+	foot := "  esc back · o open report · v activity"
 	if m.runActive {
-		foot = "  esc back (run keeps going) · x cancel"
+		foot = "  esc back (run keeps going) · x cancel · v activity"
 	}
 	b.WriteString("\n" + dimStyle.Render(foot))
 	return b.String()
+}
+
+// activityStyled clips a plain activity line and then colours it: clipping an already-coloured
+// line would cut an escape sequence in half. Lines the runner did not produce are left alone.
+func activityStyled(line string, width int) string {
+	clipped := clipLine(line, width)
+	switch {
+	case strings.HasPrefix(clipped, "▸"):
+		return activityTool.Render(clipped)
+	case strings.HasPrefix(clipped, "✓"):
+		return statusOk.Render(clipped)
+	case strings.HasPrefix(clipped, "✗"):
+		return statusBad.Render(clipped)
+	case strings.HasPrefix(clipped, "│"):
+		return dimStyle.Render(clipped)
+	}
+	return clipped
 }
 
 // openReportFor shows the report.md the run just wrote.
@@ -731,8 +809,43 @@ func (m *Model) updateRuns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = screenViewer
 		}
 		return m, nil
+	case "a":
+		if list.cursor < len(list.infos) {
+			m.openRunActivity(list.infos[list.cursor])
+		}
+		return m, nil
 	}
 	return m, nil
+}
+
+// openRunActivity concatenates every arm's activity.log under an iteration: a finished run can be
+// read back the way it was watched.
+func (m *Model) openRunActivity(info runner.RunInfo) {
+	var files []string
+	for _, pattern := range []string{"*/*/activity.log", "*/*/*/activity.log"} {
+		if matches, err := filepath.Glob(filepath.Join(info.Path, pattern)); err == nil {
+			files = append(files, matches...)
+		}
+	}
+	sort.Strings(files)
+	if len(files) == 0 {
+		m.setStatus(info.Name+" has no activity.log — run it again with activity on", true)
+		return
+	}
+	lines := []string{}
+	for _, file := range files {
+		label, err := filepath.Rel(info.Path, file)
+		if err != nil {
+			label = file
+		}
+		lines = append(lines, "", "  "+titleStyle.Render(strings.TrimSuffix(label, "/activity.log")))
+		if b, err := os.ReadFile(file); err == nil {
+			lines = append(lines, textLines(string(b))...)
+		}
+	}
+	m.viewer = &viewerState{kind: "run-activity",
+		title: fmt.Sprintf("%s · activity · %d arms", info.Name, len(files)), lines: lines}
+	m.mode = screenViewer
 }
 
 func (m *Model) runsView() string {
@@ -765,7 +878,7 @@ func (m *Model) runsView() string {
 			b.WriteString(line + "\n")
 		}
 	}
-	b.WriteString("\n" + dimStyle.Render("  esc back · enter open · r reload"))
+	b.WriteString("\n" + dimStyle.Render("  esc back · enter report · a activity · r reload"))
 	return b.String()
 }
 

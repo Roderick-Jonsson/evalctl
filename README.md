@@ -48,7 +48,7 @@ checkable against what the old loop produced.
 | `ctrl+v` | the validation findings, scrollable |
 | `ctrl+s` | write both lanes (atomic; previous bytes in `.evalctl/backups/`) |
 | `R` | **run** what is selected (or the whole lane) — form, then `enter` |
-| `L` | **results**: every iteration under `evals/results`, `enter` opens its `report.md` |
+| `L` | **results**: every iteration under `evals/results`, `enter` opens its `report.md`, `a` its activity logs |
 | `P` | **profiles**: check the four sandboxes, `u` runs `ensure` on what fails |
 | `?` | help · `q` quit (asks once if there are unsaved changes or a run is going) |
 
@@ -74,16 +74,44 @@ Rows, `j k` to move and `← →`/`space` to change:
 | isolate | temp run root, result copied back (on by default) | n/a — always a temp root |
 | dry run | print the commands, write nothing | same |
 | model | `-m` for `hermes chat` | same |
+| activity | `full` / `tools` / `off` — how much of the agent's stream is logged | same |
 | budget | seconds per run (1200 output, 240 trigger) | same |
 | split / runs / threshold / max turns | — | `all`/`train`/`validation`, N runs per query, pass threshold, `--max-turns` |
 
 ### The run table
 
 A live table, one row per case and one mark per arm: `·` pending, `⟳` running, `✓` done, `✗` failed
-(non-zero exit, or a write outside the workspace). Counters and the last eight log lines sit
-underneath. `esc` goes back to the list and **the run keeps going** — the header shows `⟳ run in
-progress`; `R` returns to the table, `x` cancels (finished arms are kept, `--resume` picks up),
-and `o` opens the report once it is written.
+(non-zero exit, or a write outside the workspace). Counters and the last eight lines of the
+running arm's activity sit underneath. `esc` goes back to the list and **the run keeps going** —
+the header shows `⟳ run in progress`; `R` returns to the table, `x` cancels (finished arms are
+kept, `--resume` picks up), `v` opens the arm's full `activity.log` (it keeps following while the
+arm runs), and `o` opens the report once it is written.
+
+### Live activity
+
+An arm is opaque for as long as it takes — a twenty-minute run used to show one `⟳` and nothing
+else. The child already writes one JSON frame per event to `stream.jsonl`, so the runner tails
+that file every 250 ms and folds each frame into a line:
+
+```
++  12.4s  │ I'll start by checking the workspace and loading the skill.
++  13.1s  ▸ skill_view  slide-builder
++  13.1s  ✓ skill_view  0.0s
++  15.8s  ▸ terminal  go run . verify --root MC-kubernetes-operators
++  18.2s  ✓ terminal  2.4s
+```
+
+`▸` is a tool call with the one input that matters (the command, the path, the query), `✓`/`✗` its
+result and cost, `│` the agent's own streamed prose — coalesced, because the stream is one frame
+per token. Every line carries `+seconds` since the arm started.
+
+The same lines are written to `activity.log` next to `stream.jsonl`, so a finished run can be read
+back: `L` → `a` shows every arm's log in one pane. The file is the evidence and the log is the
+narrative; nothing about how the arm launches changes, and a log that cannot be written never
+fails an arm.
+
+`activity` in the run form (or `--log full|tools|off`) decides how much gets through: `full` adds
+the prose, `tools` keeps only the calls, `off` writes no log and emits nothing.
 
 ## CLI
 
@@ -152,12 +180,12 @@ Every read command takes `--json` where it makes sense (`ls`, `show`, `validate`
 evals/results/iteration-N/meta.json                 contract + SOUL + skill-tree hashes
 evals/results/iteration-N/<slug>/prompt.txt
 evals/results/iteration-N/<slug>/<arm>/             the run root, fixture staged
-  stream.jsonl timing.json changes.json grading.json stderr.txt
+  stream.jsonl activity.log timing.json changes.json grading.json stderr.txt
 evals/results/iteration-N/benchmark.json report.md feedback.json
 
 evals/results/trigger-N/meta.json                   query-file hash + every description verbatim
 evals/results/trigger-N/q01-<skill>/query.txt
-evals/results/trigger-N/q01-<skill>/run-1/stream.jsonl trigger.json stderr.txt
+evals/results/trigger-N/q01-<skill>/run-1/stream.jsonl activity.log trigger.json stderr.txt
 evals/results/trigger-N/trigger.json                per-run records + the score
 evals/results/trigger-N/report.md
 ```

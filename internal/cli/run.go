@@ -31,6 +31,7 @@ type runCommand struct {
 	list      bool
 	iteration int
 	lane      string
+	logLevel  string
 }
 
 func (rc *runCommand) register(fs *flag.FlagSet) {
@@ -43,6 +44,7 @@ func (rc *runCommand) register(fs *flag.FlagSet) {
 	fs.BoolVar(&rc.list, "list", false, "list the selected cases and exit")
 	fs.IntVar(&rc.iteration, "iteration", 0, "iteration number (default: next free)")
 	fs.StringVar(&rc.lane, "lane", store.LaneOutput, "lane: output (default) or trigger")
+	fs.StringVar(&rc.logLevel, "log", "full", "live agent activity on stderr: full, tools or off")
 }
 
 func (rc *runCommand) skillsList() []string {
@@ -101,9 +103,14 @@ func runRun(args []string) int {
 	for i, arm := range opts.Arms {
 		opts.Arms[i] = strings.TrimSpace(arm)
 	}
+	level, err := runner.ParseActivity(rc.logLevel)
+	if err != nil {
+		return fail(err)
+	}
+	opts.Log = level
 
 	r := runner.New(c.s)
-	r.Emit = progressPrinter(os.Stdout)
+	r.Emit = progressPrinter(os.Stdout, os.Stderr, level)
 	return execute(c.s, r, opts)
 }
 
@@ -158,15 +165,23 @@ func lockRun(root string) (func(), error) {
 }
 
 // progressPrinter is the CLI face of the runner's events: one line per thing that happened.
-func progressPrinter(out io.Writer) func(runner.Event) {
+//
+// The arm's own activity goes to stderr so it never lands in a redirected stdout. Arms run one at
+// a time, and each announces itself on stdout before its first line, so no per-line tag is needed.
+func progressPrinter(out, activity io.Writer, level runner.ActivityLevel) func(runner.Event) {
 	return func(e runner.Event) {
 		switch e.Kind {
 		case runner.EventStart:
 			fmt.Fprintln(out, "\n"+styleTitle.Render(e.Message))
 		case runner.EventCase:
 			fmt.Fprintln(out, "\n"+styleTitle.Render(e.Message))
-		case runner.EventArmStart:
+		case runner.EventArmStart, runner.EventTriggerRun:
 			fmt.Fprintf(out, "  %s: running…\n", e.Arm)
+		case runner.EventActivity:
+			if level == runner.ActivityOff {
+				return
+			}
+			fmt.Fprintln(activity, "    "+styleActivity(e.Message))
 		case runner.EventArmDone:
 			line := "  " + e.Message
 			if e.Result != nil && !e.Result.Checks.Containment.OK {
@@ -182,6 +197,19 @@ func progressPrinter(out io.Writer) func(runner.Event) {
 			fmt.Fprintln(out, "\n"+styleTitle.Render(e.Message))
 		}
 	}
+}
+
+// styleActivity colours one activity line by what it is, the same glyphs the TUI uses.
+func styleActivity(line string) string {
+	switch {
+	case strings.HasPrefix(line, "▸"):
+		return styleDupe.Render(line)
+	case strings.HasPrefix(line, "✓"):
+		return styleYes.Render(line)
+	case strings.HasPrefix(line, "✗"):
+		return styleErr.Render(line)
+	}
+	return styleDim.Render(line)
 }
 
 // ---------------------------------------------------------------- results

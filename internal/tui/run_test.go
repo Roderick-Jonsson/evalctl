@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"evalctl/internal/runner"
@@ -247,3 +248,123 @@ func indexOf(s, want string) int {
 
 // keep the json import honest: the fixtures above are the on-disk shapes the browser reads.
 var _ = json.Marshal
+
+// The run table carries the arm's own stream: activity lines land in the log box, remember which
+// file they came from, and v opens that file.
+func TestProgressShowsLiveActivity(t *testing.T) {
+	m := testModel(t)
+	m.width, m.height = 120, 40
+	logPath := filepath.Join(t.TempDir(), "activity.log")
+	writeFile(t, logPath, "# sb-1-slides · with_skill\n+   1.0s  ▸ terminal  go run . verify\n")
+
+	m.progress = &progressState{lane: store.LaneOutput, index: map[string]int{}}
+	m.runActive = true
+	m.applyEvent(runner.Event{Kind: runner.EventCase, Case: "sb-1-slides",
+		Message: "sb-1-slides · slide-builder case 1"})
+	m.applyEvent(runner.Event{Kind: runner.EventArmStart, Case: "sb-1-slides", Arm: runner.ArmWith})
+	m.applyEvent(runner.Event{Kind: runner.EventActivity, Case: "sb-1-slides", Arm: runner.ArmWith,
+		Message: "▸ terminal  go run . verify", Path: logPath})
+
+	p := m.progress
+	if len(p.log) != 1 || !strings.Contains(p.log[0], "go run . verify") {
+		t.Fatalf("log = %v", p.log)
+	}
+	if p.logPath != logPath || p.logArm != "sb-1-slides with_skill" {
+		t.Fatalf("logPath=%q logArm=%q", p.logPath, p.logArm)
+	}
+	if view := m.progressView(); !strings.Contains(view, "go run . verify") {
+		t.Fatalf("the table does not show the activity:\n%s", view)
+	}
+
+	m.mode = screenRunProgress
+	next, _ := m.updateProgress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
+	m = next.(*Model)
+	if m.mode != screenViewer || m.viewer == nil || m.viewer.kind != "activity" {
+		t.Fatalf("v did not open the log: mode=%v viewer=%+v", m.mode, m.viewer)
+	}
+	if !strings.Contains(strings.Join(m.viewer.lines, "\n"), "go run . verify") {
+		t.Fatalf("viewer lines = %v", m.viewer.lines)
+	}
+	if !m.viewer.follow {
+		t.Fatal("a running arm's log should follow")
+	}
+
+	// The same file, after the run: opens once more, but stops chasing the bottom.
+	m.runActive = false
+	m.openActivity(logPath, "sb-1-slides with_skill")
+	if m.viewer.follow {
+		t.Fatal("a finished arm's log should not follow")
+	}
+
+	// Nothing has reached the stream yet: say so instead of opening an empty pane.
+	m.mode = screenRunProgress
+	m.openActivity("", "")
+	if m.mode != screenRunProgress || m.viewer.path != logPath {
+		t.Fatal("an empty path must leave the screen where it was")
+	}
+}
+
+// The form's activity row is the knob for all of this, and it defaults to full.
+func TestLauncherActivityKnob(t *testing.T) {
+	m := testModel(t)
+	m.openLauncher()
+	if m.launcher.activity != "full" || m.optionsOf().Log != runner.ActivityFull {
+		t.Fatalf("default activity = %q / %v", m.launcher.activity, m.optionsOf().Log)
+	}
+	cursor := -1
+	for i, row := range m.options() {
+		if row.label == "activity" {
+			cursor = i
+		}
+	}
+	if cursor < 0 {
+		t.Fatal("the run form has no activity row")
+	}
+	m.launcher.cursor = cursor
+	m.adjustOption(1)
+	if m.launcher.activity != "tools" || m.optionsOf().Log != runner.ActivityTools {
+		t.Fatalf("activity = %q / %v", m.launcher.activity, m.optionsOf().Log)
+	}
+	m.adjustOption(1)
+	if m.optionsOf().Log != runner.ActivityOff {
+		t.Fatalf("activity = %q", m.launcher.activity)
+	}
+	m.adjustOption(1)
+	if m.optionsOf().Log != runner.ActivityFull {
+		t.Fatalf("activity should cycle back to full, got %q", m.launcher.activity)
+	}
+}
+
+// L → a reads a finished iteration back: every arm's activity.log, labelled by arm, in one pane.
+func TestRunsBrowserOpensActivity(t *testing.T) {
+	m := testModel(t)
+	info := runner.RunInfo{Name: "iteration-1", Lane: store.LaneOutput, Path: t.TempDir()}
+	writeFile(t, filepath.Join(info.Path, "sb-1-slides", "with_skill", "activity.log"),
+		"+   1.0s  ▸ terminal  go run . verify\n")
+	writeFile(t, filepath.Join(info.Path, "sb-1-slides", "without_skill", "activity.log"),
+		"+   1.0s  ▸ read_file  PS.md\n")
+
+	m.openRunActivity(info)
+	if m.mode != screenViewer || m.viewer == nil {
+		t.Fatalf("a did not open the pane: mode=%v", m.mode)
+	}
+	body := strings.Join(m.viewer.lines, "\n")
+	for _, want := range []string{"sb-1-slides/with_skill", "sb-1-slides/without_skill",
+		"go run . verify", "read_file  PS.md"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("pane is missing %q:\n%s", want, body)
+		}
+	}
+	if !strings.Contains(m.viewer.title, "2 arms") {
+		t.Fatalf("title = %q", m.viewer.title)
+	}
+
+	// A run from before this existed, or with activity off: say so, do not open an empty pane.
+	empty := runner.RunInfo{Name: "iteration-2", Path: t.TempDir()}
+	m.mode = screenList
+	m.viewer = nil
+	m.openRunActivity(empty)
+	if m.mode != screenList || m.viewer != nil {
+		t.Fatal("a run without logs must not open an empty pane")
+	}
+}

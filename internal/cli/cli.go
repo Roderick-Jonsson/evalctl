@@ -45,8 +45,11 @@ const usage = `evalctl — manage and run the eval sets: trigger queries and out
   evalctl profiles [cmd]           status/check/ensure/render/sync/scrub the eval profiles
 
 Run flags: --skill, --case, --iteration, --arms, --model, --budget, --resume, --force,
-           --no-verify, --isolate=false, --dry-run, --list
+           --no-verify, --isolate=false, --dry-run, --list, --log full|tools|off
 Trigger:   --query, --split, --runs, --threshold, --max-turns (same shared flags)
+
+--log full (default) streams each arm's tool calls and prose to stderr while it runs, and writes
+the same lines to activity.log beside stream.jsonl; tools drops the prose, off writes nothing.
 
 Global: --root DIR (default: nearest dir with the eval tree, or $EVALCTL_ROOT)
 Refs:   12 --lane trigger | t12 | trigger:12 | o:slide-builder:3 | slide-builder:3
