@@ -1,4 +1,4 @@
-// Package model holds the two eval lanes' on-disk shapes exactly as evals/run.py reads them.
+// Package model holds the two eval lanes' on-disk shapes exactly as the runner reads them.
 //
 // Two rules drive everything here: the JSON must stay readable in git diffs (key order as
 // humans wrote it) and unknown keys must survive a round trip untouched — the agentskills.io

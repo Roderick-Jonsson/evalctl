@@ -87,8 +87,9 @@ func Open(dir string) (*Store, error) {
 	return s, nil
 }
 
-// FindRoot walks up from start to the project root: the dir holding evals/run.py, or failing
-// that the dir holding stage skills with their own evals/evals.json.
+// FindRoot walks up from start to the project root: the dir holding the eval tree (an
+// evals/trigger-evals.json, or an evals/ dir), or failing that the dir holding stage
+// skills with their own evals/evals.json.
 func FindRoot(start string) (string, error) {
 	abs, err := filepath.Abs(start)
 	if err != nil {
@@ -99,15 +100,15 @@ func FindRoot(start string) (string, error) {
 	}
 	dir := abs
 	for {
-		if isFile(filepath.Join(dir, "evals", "run.py")) || hasSkillDirs(dir) {
+		if isFile(filepath.Join(dir, "evals", TriggerFileName)) || hasSkillDirs(dir) {
 			return dir, nil
 		}
-		if filepath.Base(dir) == "evals" && isFile(filepath.Join(dir, "run.py")) {
+		if filepath.Base(dir) == "evals" && isFile(filepath.Join(dir, TriggerFileName)) {
 			return filepath.Dir(dir), nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", fmt.Errorf("no eval tree found at or above %s (expected evals/run.py or <skill>/evals/evals.json)", abs)
+			return "", fmt.Errorf("no eval tree found at or above %s (expected evals/%s or <skill>/evals/evals.json)", abs, TriggerFileName)
 		}
 		dir = parent
 	}

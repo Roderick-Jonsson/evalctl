@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Severity ranks an issue by what it costs: Error means evals/run.py refuses the tree or the
+// Severity ranks an issue by what it costs: Error means the runner refuses the tree or the
 // manager cannot stage it; Warning means the tree runs but the measurement is unsound.
 type Severity int
 
@@ -47,10 +47,10 @@ func (i Issue) String() string {
 	return fmt.Sprintf("%-5s %-28s %s", i.Severity.String(), where, i.Msg)
 }
 
-// SlugPattern is run.py's rule for a case slug: one directory name, lowercase.
+// SlugPattern is the runner's rule for a case slug: one directory name, lowercase.
 var SlugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
-// Validate checks both lanes against the rules evals/run.py enforces, plus the fixture-dir
+// Validate checks both lanes against the rules the runner enforces, plus the fixture-dir
 // consistency it assumes. Order is stable: trigger first, then skills alphabetically.
 func (s *Store) Validate() []Issue {
 	var issues []Issue
@@ -83,7 +83,7 @@ func (s *Store) validateTrigger() []Issue {
 	qs := s.Trigger.Queries
 	if len(qs) == 0 {
 		issues = append(issues, Issue{SeverityError, LaneTrigger, "", 0, "",
-			"no queries: run.py treats an empty query list as fatal"})
+			"no queries: the runner treats an empty query list as fatal"})
 	}
 
 	known := map[string]bool{}
@@ -113,7 +113,7 @@ func (s *Store) validateTrigger() []Issue {
 		if !known[q.Skill] {
 			one := base
 			one.Severity = SeverityError
-			one.Msg = fmt.Sprintf("skill %q has no evals/evals.json in the tree (run.py rejects it)", q.Skill)
+			one.Msg = fmt.Sprintf("skill %q has no evals/evals.json in the tree (the runner rejects it)", q.Skill)
 			issues = append(issues, one)
 		}
 		if q.Split != "train" && q.Split != "validation" {
@@ -143,12 +143,12 @@ func (s *Store) validateTrigger() []Issue {
 		}
 	}
 
-	// run.py hard-fails when a split holds only one label: both halves must carry both.
+	// the runner hard-fails when a split holds only one label: both halves must carry both.
 	for _, name := range []string{"train", "validation"} {
 		labels := splitLabels[name]
 		if len(labels) != 2 {
 			issues = append(issues, Issue{SeverityError, LaneTrigger, "", 0, "",
-				fmt.Sprintf("%s split has no %s queries — run.py refuses a split that carries one label",
+				fmt.Sprintf("%s split has no %s queries — the runner refuses a split that carries one label",
 					name, missingLabel(labels))})
 		}
 		if splitCounts[name] == 0 {
@@ -182,11 +182,11 @@ func (s *Store) validateSkill(sk *Skill) []Issue {
 	var issues []Issue
 	if sk.Output.SkillName != sk.Name {
 		issues = append(issues, Issue{SeverityError, LaneOutput, sk.Name, 0, "",
-			fmt.Sprintf("skill_name is %q, run.py requires it to match the dir %q", sk.Output.SkillName, sk.Name)})
+			fmt.Sprintf("skill_name is %q, the runner requires it to match the dir %q", sk.Output.SkillName, sk.Name)})
 	}
 	if len(sk.Output.Evals) == 0 {
 		issues = append(issues, Issue{SeverityWarning, LaneOutput, sk.Name, 0, "",
-			"no cases: run.py will have nothing to measure for this stage"})
+			"no cases: the runner will have nothing to measure for this stage"})
 	}
 	seenIDs := map[int]bool{}
 	for _, c := range sk.Output.Evals {
@@ -229,7 +229,7 @@ func (s *Store) validateSkill(sk *Skill) []Issue {
 			}
 		}
 		if exists && len(c.Files) == 0 {
-			add(SeverityWarning, fmt.Sprintf("fixture dir %s exists but files is empty — run.py stages the whole dir anyway",
+			add(SeverityWarning, fmt.Sprintf("fixture dir %s exists but files is empty — the runner stages the whole dir anyway",
 				rel(s.Root, fixture)))
 		}
 	}

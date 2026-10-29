@@ -1,6 +1,7 @@
 // Package tui is the interactive face of evalctl: a filterable, multi-select table over both
-// eval lanes, with in-place editing. It shares store with the CLI, so the rules about ids,
-// slugs and fixtures are enforced in exactly one place.
+// eval lanes with in-place editing, plus the run form, the live run table and the results
+// browser. It shares store and runner with the CLI, so the rules about ids, slugs and fixtures
+// are enforced in exactly one place.
 package tui
 
 import (
@@ -13,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"evalctl/internal/runner"
 	"evalctl/internal/store"
 )
 
@@ -23,6 +25,9 @@ const (
 	screenEditor
 	screenConfirm
 	screenViewer
+	screenRunLauncher
+	screenRunProgress
+	screenRuns
 )
 
 type Model struct {
@@ -48,6 +53,11 @@ type Model struct {
 	editor    *editorState
 	confirm   *confirmState
 	viewer    *viewerState
+	launcher  *launcherState
+	progress  *progressState
+	runsList  *runsState
+	runActive bool
+	runEvents chan runner.Event
 	help      bool
 	quit      bool
 	quitArmed bool
@@ -248,8 +258,32 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfirm(msg)
 		case screenViewer:
 			return m.updateViewer(msg)
+		case screenRunLauncher:
+			return m.updateLauncher(msg)
+		case screenRunProgress:
+			return m.updateProgress(msg)
+		case screenRuns:
+			return m.updateRuns(msg)
 		}
 		return m.updateList(msg)
+	case runEventMsg:
+		m.applyEvent(msg.event)
+		return m, waitForEvent(m.runEvents)
+	case runDoneMsg:
+		m.runActive = false
+		if m.progress != nil {
+			if m.progress.err == nil && m.progress.summary != "" {
+				m.setStatus(m.progress.summary, false)
+			}
+		}
+		m.revalidate()
+		m.refresh()
+		return m, nil
+	case tickMsg:
+		if m.runActive {
+			return m, tickEvery()
+		}
+		return m, nil
 	}
 	if m.mode == screenEditor && m.editor != nil {
 		cmd := m.editor.update(msg)
@@ -281,12 +315,34 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "q", "ctrl+c":
+		if m.runActive && msg.String() != "ctrl+c" && !m.quitArmed {
+			m.quitArmed = true
+			m.setStatus("a run is in progress — q again cancels it and quits, R opens the table", true)
+			return m, nil
+		}
 		if m.dirty && msg.String() != "ctrl+c" && !m.quitArmed {
 			m.quitArmed = true
 			m.setStatus("unsaved changes in memory — ctrl+s saves, q again discards them", true)
 			return m, nil
 		}
+		if m.progress != nil && m.progress.cancel != nil {
+			m.progress.cancel()
+		}
 		return m, tea.Quit
+	case "R":
+		if m.runActive {
+			m.mode = screenRunProgress
+			m.setStatus("a run is already going — this is its table", false)
+			return m, nil
+		}
+		m.openLauncher()
+		return m, nil
+	case "L":
+		m.openRuns()
+		return m, nil
+	case "P":
+		m.openProfiles()
+		return m, nil
 	case "ctrl+s":
 		m.save()
 		return m, nil
@@ -484,6 +540,18 @@ func (m *Model) View() string {
 		if m.viewer != nil {
 			return m.viewer.view(m.width, m.height)
 		}
+	case screenRunLauncher:
+		if m.launcher != nil {
+			return m.launcherView()
+		}
+	case screenRunProgress:
+		if m.progress != nil {
+			return m.progressView()
+		}
+	case screenRuns:
+		if m.runsList != nil {
+			return m.runsView()
+		}
 	}
 	return m.listView()
 }
@@ -543,6 +611,9 @@ func (m *Model) header() string {
 	}
 	if m.dirty {
 		count += " · " + colDupe.Render("unsaved")
+	}
+	if m.runActive {
+		count += " · " + colDupe.Render("⟳ run in progress")
 	}
 	line1 := strings.Join(chips, "  ")
 	line2 := count + "  " + badge + "  " + m.filterHint() + "  " + dimStyle.Render("tab lane")
@@ -651,9 +722,9 @@ func (m *Model) footer() string {
 	if m.searching {
 		hints = m.search.View() + dimStyle.Render("   enter apply · esc clear")
 	} else if m.width < 150 {
-		hints = dimStyle.Render("space select · e edit · d delete · / search · u dupes · s split · ctrl+s save · ? help")
+		hints = dimStyle.Render("space select · e edit · d delete · / search · u dupes · R run · L results · ctrl+s save · ? help")
 	} else {
-		hints = dimStyle.Render("space select · e edit · n new · d delete · / search · f skill · u dupes · s split · l label · v view · ctrl+s save · ? help · q quit")
+		hints = dimStyle.Render("space select · e edit · n new · d delete · / search · f skill · u dupes · s split · l label · v view · R run · L results · P profiles · ctrl+s save · ? help · q quit")
 	}
 	status := m.status
 	if status == "" {
@@ -688,6 +759,13 @@ func (m *Model) helpView() string {
 		"  d x          delete selection (or the focused row); asks first",
 		"  v            full text of the focused row",
 		"  ctrl+s       write both lanes (atomic; backup in .evalctl/backups/)",
+		"",
+		titleStyle.Render("  running the set"),
+		"  R            run what is selected (or the focused row, or the lane) — form, then enter",
+		"  L            results: every iteration under evals/results, enter opens its report.md",
+		"  P            profiles: check the four sandboxes, u runs ensure on what fails",
+		"  esc          in a run table: back to the list, the run keeps going; x cancels it",
+		"",
 		"  q            quit (warns once if unsaved)",
 		"",
 		dimStyle.Render("  ids are never renumbered on delete: result dirs are keyed q<id>-<skill>,"),

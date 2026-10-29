@@ -1,0 +1,394 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"evalctl/internal/profile"
+	"evalctl/internal/runner"
+	"evalctl/internal/store"
+)
+
+// runCommand is the shared plumbing for the two lanes: flags that mean the same thing, one
+// progress printer, one exclusive lock so two runs never share a profile home.
+type runCommand struct {
+	skills    string
+	model     string
+	budget    int
+	resume    bool
+	force     bool
+	dryRun    bool
+	list      bool
+	iteration int
+	lane      string
+}
+
+func (rc *runCommand) register(fs *flag.FlagSet) {
+	fs.StringVar(&rc.skills, "skill", "all", "all (default) or comma-separated skill names")
+	fs.StringVar(&rc.model, "model", "", "pass -m MODEL to hermes chat")
+	fs.IntVar(&rc.budget, "budget", 0, "wall-clock seconds per run (default 1200 output, 240 trigger)")
+	fs.BoolVar(&rc.resume, "resume", false, "skip arms/queries that already finished")
+	fs.BoolVar(&rc.force, "force", false, "with --resume: rerun anyway")
+	fs.BoolVar(&rc.dryRun, "dry-run", false, "print the plan and the commands, change nothing")
+	fs.BoolVar(&rc.list, "list", false, "list the selected cases and exit")
+	fs.IntVar(&rc.iteration, "iteration", 0, "iteration number (default: next free)")
+	fs.StringVar(&rc.lane, "lane", store.LaneOutput, "lane: output (default) or trigger")
+}
+
+func (rc *runCommand) skillsList() []string {
+	var out []string
+	for _, s := range strings.Split(rc.skills, ",") {
+		if s = strings.TrimSpace(s); s != "" && s != "all" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// ids parses "1,6,9"; an empty string means "every row".
+func ids(raw string) []int {
+	var out []int
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if n, err := strconv.Atoi(part); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// ---------------------------------------------------------------- run / trigger
+
+func runRun(args []string) int {
+	fs, c := newFS("run")
+	rc := runCommand{}
+	rc.register(fs)
+	cases := fs.String("case", "", "comma-separated case ids, default all")
+	arms := fs.String("arms", strings.Join(runner.AllArms, ","), "with_skill,without_skill")
+	noVerify := fs.Bool("no-verify", false, "skip the skill's scripts/ verify checks")
+	isolate := fs.Bool("isolate", true, "run in a temp root and copy the result back (default); "+
+		"--isolate=false runs inside the results dir, for debugging only")
+	queries := fs.String("query", "", "trigger lane: comma-separated query ids, default all")
+	split := fs.String("split", "all", "trigger lane: all, train or validation")
+	runs := fs.Int("runs", 0, "trigger lane: runs per query (default from the file, else 3)")
+	threshold := fs.Float64("threshold", 0, "trigger lane: pass threshold on the trigger rate")
+	maxTurns := fs.Int("max-turns", 0, "trigger lane: --max-turns per run (default 8)")
+	if err := c.parse(fs, args); err != nil {
+		return fail(err)
+	}
+	opts := runner.Options{
+		Lane: rc.lane, Skills: rc.skillsList(), CaseIDs: ids(*cases), QueryIDs: ids(*queries),
+		Split: *split, Arms: strings.Split(*arms, ","), Model: rc.model, Resume: rc.resume,
+		Force: rc.force, NoVerify: *noVerify, Isolate: *isolate, DryRun: rc.dryRun, List: rc.list,
+		Iteration: rc.iteration, Runs: *runs, Threshold: *threshold, MaxTurns: *maxTurns,
+	}
+	if rc.budget > 0 {
+		opts.Budget = time.Duration(rc.budget) * time.Second
+	}
+	for i, arm := range opts.Arms {
+		opts.Arms[i] = strings.TrimSpace(arm)
+	}
+
+	r := runner.New(c.s)
+	r.Emit = progressPrinter(os.Stdout)
+	return execute(c.s, r, opts)
+}
+
+// execute runs a lane under the exclusive lock, with Ctrl-C wired to cancellation.
+func execute(s *store.Store, r *runner.Runner, opts runner.Options) int {
+	unlock, err := lockRun(s.Root)
+	if err != nil {
+		return fail(err)
+	}
+	defer unlock()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	var runErr error
+	if opts.Lane == runner.LaneTrigger {
+		runErr = r.RunTrigger(ctx, opts)
+	} else {
+		runErr = r.RunQuality(ctx, opts)
+	}
+	if runErr != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			fmt.Fprintln(os.Stderr, styleWarn.Render("evalctl: cancelled — finished arms are kept, resume with --resume"))
+			return 130
+		}
+		return fail(runErr)
+	}
+	return 0
+}
+
+// lockRun keeps two runners off one profile home at a time: an eval arm writes skills/ and
+// memories/ inside its sandbox, so a second concurrent run would grade a half-synced profile.
+func lockRun(root string) (func(), error) {
+	dir := filepath.Join(root, ".evalctl")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "run.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("another evalctl run is in progress (lock: .evalctl/run.lock)")
+	}
+	_ = f.Truncate(0)
+	_, _ = f.WriteString(fmt.Sprintf("%d\n", os.Getpid()))
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}, nil
+}
+
+// progressPrinter is the CLI face of the runner's events: one line per thing that happened.
+func progressPrinter(out io.Writer) func(runner.Event) {
+	return func(e runner.Event) {
+		switch e.Kind {
+		case runner.EventStart:
+			fmt.Fprintln(out, "\n"+styleTitle.Render(e.Message))
+		case runner.EventCase:
+			fmt.Fprintln(out, "\n"+styleTitle.Render(e.Message))
+		case runner.EventArmStart:
+			fmt.Fprintf(out, "  %s: running…\n", e.Arm)
+		case runner.EventArmDone:
+			line := "  " + e.Message
+			if e.Result != nil && !e.Result.Checks.Containment.OK {
+				fmt.Fprintln(out, styleErr.Render(line))
+				return
+			}
+			fmt.Fprintln(out, styleYes.Render(line))
+		case runner.EventPlan:
+			fmt.Fprintln(out, styleDim.Render(e.Message))
+		case runner.EventMessage:
+			fmt.Fprintln(out, e.Message)
+		case runner.EventScored, runner.EventDone:
+			fmt.Fprintln(out, "\n"+styleTitle.Render(e.Message))
+		}
+	}
+}
+
+// ---------------------------------------------------------------- results
+
+func runRuns(args []string) int {
+	fs, c := newFS("runs")
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	lane := fs.String("lane", "", "only one lane: output or trigger")
+	if err := c.parse(fs, args); err != nil {
+		return fail(err)
+	}
+	r := runner.New(c.s)
+	infos := r.ListRuns()
+	if *lane != "" && *lane != store.LaneTrigger && *lane != store.LaneOutput {
+		return fail(fmt.Errorf("--lane must be output or trigger"))
+	}
+	if *asJSON {
+		if err := writeJSON(os.Stdout, infos); err != nil {
+			return fail(err)
+		}
+		return 0
+	}
+	var rows [][]string
+	for _, info := range infos {
+		if *lane != "" && info.Lane != *lane {
+			continue
+		}
+		pass := "—"
+		if info.PassRate != nil {
+			pass = fmt.Sprintf("%.0f%% (%d/%d)", *info.PassRate*100, info.Passed, info.Judged)
+		}
+		report := "no"
+		if info.HasReport {
+			report = "yes"
+		}
+		runsCell := ""
+		if info.Runs > 0 {
+			runsCell = fmt.Sprintf("%d", info.Runs)
+		}
+		rows = append(rows, []string{info.Name, info.Lane, fmt.Sprintf("%d", info.Cases), runsCell,
+			pass, info.Started, report})
+	}
+	if len(rows) == 0 {
+		fmt.Println(styleDim.Render("no iterations under evals/results — `evalctl run --dry-run` plans one"))
+		return 0
+	}
+	table(os.Stdout, []string{"RUN", "LANE", "CASES", "RUNS", "PASS RATE", "STARTED", "REPORT"}, rows,
+		[]int{0, 0, 0, 0, 0, 0, 0})
+	fmt.Println()
+	fmt.Println(styleDim.Render("open one with: evalctl report <run>"))
+	return 0
+}
+
+func runReport(args []string) int {
+	fs, c := newFS("report")
+	lane := fs.String("lane", "", "lane of the ref: output or trigger")
+	if err := c.parse(fs, args); err != nil {
+		return fail(err)
+	}
+	refs := fs.Args()
+	if len(refs) != 1 {
+		return fail(fmt.Errorf("usage: evalctl report <run>   (3, iteration-3, trigger-2)"))
+	}
+	r := runner.New(c.s)
+	info, err := r.ResolveRun(refs[0], *lane)
+	if err != nil {
+		return fail(err)
+	}
+	text, err := runner.ReadReport(r.ReportPath(info))
+	if err != nil {
+		return fail(fmt.Errorf("%s has no report.md yet — it may still be running", info.Name))
+	}
+	fmt.Print(text)
+	return 0
+}
+
+// ---------------------------------------------------------------- profiles
+
+func runProfiles(args []string) int {
+	fs, c := newFS("profiles")
+	skills := fs.String("skills", "", "sync: comma-separated skill names")
+	dryRun := fs.Bool("dry-run", false, "print the plan, change nothing")
+	asJSON := fs.Bool("json", false, "machine-readable output (status, check)")
+	if err := c.parse(fs, args); err != nil {
+		return fail(err)
+	}
+	rest := fs.Args()
+	command := "status"
+	var names []string
+	if len(rest) > 0 {
+		switch rest[0] {
+		case "status", "check", "ensure", "render", "sync", "scrub":
+			command = rest[0]
+			names = rest[1:]
+		default:
+			names = rest
+		}
+	}
+	m := profile.New(c.s.Root, c.s.SkillNames())
+	targets, err := m.Named(names)
+	if err != nil {
+		return fail(err)
+	}
+
+	switch command {
+	case "check":
+		rows, problems := m.Check(targets)
+		if *asJSON {
+			if err := writeJSON(os.Stdout, struct {
+				Rows     []profile.Status `json:"profiles"`
+				Problems []string         `json:"problems"`
+			}{rows, problems}); err != nil {
+				return fail(err)
+			}
+			if len(problems) > 0 {
+				return 1
+			}
+			return 0
+		}
+		printProfileTable(m, rows)
+		if len(problems) > 0 {
+			for _, p := range problems {
+				fmt.Println(styleErr.Render("  ✗ " + p))
+			}
+			return 1
+		}
+		fmt.Println("\n" + styleYes.Render("all profiles in their intended state"))
+		return 0
+	case "status":
+		rows := make([]profile.Status, 0, len(targets))
+		for _, name := range targets {
+			rows = append(rows, m.Status(name))
+		}
+		if *asJSON {
+			if err := writeJSON(os.Stdout, rows); err != nil {
+				return fail(err)
+			}
+			return 0
+		}
+		printProfileTable(m, rows)
+		return 0
+	case "sync":
+		wanted := []string{}
+		for _, s := range strings.Split(*skills, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				wanted = append(wanted, s)
+			}
+		}
+		if len(wanted) == 0 {
+			return fail(fmt.Errorf("sync needs --skills (or use ensure)"))
+		}
+		for _, name := range targets {
+			line, err := m.SyncSkills(name, wanted, *dryRun)
+			if err != nil {
+				return fail(err)
+			}
+			fmt.Println(line)
+		}
+		return 0
+	case "scrub", "render":
+		for _, name := range targets {
+			var line string
+			var err error
+			if command == "scrub" {
+				line, err = m.Scrub(name, *dryRun)
+			} else {
+				line, err = m.Render(name, *dryRun)
+			}
+			if err != nil {
+				return fail(err)
+			}
+			fmt.Println(line)
+		}
+		return 0
+	case "ensure":
+		for _, name := range targets {
+			steps, err := m.Ensure(name, *dryRun)
+			if err != nil {
+				return fail(err)
+			}
+			for _, step := range steps {
+				fmt.Println(step)
+			}
+		}
+		return 0
+	}
+	return fail(fmt.Errorf("unknown profiles command %q", command))
+}
+
+func printProfileTable(m *profile.Manager, rows []profile.Status) {
+	var tableRows [][]string
+	for _, row := range rows {
+		contract := "STALE"
+		if row.ContractCurrent {
+			contract = "ok"
+		}
+		cwd := "—"
+		if row.TerminalCwd != "" {
+			cwd = "pinned"
+			if row.TerminalCwd != m.MasterclassRoot {
+				cwd = row.TerminalCwd
+			}
+		}
+		skills := fmt.Sprintf("%d", len(row.Skills))
+		memories := fmt.Sprintf("%d", len(row.Memories))
+		tableRows = append(tableRows, []string{row.Profile, skills, memories, contract, row.Model, cwd})
+	}
+	table(os.Stdout, []string{"PROFILE", "SKILLS", "MEMORIES", "CONTRACT", "MODEL", "CWD"}, tableRows,
+		[]int{0, 0, 0, 0, 0, 0})
+}

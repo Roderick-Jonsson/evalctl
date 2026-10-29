@@ -1,0 +1,385 @@
+// Package runner launches the stage-skill eval loop — the Go port of the Python loop, and now the
+// only implementation of it.
+//
+// Two lanes, one driver:
+//
+//	output (default)  every case in <skill>/evals/evals.json runs twice — with the skill and
+//	                  without it — in two dedicated profiles (eval-vcc-with / eval-vcc-without)
+//	                  into fresh run roots, then timing, mechanical checks and a report are
+//	                  written next to the runs.
+//	trigger           every query in evals/trigger-evals.json runs N times against
+//	                  eval-vcc-trigger (all four skills installed) in an empty run root, and the
+//	                  lane scores whether the right skill's SKILL.md got loaded — the
+//	                  agentskills.io description-optimization loop.
+//
+// The skill reaches the with-skill arm the way it reaches a real user: installed in the profile
+// and loaded by the agent on its own. The baseline arm holds zero skills, so the delta isolates
+// the skill instead of measuring two prompts.
+package runner
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"evalctl/internal/profile"
+	"evalctl/internal/store"
+)
+
+const (
+	LaneOutput  = "output"
+	LaneTrigger = "trigger"
+)
+
+// Arms are the two sides of the comparison.
+const (
+	ArmWith    = "with_skill"
+	ArmWithout = "without_skill"
+)
+
+// ArmProfiles maps an arm to the sandbox it runs in.
+var ArmProfiles = map[string]string{ArmWith: profile.With, ArmWithout: profile.Without}
+
+// AllArms is the default arm set, in run order.
+var AllArms = []string{ArmWith, ArmWithout}
+
+const (
+	DefaultBudget           = 1200 * time.Second
+	DefaultTriggerRuns      = 3
+	DefaultTriggerThreshold = 0.5
+	DefaultTriggerBudget    = 240 * time.Second
+	DefaultTriggerTurns     = 8
+	NegativeTurns           = 3
+	DescriptionLimit        = 1024
+)
+
+// Options is one invocation: which rows, which arms, how much time, and whether to write.
+type Options struct {
+	Lane      string
+	Skills    []string
+	CaseIDs   []int
+	QueryIDs  []int
+	Split     string
+	Arms      []string
+	Model     string
+	Budget    time.Duration
+	Resume    bool
+	Force     bool
+	NoVerify  bool
+	Isolate   bool
+	DryRun    bool
+	List      bool
+	Iteration int
+	Runs      int
+	Threshold float64
+	MaxTurns  int
+}
+
+// Normalize fills in the lane defaults: a trigger run gets the trigger lane's shorter budget.
+func (o *Options) Normalize() error {
+	if o.Lane == "" {
+		o.Lane = LaneOutput
+	}
+	if o.Lane != LaneOutput && o.Lane != LaneTrigger {
+		return fmt.Errorf("unknown lane %q (want output or trigger)", o.Lane)
+	}
+	if o.Split == "" {
+		o.Split = "all"
+	}
+	if o.Split != "all" && o.Split != "train" && o.Split != "validation" {
+		return fmt.Errorf("--split must be all, train or validation")
+	}
+	if len(o.Arms) == 0 {
+		o.Arms = append([]string(nil), AllArms...)
+	}
+	for _, arm := range o.Arms {
+		if _, ok := ArmProfiles[arm]; !ok {
+			return fmt.Errorf("unknown arm %q (want %s)", arm, strings.Join(AllArms, ", "))
+		}
+	}
+	if o.Budget <= 0 {
+		if o.Lane == LaneTrigger {
+			o.Budget = DefaultTriggerBudget
+		} else {
+			o.Budget = DefaultBudget
+		}
+	}
+	if o.MaxTurns <= 0 {
+		o.MaxTurns = DefaultTriggerTurns
+	}
+	if o.Runs <= 0 {
+		o.Runs = DefaultTriggerRuns
+	}
+	if o.Threshold <= 0 {
+		o.Threshold = DefaultTriggerThreshold
+	}
+	return nil
+}
+
+// Event is one progress line: what the CLI prints and what the TUI renders.
+type Event struct {
+	Kind    string
+	Lane    string
+	Case    string
+	Arm     string
+	Message string
+	Result  *ArmResult
+	Err     error
+}
+
+// Event kinds.
+const (
+	EventPlan       = "plan"
+	EventStart      = "start"
+	EventCase       = "case"
+	EventArmStart   = "arm-start"
+	EventArmDone    = "arm-done"
+	EventTriggerRun = "trigger-run"
+	EventMessage    = "message"
+	EventScored     = "scored"
+	EventDone       = "done"
+)
+
+// Runner holds the tree and the profiles it provisions.
+type Runner struct {
+	Root     string
+	Store    *store.Store
+	Profiles *profile.Manager
+	Emit     func(Event)
+}
+
+// New builds a runner for a loaded tree.
+func New(s *store.Store) *Runner {
+	skills := s.SkillNames()
+	return &Runner{
+		Root:     s.Root,
+		Store:    s,
+		Profiles: profile.New(s.Root, skills),
+		Emit:     func(Event) {},
+	}
+}
+
+func (r *Runner) emit(e Event) {
+	if r.Emit != nil {
+		r.Emit(e)
+	}
+}
+
+func (r *Runner) message(format string, args ...any) {
+	r.emit(Event{Kind: EventMessage, Message: fmt.Sprintf(format, args...)})
+}
+
+// ResultsDir is <root>/evals/results — the only place a run writes its output.
+func (r *Runner) ResultsDir() string { return filepath.Join(r.Root, "evals", "results") }
+
+// NextIteration is max(existing)+1 for one lane's directory prefix.
+func (r *Runner) NextIteration(prefix string) int {
+	entries, err := os.ReadDir(r.ResultsDir())
+	if err != nil {
+		return 1
+	}
+	best := 0
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), prefix+"-") {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimPrefix(e.Name(), prefix+"-"))
+		if err == nil && n > best {
+			best = n
+		}
+	}
+	return best + 1
+}
+
+// IterDir is the directory one iteration writes into.
+func (r *Runner) IterDir(prefix string, iteration int) string {
+	return filepath.Join(r.ResultsDir(), fmt.Sprintf("%s-%d", prefix, iteration))
+}
+
+// ResolveSkills turns "all" (or an empty list) into every stage skill that has a case file.
+func (r *Runner) ResolveSkills(requested []string) ([]string, error) {
+	if len(requested) == 0 {
+		return r.Store.SkillNames(), nil
+	}
+	for _, s := range requested {
+		if !r.Profiles.IsSkill(s) {
+			return nil, fmt.Errorf("unknown skill(s): %s (known: %s)", s,
+				strings.Join(r.Profiles.Skills, ", "))
+		}
+	}
+	return requested, nil
+}
+
+// ---------------------------------------------------------------- published results
+
+// RunInfo is one finished (or in-progress) iteration, as the browser sees it.
+type RunInfo struct {
+	Name      string    `json:"name"`
+	Lane      string    `json:"lane"`
+	Iteration int       `json:"iteration"`
+	Path      string    `json:"path"`
+	Started   string    `json:"started,omitempty"`
+	Model     string    `json:"model,omitempty"`
+	Cases     int       `json:"cases"`
+	Runs      int       `json:"runs,omitempty"`
+	Threshold float64   `json:"threshold,omitempty"`
+	Judged    int       `json:"judged,omitempty"`
+	Passed    int       `json:"passed,omitempty"`
+	PassRate  *float64  `json:"pass_rate"`
+	HasReport bool      `json:"has_report"`
+	Updated   time.Time `json:"-"`
+}
+
+type metaFile struct {
+	Iteration int      `json:"iteration"`
+	Lane      string   `json:"lane"`
+	Started   string   `json:"started"`
+	Model     string   `json:"model"`
+	Cases     []string `json:"cases"`
+	Queries   []string `json:"queries"`
+	Runs      int      `json:"runs"`
+	Threshold float64  `json:"threshold"`
+}
+
+type triggerScoreFile struct {
+	Score struct {
+		Threshold float64 `json:"threshold"`
+		Runs      int     `json:"runs"`
+		Overall   struct {
+			Judged int      `json:"judged"`
+			Passed int      `json:"passed"`
+			Rate   *float64 `json:"rate"`
+		} `json:"overall"`
+	} `json:"score"`
+}
+
+// ListRuns reads evals/results/ back, newest iteration last.
+func (r *Runner) ListRuns() []RunInfo {
+	entries, err := os.ReadDir(r.ResultsDir())
+	if err != nil {
+		return nil
+	}
+	var out []RunInfo
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		lane, rest := "", ""
+		switch {
+		case strings.HasPrefix(name, "iteration-"):
+			lane, rest = LaneOutput, strings.TrimPrefix(name, "iteration-")
+		case strings.HasPrefix(name, "trigger-"):
+			lane, rest = LaneTrigger, strings.TrimPrefix(name, "trigger-")
+		default:
+			continue
+		}
+		iteration, err := strconv.Atoi(rest)
+		if err != nil {
+			continue
+		}
+		path := filepath.Join(r.ResultsDir(), name)
+		info := RunInfo{Name: name, Lane: lane, Iteration: iteration, Path: path}
+		if st, err := os.Stat(path); err == nil {
+			info.Updated = st.ModTime()
+		}
+		info.HasReport = fileExists(filepath.Join(path, "report.md"))
+		if b, err := os.ReadFile(filepath.Join(path, "meta.json")); err == nil {
+			var meta metaFile
+			if json.Unmarshal(b, &meta) == nil {
+				info.Started, info.Model, info.Runs = meta.Started, meta.Model, meta.Runs
+				info.Threshold = meta.Threshold
+				info.Cases = len(meta.Cases)
+				if lane == LaneTrigger {
+					info.Cases = len(meta.Queries)
+				}
+			}
+		}
+		if lane == LaneTrigger {
+			if b, err := os.ReadFile(filepath.Join(path, "trigger.json")); err == nil {
+				var scored triggerScoreFile
+				if json.Unmarshal(b, &scored) == nil {
+					info.Judged = scored.Score.Overall.Judged
+					info.Passed = scored.Score.Overall.Passed
+					info.PassRate = scored.Score.Overall.Rate
+					if scored.Score.Threshold > 0 {
+						info.Threshold = scored.Score.Threshold
+					}
+					if scored.Score.Runs > 0 {
+						info.Runs = scored.Score.Runs
+					}
+				}
+			}
+			if info.Cases == 0 {
+				if entries, err := os.ReadDir(path); err == nil {
+					for _, c := range entries {
+						if c.IsDir() && strings.HasPrefix(c.Name(), "q") {
+							info.Cases++
+						}
+					}
+				}
+			}
+		} else if info.Cases == 0 {
+			if entries, err := os.ReadDir(path); err == nil {
+				for _, c := range entries {
+					if c.IsDir() {
+						info.Cases++
+					}
+				}
+			}
+		}
+		out = append(out, info)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Lane != out[j].Lane {
+			return out[i].Lane < out[j].Lane
+		}
+		return out[i].Iteration < out[j].Iteration
+	})
+	return out
+}
+
+// ReportPath is an iteration's report.md.
+func (r *Runner) ReportPath(info RunInfo) string { return filepath.Join(info.Path, "report.md") }
+
+// ResolveRun accepts an iteration ref: "3", "iteration-3", "trigger-2", or "3 --lane trigger".
+func (r *Runner) ResolveRun(ref, lane string) (RunInfo, error) {
+	raw := strings.TrimSpace(ref)
+	prefix := "iteration"
+	if lane == LaneTrigger {
+		prefix = "trigger"
+	}
+	switch {
+	case strings.HasPrefix(raw, "iteration-"):
+		prefix, raw = "iteration", strings.TrimPrefix(raw, "iteration-")
+	case strings.HasPrefix(raw, "trigger-"):
+		prefix, raw = "trigger", strings.TrimPrefix(raw, "trigger-")
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return RunInfo{}, fmt.Errorf("bad iteration ref %q (want 3, iteration-3 or trigger-2)", ref)
+	}
+	for _, info := range r.ListRuns() {
+		if info.Iteration == n && (info.Lane == LaneOutput) == (prefix == "iteration") {
+			return info, nil
+		}
+	}
+	return RunInfo{}, fmt.Errorf("no %s-%d under evals/results", prefix, n)
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}

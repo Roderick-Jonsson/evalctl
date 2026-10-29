@@ -130,6 +130,7 @@ func clipLine(s string, n int) string {
 // ---------------------------------------------------------------- viewer
 
 type viewerState struct {
+	kind  string // "profiles" enables the u = ensure action
 	title string
 	lines []string
 	top   int
@@ -139,7 +140,7 @@ type viewerState struct {
 func newIssueViewer(issues []store.Issue, width int) *viewerState {
 	v := &viewerState{title: fmt.Sprintf("validation · %d finding(s)", len(issues))}
 	if len(issues) == 0 {
-		v.lines = []string{"  " + statusOk.Render("clean: both lanes match evals/run.py's rules")}
+		v.lines = []string{"  " + statusOk.Render("clean: both lanes match the runner's rules")}
 		return v
 	}
 	for _, i := range issues {
@@ -273,6 +274,12 @@ func (m *Model) updateViewer(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		v.top = 0
 	case "G":
 		v.top = max(0, len(v.lines)-h)
+	case "u":
+		if v.kind == "profiles" {
+			message := m.ensureProfiles()
+			m.openProfiles()
+			m.setStatus(message, strings.Contains(message, "failed"))
+		}
 	}
 	return m, nil
 }

@@ -56,7 +56,7 @@ func runValidate(args []string) int {
 			}
 		}
 		if len(issues) == 0 {
-			fmt.Println(styleYes.Render("clean: both lanes match evals/run.py's rules"))
+			fmt.Println(styleYes.Render("clean: both lanes match the runner's rules"))
 		} else {
 			fmt.Println()
 			fmt.Printf("%d error(s), %d warning(s)\n", errs, warns)

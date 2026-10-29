@@ -1,5 +1,7 @@
 // Package cli is the non-interactive face of evalctl: read (ls/show/stats/dupes), write
-// (add/edit/rm/mv/renumber), and validate. It never starts a run — management only.
+// (add/edit/rm/mv/renumber), validate, and run — both eval lanes, plus the results browser and
+// the profile commands. Running lives in internal/runner; this package only parses flags and
+// prints progress.
 package cli
 
 import (
@@ -21,9 +23,9 @@ import (
 // Version is stamped at build time (-ldflags "-X evalctl/internal/cli.Version=...").
 var Version = "dev"
 
-const usage = `evalctl — manage the eval sets: trigger queries and output cases. No runs, no grading.
+const usage = `evalctl — manage and run the eval sets: trigger queries and output cases.
 
-  evalctl                          interactive TUI (list, filter, multi-select, edit)
+  evalctl                          interactive TUI (list, filter, multi-select, edit, run)
   evalctl tui                      same, explicit
   evalctl ls                       list rows (--lane, --skill, --label, --split, --search, --dupes)
   evalctl show <ref>               one row in full (ref: t12, o:skill:3, or 12 --lane)
@@ -33,12 +35,22 @@ const usage = `evalctl — manage the eval sets: trigger queries and output case
   evalctl mv   <ref> --to-skill S  move an output case to another stage skill
   evalctl dupes                    near-duplicate groups, the trim shortlist
   evalctl stats                    counts per skill / label / split
-  evalctl validate                 check the tree against evals/run.py's rules
+  evalctl validate                 check the tree against the runner's rules
   evalctl renumber                 close id gaps (breaks comparability with old results)
 
-Global: --root DIR (default: nearest dir with evals/run.py, or $EVALCTL_ROOT)
+  evalctl run [flags]              output lane: each case with and without the skill
+  evalctl trigger [flags]          trigger lane: does the right skill load?
+  evalctl runs                     iterations under evals/results, with pass rates
+  evalctl report <run>             print an iteration's report.md
+  evalctl profiles [cmd]           status/check/ensure/render/sync/scrub the eval profiles
+
+Run flags: --skill, --case, --iteration, --arms, --model, --budget, --resume, --force,
+           --no-verify, --isolate=false, --dry-run, --list
+Trigger:   --query, --split, --runs, --threshold, --max-turns (same shared flags)
+
+Global: --root DIR (default: nearest dir with the eval tree, or $EVALCTL_ROOT)
 Refs:   12 --lane trigger | t12 | trigger:12 | o:slide-builder:3 | slide-builder:3
-Every write is atomic and leaves a copy in .evalctl/backups/.
+Every write to the sets is atomic and leaves a copy in .evalctl/backups/.
 `
 
 // Run dispatches a command line and returns the process exit code.
@@ -80,6 +92,17 @@ func Run(args []string) int {
 		return runValidate(rest)
 	case "renumber":
 		return runRenumber(rest)
+	case "run":
+		return runRun(rest)
+	case "trigger":
+		// `evalctl trigger` is the run command with the trigger lane selected.
+		return runRun(append([]string{"--lane", store.LaneTrigger}, rest...))
+	case "runs", "results":
+		return runRuns(rest)
+	case "report":
+		return runReport(rest)
+	case "profiles", "profile":
+		return runProfiles(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "evalctl: unknown command %q\n\n%s", cmd, usage)
 		return 2
@@ -96,7 +119,7 @@ type common struct {
 func newFS(name string) (*flag.FlagSet, *common) {
 	c := &common{}
 	fs := flag.NewFlagSet("evalctl "+name, flag.ContinueOnError)
-	fs.StringVar(&c.root, "root", "", "project root (default: nearest dir holding evals/run.py)")
+	fs.StringVar(&c.root, "root", "", "project root (default: nearest dir holding the eval tree)")
 	return fs, c
 }
 

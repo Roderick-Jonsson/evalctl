@@ -233,7 +233,7 @@ func TestValidateCatchesRunPyFailures(t *testing.T) {
 		t.Fatalf("clean tree reported %v", issues)
 	}
 
-	// Deleting the last negative of the train split is exactly what run.py refuses.
+	// Deleting the last negative of the train split is exactly what the runner refuses.
 	if _, err := s.DeleteRows([]RowRef{{Lane: LaneTrigger, Index: 1}}, false); err != nil {
 		t.Fatal(err)
 	}
