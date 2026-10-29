@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"evalctl/internal/version"
 )
 
 // RunTrigger is the trigger lane: every selected query N times against the trigger profile, then
@@ -68,8 +70,8 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 			"--force, or pick another --iteration", iteration)
 	}
 
-	start := fmt.Sprintf("trigger eval %d · %d quer(y/ies) × %d run(s) · threshold %v · profile %s",
-		iteration, len(cases), o.Runs, trimFloat(o.Threshold), profileNameTrigger)
+	start := fmt.Sprintf("trigger eval %d · %d quer(y/ies) × %d run(s) · threshold %v · profile %s · evalctl %s",
+		iteration, len(cases), o.Runs, trimFloat(o.Threshold), profileNameTrigger, version.Resolve().Short())
 	if o.DryRun {
 		start += " · DRY RUN"
 	}
@@ -225,6 +227,7 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 	meta.Provenance.Profile.Skills = r.Profiles.InstalledSkills(profileNameTrigger)
 	meta.Provenance.Descriptions = descriptions
 	meta.Provenance.SkillTreeSHA256 = treeSHA
+	meta.Provenance.Tool = toolInfo()
 	if err := writeJSONFile(filepath.Join(iterDir, "meta.json"), meta); err != nil {
 		return err
 	}
@@ -260,6 +263,7 @@ type metaTrigger struct {
 			Description string `json:"description"`
 		} `json:"descriptions"`
 		SkillTreeSHA256 map[string]string `json:"skill_tree_sha256"`
+		Tool            metaTool          `json:"tool"`
 	} `json:"provenance"`
 }
 

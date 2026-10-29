@@ -194,6 +194,21 @@ func (s *Store) KnownSkills() []string {
 	return out
 }
 
+// SkillOfSlug finds the stage skill a run's case slug belongs to, so a promotion can default to
+// the skill that produced the artifact (references) or the one that consumes it (fixtures)
+// instead of guessing from a directory name.
+func (s *Store) SkillOfSlug(slug string) string {
+	for _, sk := range s.Skills {
+		for _, c := range sk.Output.Evals {
+			if c.Slug == slug {
+				return sk.Name
+			}
+		}
+	}
+	return ""
+}
+
+// TriggerPathFor returns the trigger file this store was opened from.
 func (s *Store) TriggerPathFor() string { return s.TriggerPath }
 
 func (s *Store) OutputPathFor(skill string) string {
@@ -328,7 +343,8 @@ func (s *Store) backup(path string) error {
 		return err
 	}
 	stamp := time.Now().Format("20060102-150405.000000")
-	name := fmt.Sprintf("%s--%s.json", stamp, strings.ReplaceAll(rel(s.Root, path), string(os.PathSeparator), "_"))
+	flat := strings.ReplaceAll(rel(s.Root, path), string(os.PathSeparator), "_")
+	name := fmt.Sprintf("%s--%s", stamp, flat)
 	if err := os.WriteFile(filepath.Join(dir, name), old, 0o644); err != nil {
 		return err
 	}

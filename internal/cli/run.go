@@ -14,6 +14,9 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
+	"evalctl/internal/markdown"
 	"evalctl/internal/profile"
 	"evalctl/internal/runner"
 	"evalctl/internal/store"
@@ -266,6 +269,8 @@ func runRuns(args []string) int {
 func runReport(args []string) int {
 	fs, c := newFS("report")
 	lane := fs.String("lane", "", "lane of the ref: output or trigger")
+	raw := fs.Bool("raw", false, "print the markdown source instead of rendering it")
+	width := fs.Int("width", 0, "render at this wrap width, even into a pipe")
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
 	}
@@ -282,8 +287,39 @@ func runReport(args []string) int {
 	if err != nil {
 		return fail(fmt.Errorf("%s has no report.md yet — it may still be running", info.Name))
 	}
-	fmt.Print(text)
+	// A pipe gets the source: the rendered form is for a human at a terminal, and `--raw` is the
+	// escape hatch for one who wants it there too. Naming a width, though, is asking for the
+	// layout, so it renders whatever stdout is.
+	if *raw || (*width == 0 && !stdoutIsTerminal()) {
+		fmt.Print(text)
+		return 0
+	}
+	w := *width
+	if w <= 0 {
+		w = terminalWidth(markdown.DefaultWidth)
+	}
+	out, err := markdown.Render(text, w)
+	if err != nil {
+		fmt.Print(text)
+		return 0
+	}
+	fmt.Print(out)
 	return 0
+}
+
+// stdoutIsTerminal reports whether stdout is a terminal, so `evalctl report > file.md` keeps
+// writing the markdown source instead of an ANSI-painted copy of it.
+func stdoutIsTerminal() bool {
+	return term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+// terminalWidth is the room stdout offers, minus a column so the last glyph never wraps.
+func terminalWidth(fallback int) int {
+	w, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil || w <= 0 {
+		return fallback
+	}
+	return max(markdown.MinWidth, w-1)
 }
 
 // ---------------------------------------------------------------- profiles

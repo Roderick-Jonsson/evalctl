@@ -132,7 +132,7 @@ func (s *Store) validateTrigger() []Issue {
 		splitLabels[q.Split][q.ShouldTrigger] = true
 		splitCounts[q.Split]++
 
-		norm := strings.Join(strings.Fields(strings.ToLower(q.Query)), " ")
+		norm := normalizeQuery(q.Query)
 		if prev, dup := textSeen[norm]; dup && norm != "" {
 			one := base
 			one.Severity = SeverityWarning
@@ -165,6 +165,12 @@ func (s *Store) validateTrigger() []Issue {
 		}
 	}
 	return issues
+}
+
+// normalizeQuery is the comparison both a duplicate check and a promotion use: whitespace runs
+// collapse, case is ignored, so "Run  This " and "run this" are the same request.
+func normalizeQuery(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
 }
 
 func missingLabel(labels map[bool]bool) string {

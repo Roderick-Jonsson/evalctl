@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"evalctl/internal/stage"
 )
 
 const (
@@ -44,8 +46,9 @@ var EnvKeys = []string{"OLLAMA_API_KEY"}
 
 // PipelineOrder is the stage order the contract defines. Skills are listed in it, not
 // alphabetically, because "the skill under test" (and the with-arm's steady state) means the first
-// stage — sorting by name would make av-production the default arm.
-var PipelineOrder = []string{"source-research", "learning-path", "slide-builder", "av-production"}
+// stage — sorting by name would make av-production the default arm. The list itself lives in
+// internal/stage, beside each stage's own outputs, so the harness has one idea of the pipeline.
+var PipelineOrder = stage.Order
 
 // CwdSentinels are values Hermes treats as "terminal.cwd not configured".
 var CwdSentinels = map[string]bool{"": true, ".": true, "./": true, "auto": true, "cwd": true}

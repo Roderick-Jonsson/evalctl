@@ -95,6 +95,18 @@ func TestListViewRenders(t *testing.T) {
 	}
 }
 
+// TestHeaderNamesTheBuild: the header carries the version, so a screenshot or a session is always
+// traceable to a build without running `evalctl version` in another pane.
+func TestHeaderNamesTheBuild(t *testing.T) {
+	m := sized(newModel(testStore(t), store.LaneTrigger), 120, 30)
+	if !strings.HasPrefix(m.ver, "v") {
+		t.Fatalf("model version = %q", m.ver)
+	}
+	if !strings.Contains(m.View(), "evalctl "+m.ver) {
+		t.Fatalf("header does not name the build:\n%s", m.View())
+	}
+}
+
 func TestFilterAndSelectAll(t *testing.T) {
 	m := sized(newModel(testStore(t), store.LaneTrigger), 120, 30)
 	m.filter.Label = "no"

@@ -751,7 +751,7 @@ func (m *Model) openReportFor(ref string) {
 		m.setStatus("no report.md yet — the iteration may not have finished", true)
 		return
 	}
-	m.viewer = &viewerState{title: info.Name + " · report.md", lines: textLines(text)}
+	m.viewer = newMarkdownViewer(info.Name+" · report.md", text, m.width)
 	m.mode = screenViewer
 }
 
@@ -805,7 +805,7 @@ func (m *Model) updateRuns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.setStatus(info.Name+" has no report.md yet", true)
 				return m, nil
 			}
-			m.viewer = &viewerState{title: info.Name + " · report.md", lines: textLines(text)}
+			m.viewer = newMarkdownViewer(info.Name+" · report.md", text, m.width)
 			m.mode = screenViewer
 		}
 		return m, nil
@@ -882,8 +882,8 @@ func (m *Model) runsView() string {
 	return b.String()
 }
 
-// textLines turns a markdown report into viewable lines. The viewer is plain text on purpose:
-// no new dependency, and a report is read for its numbers, not its typography.
+// textLines turns a log (activity.log, a live tail) into viewable lines. Logs are plain text by
+// nature, so they skip the markdown renderer; a *report* goes through newMarkdownViewer instead.
 func textLines(text string) []string {
 	raw := strings.Split(strings.TrimRight(text, "\n"), "\n")
 	out := make([]string, 0, len(raw))

@@ -16,6 +16,7 @@ type Filter struct {
 	Label  string // "yes" / "no" (trigger only)
 	Split  string // "train" / "validation" (trigger only)
 	Search string
+	In     string // search only this column ("" = every text column)
 	Dupes  bool
 }
 
@@ -108,7 +109,12 @@ func (f Filter) matches(e Entry) bool {
 	}
 	if q := strings.TrimSpace(f.Search); q != "" {
 		needle := strings.ToLower(q)
-		hay := strings.ToLower(strings.Join([]string{e.Text, e.Slug, e.Why, e.Skill, e.Split}, " "))
+		var hay string
+		if f.In != "" && ColumnExists(e.Lane, f.In) {
+			hay = strings.ToLower(ColumnValue(e, f.In))
+		} else {
+			hay = strings.ToLower(strings.Join([]string{e.Text, e.Slug, e.Why, e.Skill, e.Split}, " "))
+		}
 		if !strings.Contains(hay, needle) {
 			return false
 		}

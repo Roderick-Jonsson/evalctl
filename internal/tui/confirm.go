@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"evalctl/internal/markdown"
 	"evalctl/internal/store"
 )
 
@@ -137,6 +138,32 @@ type viewerState struct {
 	top    int
 	path   string // activity.log behind a live view; re-read on every tick
 	follow bool   // pinned to the newest line
+
+	// A markdown document (a report) is kept as its source and laid out for the pane's width, so
+	// a resize re-wraps it instead of scrolling a layout made for another window.
+	md      string
+	mdWidth int
+}
+
+// newMarkdownViewer shows a markdown document — a report, a note — rendered rather than raw.
+func newMarkdownViewer(title, text string, width int) *viewerState {
+	v := &viewerState{title: title, md: text}
+	v.renderAt(width)
+	return v
+}
+
+// renderAt lays the markdown out for a pane width. Lines already rendered at this width are
+// reused: the pane is painted on every keystroke, and re-rendering a report for a resize only
+// is what keeps that cheap.
+func (v *viewerState) renderAt(width int) {
+	if v.md == "" {
+		return
+	}
+	if v.mdWidth == width && v.lines != nil {
+		return
+	}
+	v.lines = markdown.Lines(v.md, max(markdown.MinWidth, width))
+	v.mdWidth = width
 }
 
 // newIssueViewer lists what validation found, in the same scrollable pane as a row.
@@ -300,6 +327,7 @@ func (m *Model) updateViewer(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (v *viewerState) view(width, height int) string {
 	h := max(4, height-6)
+	v.renderAt(width)
 	// A followed log grows under the reader: anchor on the newest line instead of a fixed offset.
 	start := v.top
 	if v.follow {

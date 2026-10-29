@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"evalctl/internal/store"
+	"evalctl/internal/version"
 )
 
 // RunQuality is the output lane: every selected case through every selected arm, then the
@@ -35,6 +38,9 @@ func (r *Runner) RunQuality(ctx context.Context, o Options) error {
 				staged = fmt.Sprintf("%d file(s)", len(c.Files))
 			}
 			r.message("%s  ·  %s case %d  ·  stages %s", c.Slug, c.Skill, c.ID, staged)
+			if c.Promoted != nil {
+				r.message("  promoted from %s/%s/%s", c.Promoted.Run, c.Promoted.Case, c.Promoted.Arm)
+			}
 			r.message("  %s", oneLine(c.Prompt))
 		}
 		return nil
@@ -64,8 +70,8 @@ func (r *Runner) RunQuality(ctx context.Context, o Options) error {
 	}
 	profileList := keysOf(profiles)
 
-	start := fmt.Sprintf("iteration %d · %d case(s) × %d arm(s) · profiles %s",
-		iteration, len(cases), len(o.Arms), strings.Join(profileList, ", "))
+	start := fmt.Sprintf("iteration %d · %d case(s) × %d arm(s) · profiles %s · evalctl %s",
+		iteration, len(cases), len(o.Arms), strings.Join(profileList, ", "), version.Resolve().Short())
 	if o.DryRun {
 		start += " · DRY RUN"
 	}
@@ -185,6 +191,14 @@ func (r *Runner) RunQuality(ctx context.Context, o Options) error {
 	for slug, sha := range treeSHA {
 		meta.Provenance.SkillTreeSHA256[slug] = sha
 	}
+	meta.Provenance.Tool = toolInfo()
+	// A fixture's hash is what makes a promoted case auditable later: evals.json records the hash
+	// at promotion time, meta.json records the one the run actually staged.
+	fixtures, err := r.fixtureProvenance(cases)
+	if err != nil {
+		return err
+	}
+	meta.Provenance.Fixtures = fixtures
 	if err := writeJSONFile(filepath.Join(iterDir, "meta.json"), meta); err != nil {
 		return err
 	}
@@ -222,7 +236,47 @@ type metaQuality struct {
 		ContractSHA256  string                 `json:"contract_sha256"`
 		Profiles        map[string]metaProfile `json:"profiles"`
 		SkillTreeSHA256 map[string]string      `json:"skill_tree_sha256"`
+		Fixtures        map[string]metaFixture `json:"fixtures,omitempty"`
+		Tool            metaTool               `json:"tool"`
 	} `json:"provenance"`
+}
+
+// metaTool records which build produced an iteration. A run graded by a different harness is not
+// comparable with the last one, so the number belongs in the artifact, not just in the header.
+type metaTool struct {
+	Version string `json:"version"`
+	Commit  string `json:"commit,omitempty"`
+	Dirty   bool   `json:"dirty"`
+	BuiltAt string `json:"built_at,omitempty"`
+}
+
+func toolInfo() metaTool {
+	info := version.Resolve()
+	return metaTool{Version: info.Version, Commit: info.Commit, Dirty: info.Dirty, BuiltAt: info.BuiltAt}
+}
+
+// metaFixture is one case's fixture as the run staged it, plus its promotion ancestry.
+type metaFixture struct {
+	SHA256   string              `json:"sha256,omitempty"`
+	Promoted *store.PromotedFrom `json:"promoted_from,omitempty"`
+}
+
+// fixtureProvenance records, per case slug, the fixture hash the run is about to stage and where
+// that fixture came from. A prompt-only case with no ancestry is left out: there is nothing to
+// audit, and an empty hash would read like a missing fixture.
+func (r *Runner) fixtureProvenance(cases []Case) (map[string]metaFixture, error) {
+	out := map[string]metaFixture{}
+	for _, c := range cases {
+		sha, err := store.FixtureSHA256(r.Store.FixtureDir(c.Skill, c.Slug))
+		if err != nil {
+			return nil, err
+		}
+		if sha == "" && c.Promoted == nil {
+			continue
+		}
+		out[c.Slug] = metaFixture{SHA256: sha, Promoted: c.Promoted}
+	}
+	return out, nil
 }
 
 func idSet(ids []int) map[int]bool {

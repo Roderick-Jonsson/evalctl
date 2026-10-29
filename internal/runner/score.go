@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"evalctl/internal/version"
 )
 
 // CollectedRun is one case read back from an iteration directory.
@@ -158,7 +160,8 @@ func mean(values []int64) int64 {
 func Report(runs []CollectedRun, bench Benchmark, iteration int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Eval iteration %d\n\n", iteration)
-	fmt.Fprintf(&b, "Generated %s · %d case(s) · arms: with_skill / without_skill\n\n", bench.Generated, len(runs))
+	fmt.Fprintf(&b, "Generated %s · %d case(s) · arms: with_skill / without_skill · evalctl %s\n\n",
+		bench.Generated, len(runs), version.Resolve())
 	b.WriteString("No assertions exist yet, so there is no pass rate. Read the expected output next to what " +
 		"each arm actually produced, then write your verdict into `feedback.json`.\n\n")
 	b.WriteString("## Timing\n\n")
@@ -535,8 +538,8 @@ func TriggerReport(score TriggerScore, iteration int, lint []LintRow) string {
 		return fmt.Sprintf("%.0f%% (%d/%d)", *entry.Rate*100, entry.Passed, entry.Judged)
 	}
 	fmt.Fprintf(&b, "# Trigger eval %d\n\n", iteration)
-	fmt.Fprintf(&b, "Generated %s · %d queries × %d runs · pass threshold %v · profile `%s` (all four skills installed)\n\n",
-		timestamp(), score.Overall.Rows, score.Runs, trimFloat(score.Threshold), profileNameTrigger)
+	fmt.Fprintf(&b, "Generated %s · %d queries × %d runs · pass threshold %v · profile `%s` (all four skills installed) · evalctl %s\n\n",
+		timestamp(), score.Overall.Rows, score.Runs, trimFloat(score.Threshold), profileNameTrigger, version.Resolve())
 	fmt.Fprintf(&b, "**Pass rate %s** — train %s, validation %s. A query passes when its trigger rate is "+
 		"above the threshold (should-trigger) or below it (should-not-trigger).\n\n",
 		pct(score.Overall), pct(score.Splits["train"]), pct(score.Splits["validation"]))

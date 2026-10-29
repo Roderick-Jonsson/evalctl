@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	"evalctl/internal/runner"
 	"evalctl/internal/store"
@@ -366,5 +367,54 @@ func TestRunsBrowserOpensActivity(t *testing.T) {
 	m.openRunActivity(empty)
 	if m.mode != screenList || m.viewer != nil {
 		t.Fatal("a run without logs must not open an empty pane")
+	}
+}
+
+// TestReportViewerRendersMarkdownAndReflows covers the two things the report pane promises: the
+// report is shown as markdown, and a resize re-lays it out instead of scrolling a stale width.
+func TestReportViewerRendersMarkdownAndReflows(t *testing.T) {
+	m := testModel(t)
+	m.width = 120
+	root := m.store.Root
+	report := "# Trigger eval 4\n\n## By skill\n\n| Skill | Rate |\n|---|---|\n| " +
+		"slide-builder | 100% |\n\n### notes\n\n**Every query** landed on the right side of the threshold, " +
+		"which is what makes this iteration comparable with the last one.\n"
+	writeFile(t, filepath.Join(root, "evals", "results", "trigger-4", "meta.json"),
+		`{"iteration":4,"lane":"trigger","queries":["q01-slide-builder"]}`)
+	writeFile(t, filepath.Join(root, "evals", "results", "trigger-4", "report.md"), report)
+
+	m.openRuns()
+	m.updateRuns(key("enter"))
+	if m.viewer == nil || m.viewer.md == "" {
+		t.Fatal("the report should be held as markdown, not as pre-split lines")
+	}
+	body := xansi.Strip(joinLines(m.viewer.lines))
+	if contains(body, "## ") || contains(body, "|---|---|") {
+		t.Fatalf("the report was not rendered:\n%s", body)
+	}
+	if !contains(body, "Trigger eval 4") || !contains(body, "│") {
+		t.Fatalf("rendered report lost its title or its table:\n%s", body)
+	}
+
+	// A narrow pane re-wraps: nothing may be wider than the pane it is painted into.
+	view := xansi.Strip(m.viewer.view(60, 30))
+	for _, line := range strings.Split(view, "\n") {
+		if xansi.StringWidth(line) > 60 {
+			t.Fatalf("viewer painted a %d-cell line into a 60-cell pane: %q",
+				xansi.StringWidth(line), line)
+		}
+	}
+	if m.viewer.mdWidth != 60 {
+		t.Fatalf("mdWidth = %d, want the width it was last laid out for", m.viewer.mdWidth)
+	}
+	// Painting again at the same width reuses the layout, and at a new width does not.
+	at60 := m.viewer.lines
+	m.viewer.view(60, 30)
+	if len(m.viewer.lines) != len(at60) {
+		t.Fatal("the viewer re-rendered at a width it had already been laid out for")
+	}
+	m.viewer.view(100, 30)
+	if m.viewer.mdWidth != 100 {
+		t.Fatalf("a wider pane did not re-render: mdWidth = %d", m.viewer.mdWidth)
 	}
 }

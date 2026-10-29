@@ -20,28 +20,30 @@ import (
 	"evalctl/internal/tui"
 )
 
-// Version is stamped at build time (-ldflags "-X evalctl/internal/cli.Version=...").
-var Version = "dev"
-
 const usage = `evalctl — manage and run the eval sets: trigger queries and output cases.
 
   evalctl                          interactive TUI (list, filter, multi-select, edit, run)
   evalctl tui                      same, explicit
   evalctl ls                       list rows (--lane, --skill, --label, --split, --search, --dupes)
+                                   order: --sort skill,id:desc --group skill --in slug (search scope)
   evalctl show <ref>               one row in full (ref: t12, o:skill:3, or 12 --lane)
   evalctl add  --lane trigger ...  create a row
   evalctl edit <ref> ...           change only the flags you pass
   evalctl rm   <ref...> | --filters  delete rows (--with-fixture for output cases)
   evalctl mv   <ref> --to-skill S  move an output case to another stage skill
+  evalctl promote --from R/C[/A] ...  a run's output becomes the next stage's fixture + case
+  evalctl promote --to-references ...  that run output becomes the skill's references/ example
+  evalctl promote --to-trigger ...    a case's prompt becomes a trigger query
   evalctl dupes                    near-duplicate groups, the trim shortlist
   evalctl stats                    counts per skill / label / split
   evalctl validate                 check the tree against the runner's rules
   evalctl renumber                 close id gaps (breaks comparability with old results)
+  evalctl version                  which build this is (version, commit, dirty, go)
 
   evalctl run [flags]              output lane: each case with and without the skill
   evalctl trigger [flags]          trigger lane: does the right skill load?
   evalctl runs                     iterations under evals/results, with pass rates
-  evalctl report <run>             print an iteration's report.md
+  evalctl report <run>             print an iteration's report.md, rendered (--raw for the source)
   evalctl profiles [cmd]           status/check/ensure/render/sync/scrub the eval profiles
 
 Run flags: --skill, --case, --iteration, --arms, --model, --budget, --resume, --force,
@@ -71,8 +73,7 @@ func Run(args []string) int {
 		fmt.Print(usage)
 		return 0
 	case "version", "--version":
-		fmt.Println("evalctl", Version)
-		return 0
+		return runVersion(rest)
 	case "tui":
 		return runTUI(rest, store.LaneTrigger)
 	case "ls", "list":
@@ -87,6 +88,8 @@ func Run(args []string) int {
 		return runRemove(rest)
 	case "mv", "move":
 		return runMove(rest)
+	case "promote":
+		return runPromote(rest)
 	case "dupes", "duplicates":
 		return runDupes(rest)
 	case "stats":
@@ -201,6 +204,7 @@ var (
 	styleErr    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	styleWarn   = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	styleTitle  = lipgloss.NewStyle().Bold(true)
+	styleGroup  = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
 )
 
 func labelStyled(label string) string {
@@ -346,15 +350,29 @@ func writeJSON(w io.Writer, v any) error {
 // table renders rows under a header. limits caps a column (0 = natural width); every column
 // is truncated to its width so one long prompt cannot push the table off screen.
 func table(w io.Writer, header []string, rows [][]string, limits []int) {
+	tableGroups(w, header, []tableGroup{{Rows: rows}}, limits)
+}
+
+// tableGroup is one section of a table: a label (empty for an ungrouped table) and its rows.
+type tableGroup struct {
+	Label string
+	Rows  [][]string
+}
+
+// tableGroups prints one header over several sections, computing widths across every row so a
+// section label can never make the columns wobble between groups.
+func tableGroups(w io.Writer, header []string, groups []tableGroup, limits []int) {
 	widths := make([]int, len(header))
 	for i, h := range header {
 		widths[i] = lipgloss.Width(h)
 	}
-	for _, row := range rows {
-		for i := range widths {
-			if i < len(row) {
-				if n := lipgloss.Width(row[i]); n > widths[i] {
-					widths[i] = n
+	for _, g := range groups {
+		for _, row := range g.Rows {
+			for i := range widths {
+				if i < len(row) {
+					if n := lipgloss.Width(row[i]); n > widths[i] {
+						widths[i] = n
+					}
 				}
 			}
 		}
@@ -365,8 +383,16 @@ func table(w io.Writer, header []string, rows [][]string, limits []int) {
 		}
 	}
 	fmt.Fprintln(w, styleHead.Render(padRow(header, widths)))
-	for _, row := range rows {
-		fmt.Fprintln(w, padRow(row, widths))
+	for gi, g := range groups {
+		if g.Label != "" {
+			if gi > 0 {
+				fmt.Fprintln(w)
+			}
+			fmt.Fprintln(w, styleGroup.Render(fmt.Sprintf("── %s · %d", g.Label, len(g.Rows))))
+		}
+		for _, row := range g.Rows {
+			fmt.Fprintln(w, padRow(row, widths))
+		}
 	}
 }
 

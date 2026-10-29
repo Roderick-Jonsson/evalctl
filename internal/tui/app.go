@@ -16,6 +16,7 @@ import (
 
 	"evalctl/internal/runner"
 	"evalctl/internal/store"
+	"evalctl/internal/version"
 )
 
 type screen int
@@ -28,11 +29,13 @@ const (
 	screenRunLauncher
 	screenRunProgress
 	screenRuns
+	screenPromote
 )
 
 type Model struct {
 	store *store.Store
 	lane  string
+	ver   string // the build in hand, so the header never leaves you guessing
 
 	rows    []store.Entry
 	cursor  int
@@ -40,6 +43,14 @@ type Model struct {
 	chosen  map[string]bool // key -> selected
 	filter  store.Filter
 	onlyDup bool
+
+	// Column functions: which column has focus (the number keys), what the list is sorted and
+	// grouped by, and which column a search is scoped to. All presentation — nothing here
+	// changes a file, and the row key survives every reorder.
+	focusCol   int
+	sortKeys   []store.Sort
+	groupField string
+	searchIn   string
 
 	search    textinput.Model
 	searching bool
@@ -56,6 +67,7 @@ type Model struct {
 	launcher  *launcherState
 	progress  *progressState
 	runsList  *runsState
+	promote   *promoteState
 	runActive bool
 	runEvents chan runner.Event
 	help      bool
@@ -81,7 +93,7 @@ func newModel(s *store.Store, lane string) *Model {
 	ti.Placeholder = "search query / prompt / slug / why"
 	ti.CharLimit = 200
 	ti.Prompt = "/ "
-	m := &Model{store: s, lane: lane, chosen: map[string]bool{}, search: ti}
+	m := &Model{store: s, lane: lane, ver: version.Resolve().Short(), chosen: map[string]bool{}, search: ti, focusCol: -1}
 	m.refresh()
 	m.issues = s.Validate()
 	return m
@@ -94,7 +106,7 @@ func (m *Model) refresh() {
 	if e, ok := m.focused(); ok {
 		prev = m.key(e)
 	}
-	m.rows = m.store.Rows(m.lane, m.visibleFilter())
+	m.rows = m.store.RowsOrdered(m.lane, m.visibleFilter(), m.order())
 	if prev != "" {
 		for i, e := range m.rows {
 			if m.key(e) == prev {
@@ -109,10 +121,16 @@ func (m *Model) refresh() {
 	m.clampScroll()
 }
 
+// order is the presentation order the list is drawn in: sort keys first, then the group column.
+func (m *Model) order() store.Order {
+	return store.Order{Keys: m.sortKeys, Group: m.groupField}
+}
+
 func (m *Model) visibleFilter() store.Filter {
 	f := m.filter
 	f.Search = m.search.Value()
 	f.Dupes = m.onlyDup
+	f.In = m.searchIn
 	return f
 }
 
@@ -165,19 +183,63 @@ func (m *Model) selectedAcrossLanes() []store.Entry {
 	return out
 }
 
+// listItem is one line of the list: a row, or a group header when the list is grouped.
+type listItem struct {
+	row   int    // index into m.rows; -1 for a group header
+	label string // the header's text
+	count int    // rows in that group
+}
+
+// items is the list as drawn. Grouping only inserts header lines — the rows keep their order and
+// the cursor stays an index into m.rows, so navigation and selection are group-blind.
+func (m *Model) items() []listItem {
+	if m.groupField == "" {
+		out := make([]listItem, len(m.rows))
+		for i := range m.rows {
+			out[i] = listItem{row: i}
+		}
+		return out
+	}
+	var out []listItem
+	for _, g := range store.GroupIndices(m.rows, m.groupField) {
+		out = append(out, listItem{row: -1, label: store.GroupLabel(m.groupField, g.Key), count: len(g.Rows)})
+		for _, r := range g.Rows {
+			out = append(out, listItem{row: r})
+		}
+	}
+	return out
+}
+
+// itemOf is where the focused row sits in the drawn list (headers counted, since scrolling is).
+func (m *Model) itemOf(row int) int {
+	for i, it := range m.items() {
+		if it.row == row {
+			return i
+		}
+	}
+	return -1
+}
+
 func (m *Model) clampScroll() {
 	h := m.listHeight()
 	if h <= 0 {
 		return
 	}
-	if m.cursor < m.offset {
-		m.offset = m.cursor
+	at := m.itemOf(m.cursor)
+	if at < 0 {
+		return
 	}
-	if m.cursor >= m.offset+h {
-		m.offset = m.cursor - h + 1
+	if at < m.offset {
+		m.offset = at
+	}
+	if at >= m.offset+h {
+		m.offset = at - h + 1
 	}
 	if m.offset < 0 {
 		m.offset = 0
+	}
+	if last := len(m.items()) - h; m.offset > last && last >= 0 {
+		m.offset = last
 	}
 }
 
@@ -264,6 +326,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateProgress(msg)
 		case screenRuns:
 			return m.updateRuns(msg)
+		case screenPromote:
+			return m.updatePromote(msg)
 		}
 		return m.updateList(msg)
 	case runEventMsg:
@@ -303,6 +367,7 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searching = false
 			m.search.SetValue("")
 			m.search.Blur()
+			m.searchIn = ""
 			m.refresh()
 			return m, nil
 		case "enter", "down", "tab":
@@ -315,6 +380,12 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.search, cmd = m.search.Update(msg)
 		m.refresh()
 		return m, cmd
+	}
+
+	// Number keys focus a column; the header lights up and o / g / / then act on that column.
+	if n, ok := columnDigit(msg.String()); ok {
+		m.focusColumn(n)
+		return m, nil
 	}
 
 	switch msg.String() {
@@ -347,10 +418,21 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "P":
 		m.openProfiles()
 		return m, nil
+	case "c":
+		m.openPromote()
+		return m, nil
+	case "t":
+		m.promotePromptToTrigger()
+		return m, nil
 	case "ctrl+s":
 		m.save()
 		return m, nil
 	case "esc":
+		if m.focusCol >= 0 {
+			m.focusCol = -1
+			m.setStatus("column focus cleared", false)
+			return m, nil
+		}
 		if m.help {
 			m.help = false
 			return m, nil
@@ -359,6 +441,23 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.chosen = map[string]bool{}
 			m.setStatus("selection cleared", false)
 		}
+		return m, nil
+	case "0":
+		if m.focusCol >= 0 {
+			m.focusCol = -1
+			m.setStatus("column focus cleared", false)
+		}
+		return m, nil
+	case "o":
+		m.cycleSort()
+		return m, nil
+	case "g":
+		if m.focusCol >= 0 {
+			m.toggleGroup()
+			return m, nil
+		}
+		m.cursor = 0
+		m.clampScroll()
 		return m, nil
 	case "?":
 		m.help = !m.help
@@ -374,6 +473,8 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.lane = store.LaneTrigger
 		}
+		m.focusCol = -1
+		m.dropLaneColumns()
 		m.cursor, m.offset = 0, 0
 		m.refresh()
 		return m, nil
@@ -397,7 +498,7 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = min(len(m.rows)-1, m.cursor+m.listHeight()/2)
 		m.clampScroll()
 		return m, nil
-	case "g", "home":
+	case "home":
 		m.cursor = 0
 		m.clampScroll()
 		return m, nil
@@ -452,6 +553,14 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "/":
+		// With a column focused the search only reads that column — "find the slug that says
+		// dense" without matching a prompt that happens to contain the word.
+		m.searchIn = m.focusedColumnName()
+		if m.searchIn != "" {
+			m.search.Placeholder = "search " + m.searchIn + " only"
+		} else {
+			m.search.Placeholder = "search query / prompt / slug / why"
+		}
 		m.searching = true
 		m.search.Focus()
 		return m, textinput.Blink
@@ -507,6 +616,102 @@ func nextIn(values []string, cur string) string {
 	return values[0]
 }
 
+// ---------------------------------------------------------------- column functions
+
+func columnDigit(s string) (int, bool) {
+	if len(s) != 1 || s[0] < '1' || s[0] > '9' {
+		return 0, false
+	}
+	return int(s[0] - '0'), true
+}
+
+// focusColumn moves the focus to column n (1-based); the same key again drops it. A focused
+// column is what o, g and / act on, so nothing else on the keyboard changes meaning.
+func (m *Model) focusColumn(n int) {
+	cols := laneColumns(m.lane)
+	if n > len(cols) {
+		m.setStatus(fmt.Sprintf("this lane has %d columns", len(cols)), true)
+		return
+	}
+	if m.focusCol == n-1 {
+		m.focusCol = -1
+		m.setStatus("column focus cleared", false)
+		return
+	}
+	m.focusCol = n - 1
+	m.setStatus(fmt.Sprintf("column %s — o sort · g group · / search it · esc clear", cols[n-1].name), false)
+}
+
+func (m *Model) focusedColumnName() string {
+	cols := laneColumns(m.lane)
+	if m.focusCol < 0 || m.focusCol >= len(cols) {
+		return ""
+	}
+	return cols[m.focusCol].name
+}
+
+// cycleSort walks the focused column: ascending, descending, then back to file order.
+func (m *Model) cycleSort() {
+	name := m.focusedColumnName()
+	if name == "" {
+		m.setStatus(fmt.Sprintf("focus a column first (1–%d), then o sorts by it", len(laneColumns(m.lane))), true)
+		return
+	}
+	switch {
+	case len(m.sortKeys) == 1 && m.sortKeys[0].Field == name && !m.sortKeys[0].Desc:
+		m.sortKeys = []store.Sort{{Field: name, Desc: true}}
+	case len(m.sortKeys) == 1 && m.sortKeys[0].Field == name && m.sortKeys[0].Desc:
+		m.sortKeys = nil
+	default:
+		m.sortKeys = []store.Sort{{Field: name}}
+	}
+	m.refresh()
+	if len(m.sortKeys) == 0 {
+		m.setStatus("sorted by file order", false)
+		return
+	}
+	dir := "asc"
+	if m.sortKeys[0].Desc {
+		dir = "desc"
+	}
+	m.setStatus("sorted by "+name+" "+dir, false)
+}
+
+// toggleGroup draws the list as sections of one column's values, a count on each header.
+func (m *Model) toggleGroup() {
+	name := m.focusedColumnName()
+	if name == "" {
+		return
+	}
+	if m.groupField == name {
+		m.groupField = ""
+		m.setStatus("ungrouped", false)
+	} else {
+		m.groupField = name
+		m.setStatus("grouped by "+name, false)
+	}
+	m.offset = 0
+	m.refresh()
+}
+
+// dropLaneColumns forgets sort and group columns the other lane does not have (split, label),
+// so a lane switch cannot leave the list ordered by a column it cannot draw.
+func (m *Model) dropLaneColumns() {
+	var keep []store.Sort
+	for _, k := range m.sortKeys {
+		if store.ColumnExists(m.lane, k.Field) {
+			keep = append(keep, k)
+		}
+	}
+	m.sortKeys = keep
+	if m.groupField != "" && !store.ColumnExists(m.lane, m.groupField) {
+		m.groupField = ""
+	}
+	if m.searchIn != "" && !store.ColumnExists(m.lane, m.searchIn) {
+		m.searchIn = ""
+	}
+}
+
 // ---------------------------------------------------------------- view
 
 var (
@@ -527,6 +732,15 @@ var (
 	dimStyle   = lipgloss.NewStyle().Faint(true)
 	// activityTool colours the tool-call lines of a live activity log.
 	activityTool = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	// Header states: focus, sort and group are shown by styling the column's own header cell,
+	// which keeps the header aligned with the rows below it.
+	headerFocus = lipgloss.NewStyle().Bold(true).Underline(true).Foreground(lipgloss.Color("15"))
+	headerSort  = lipgloss.NewStyle().Underline(true)
+	headerGroup = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true)
+	styleGroup  = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
+	// badgeWarn has no width on purpose: colDupe is a 4-cell column style, and wrapping a
+	// sentence in it folds the header one character per line.
+	badgeWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 )
 
 func (m *Model) View() string {
@@ -558,6 +772,10 @@ func (m *Model) View() string {
 		if m.runsList != nil {
 			return m.runsView()
 		}
+	case screenPromote:
+		if m.promote != nil {
+			return m.promoteView()
+		}
 	}
 	return m.listView()
 }
@@ -576,14 +794,21 @@ func (m *Model) listView() string {
 	if h < 3 {
 		h = 3
 	}
-	end := min(len(m.rows), m.offset+h)
+	items := m.items()
 	if len(m.rows) == 0 {
 		b.WriteString(dimStyle.Render("  no rows match" + m.filterHint()))
 		b.WriteString("\n")
 	}
+	end := min(len(items), m.offset+h)
 	for i := m.offset; i < end; i++ {
-		line := m.rowLine(i, m.rows[i])
-		if i == m.cursor {
+		it := items[i]
+		if it.row < 0 {
+			b.WriteString(m.groupLine(it))
+			b.WriteString("\n")
+			continue
+		}
+		line := m.rowLine(it.row, m.rows[it.row])
+		if it.row == m.cursor {
 			line = styleCur.Render(line)
 		}
 		b.WriteString(line)
@@ -593,16 +818,25 @@ func (m *Model) listView() string {
 	return b.String()
 }
 
+// groupLine is a section header: what the section is, how many rows are in it, and a rule that
+// reaches the edge so a scrolled list still shows where one section ends.
+func (m *Model) groupLine(it listItem) string {
+	lead := "  ──"
+	label := fmt.Sprintf(" %s · %d ", it.label, it.count)
+	rule := strings.Repeat("─", max(0, m.width-lipgloss.Width(lead)-lipgloss.Width(label)-1))
+	return dimStyle.Render(lead) + styleGroup.Render(label) + dimStyle.Render(rule)
+}
+
 func (m *Model) header() string {
 	errs, warns := m.counts()
 	badge := statusOk.Render("clean")
 	if errs > 0 {
 		badge = statusBad.Render(fmt.Sprintf("@ %d error(s)", errs))
 	} else if warns > 0 {
-		badge = colDupe.Render(fmt.Sprintf("! %d warning(s)", warns))
+		badge = badgeWarn.Render(fmt.Sprintf("! %d warning(s)", warns))
 	}
 	chips := []string{
-		titleStyle.Render("evalctl"),
+		titleStyle.Render("evalctl " + m.ver),
 		dimStyle.Render(m.store.Root),
 	}
 	laneLabel := "trigger queries"
@@ -616,10 +850,10 @@ func (m *Model) header() string {
 		count += " · " + styleOn.Render(fmt.Sprintf("%d selected", n)) + m.selectionBreakdown()
 	}
 	if m.dirty {
-		count += " · " + colDupe.Render("unsaved")
+		count += " · " + badgeWarn.Render("unsaved")
 	}
 	if m.runActive {
-		count += " · " + colDupe.Render("⟳ run in progress")
+		count += " · " + badgeWarn.Render("⟳ run in progress")
 	}
 	line1 := strings.Join(chips, "  ")
 	line2 := count + "  " + badge + "  " + m.filterHint() + "  " + dimStyle.Render("tab lane")
@@ -660,7 +894,25 @@ func (m *Model) filterHint() string {
 		parts = append(parts, "split="+m.filter.Split)
 	}
 	if q := m.search.Value(); q != "" {
-		parts = append(parts, "search="+strconv.Quote(q))
+		scope := ""
+		if m.searchIn != "" {
+			scope = " in " + m.searchIn
+		}
+		parts = append(parts, "search"+scope+"="+strconv.Quote(q))
+	}
+	if len(m.sortKeys) > 0 {
+		var keys []string
+		for _, k := range m.sortKeys {
+			arrow := "↑"
+			if k.Desc {
+				arrow = "↓"
+			}
+			keys = append(keys, k.Field+arrow)
+		}
+		parts = append(parts, "sort="+strings.Join(keys, ","))
+	}
+	if m.groupField != "" {
+		parts = append(parts, "group="+m.groupField)
 	}
 	if m.onlyDup {
 		parts = append(parts, "dupes only")
@@ -671,14 +923,89 @@ func (m *Model) filterHint() string {
 	return dimStyle.Render("[" + strings.Join(parts, " ") + "]")
 }
 
-func (m *Model) columnHead() string {
-	head := dimStyle.Render(fmt.Sprintf("     %-4s %-20s", "ID", "SKILL"))
-	if m.lane == store.LaneTrigger {
-		head = dimStyle.Render(fmt.Sprintf("     %-4s %-20s %-4s %-11s %-4s", "ID", "SKILL", "TRIG", "SPLIT", "DUP"))
-	} else {
-		head = dimStyle.Render(fmt.Sprintf("     %-4s %-20s %-24s %-4s", "ID", "SKILL", "SLUG", "DUP"))
+// column is one table column: the store field it shows, its header, its fixed width (0 = the
+// flexible text column) and how one cell is styled. The name is the store's column name, so the
+// number-key focus, sort, group and search reach the same field the table draws.
+type column struct {
+	name  string
+	head  string
+	width int
+	cell  func(store.Entry) string
+}
+
+func laneColumns(lane string) []column {
+	id := func(e store.Entry) string { return colID.Render(fmt.Sprintf("%-4d", e.ID)) }
+	skill := func(e store.Entry) string { return colSkill.Render(e.Skill) }
+	dupe := func(e store.Entry) string {
+		v := "-"
+		if e.Dupe != 0 {
+			v = "#" + strconv.Itoa(e.Dupe)
+		}
+		return colDupe.Render(fmt.Sprintf("%-4s", v))
 	}
-	return head + dimStyle.Render("TEXT / PROMPT")
+	text := func(e store.Entry) string { return oneLine(e.Text) }
+	if lane == store.LaneOutput {
+		return []column{
+			{name: "id", head: "ID", width: 4, cell: id},
+			{name: "skill", head: "SKILL", width: 20, cell: skill},
+			{name: "slug", head: "SLUG", width: 24, cell: func(e store.Entry) string { return colSlug.Render(e.Slug) }},
+			{name: "dupe", head: "DUP", width: 4, cell: dupe},
+			{name: "text", head: "PROMPT", width: 0, cell: text},
+		}
+	}
+	return []column{
+		{name: "id", head: "ID", width: 4, cell: id},
+		{name: "skill", head: "SKILL", width: 20, cell: skill},
+		{name: "label", head: "TRIG", width: 4, cell: func(e store.Entry) string {
+			if e.Label == "no" {
+				return colNo.Render("no")
+			}
+			return colYes.Render("yes")
+		}},
+		{name: "split", head: "SPLIT", width: 11, cell: func(e store.Entry) string { return colSplit.Render(e.Split) }},
+		{name: "dupe", head: "DUP", width: 4, cell: dupe},
+		{name: "text", head: "QUERY", width: 0, cell: text},
+	}
+}
+
+// headCell pads a header to its column width. Padding (never a marker) is what keeps the header
+// in line with the rows: the focus, sort and group state is carried by the style and by the
+// filter line, both of which cost no characters.
+func headCell(label string, width int) string {
+	w := lipgloss.Width(label)
+	if width <= 0 || w >= width {
+		return label
+	}
+	return label + strings.Repeat(" ", width-w)
+}
+
+func (m *Model) columnHead() string {
+	var b strings.Builder
+	b.WriteString("     ") // the cursor mark and the checkbox gutter, exactly as a row
+	cols := laneColumns(m.lane)
+	for i, c := range cols {
+		style := dimStyle
+		switch {
+		case i == m.focusCol:
+			style = headerFocus
+		case c.name == m.groupField:
+			style = headerGroup
+		case m.sortedBy(c.name):
+			style = headerSort
+		}
+		b.WriteString(style.Render(headCell(c.head, c.width)))
+		b.WriteString(" ")
+	}
+	return b.String()
+}
+
+func (m *Model) sortedBy(name string) bool {
+	for _, k := range m.sortKeys {
+		if k.Field == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) rowLine(i int, e store.Entry) string {
@@ -692,45 +1019,60 @@ func (m *Model) rowLine(i int, e store.Entry) string {
 	if m.chosen[m.key(e)] {
 		box = styleOn.Render("[x]")
 	}
-	dupe := " "
-	if e.Dupe != 0 {
-		dupe = fmt.Sprintf("#%d", e.Dupe)
-	}
-	idCell := colID.Render(fmt.Sprintf("%-4d", e.ID))
-	var head string
-	if m.lane == store.LaneTrigger {
-		label := colYes.Render("yes")
-		if e.Label == "no" {
-			label = colNo.Render("no")
-		}
-		head = fmt.Sprintf("%s%s %s %s %s %s %s ", mark, box, idCell, colSkill.Render(e.Skill),
-			label, colSplit.Render(e.Split), colDupe.Render(fmt.Sprintf("%-4s", dupe)))
-	} else {
-		head = fmt.Sprintf("%s%s %s %s %s %s ", mark, box, idCell, colSkill.Render(e.Skill),
-			colSlug.Render(e.Slug), colDupe.Render(fmt.Sprintf("%-4s", dupe)))
-	}
-	width := m.width - lipgloss.Width(head) - 1
-	if width < 10 {
-		width = 10
-	}
-	text := oneLine(e.Text)
-	if lipgloss.Width(text) > width {
-		r := []rune(text)
-		if len(r) > width-1 {
-			text = string(r[:width-1]) + "…"
+	cols := laneColumns(m.lane)
+	fixed := 6 // mark, box, the space after the box
+	for _, c := range cols {
+		if c.width > 0 {
+			fixed += c.width + 1
 		}
 	}
-	return head + text
+	textWidth := m.width - fixed - 1
+	if textWidth < 10 {
+		textWidth = 10
+	}
+	var b strings.Builder
+	b.WriteString(mark)
+	b.WriteString(box)
+	b.WriteString(" ")
+	for _, c := range cols {
+		if c.width == 0 {
+			b.WriteString(ellipsis(c.cell(e), textWidth))
+			continue
+		}
+		b.WriteString(c.cell(e))
+		b.WriteString(" ")
+	}
+	return b.String()
+}
+
+// ellipsis cuts a cell to the room it has, on rune boundaries, so a long prompt never pushes a
+// column off the screen.
+func ellipsis(s string, width int) string {
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	r := []rune(s)
+	if width <= 1 {
+		return string(r[:min(width, len(r))])
+	}
+	if len(r) > width-1 {
+		r = r[:width-1]
+	}
+	return string(r) + "…"
 }
 
 func (m *Model) footer() string {
 	var hints string
 	if m.searching {
 		hints = m.search.View() + dimStyle.Render("   enter apply · esc clear")
+	} else if name := m.focusedColumnName(); name != "" {
+		hints = dimStyle.Render(fmt.Sprintf(
+			"col %s ▸ o sort · g group · / search this column · 1–%d another · 0 / esc clear",
+			name, len(laneColumns(m.lane))))
 	} else if m.width < 150 {
-		hints = dimStyle.Render("space select · e edit · d delete · / search · u dupes · R run · L results · ctrl+s save · ? help")
+		hints = dimStyle.Render("space select · e edit · d delete · / search · 1–5 column · u dupes · R run · c chain · t →trigger · L results · ctrl+s save · ? help")
 	} else {
-		hints = dimStyle.Render("space select · e edit · n new · d delete · / search · f skill · u dupes · s split · l label · v view · R run · L results · P profiles · ctrl+s save · ? help · q quit")
+		hints = dimStyle.Render("space select · e edit · n new · d delete · / search · 1–6 column (o sort · g group) · f skill · u dupes · s split · l label · v view · R run · c chain · t →trigger · L results · P profiles · ctrl+s save · ? help · q quit")
 	}
 	status := m.status
 	if status == "" {
@@ -766,9 +1108,19 @@ func (m *Model) helpView() string {
 		"  v            full text of the focused row",
 		"  ctrl+s       write both lanes (atomic; backup in .evalctl/backups/)",
 		"",
+		titleStyle.Render("  columns"),
+		"  1 … 6        focus a column of this lane (again, or 0 / esc, drops it)",
+		"  o            sort by the focused column: ascending → descending → file order",
+		"  g            group by the focused column: a section header with a count each",
+		"  /            with a column focused, search only that column",
+		dimStyle.Render("  sorting and grouping are the view only — the row key never changes, so a"),
+		dimStyle.Render("  selection, a delete or a run acts on the same rows in any order."),
+		"",
 		titleStyle.Render("  running the set"),
 		"  R            run what is selected (or the focused row, or the lane) — form, then enter",
-		"  L            results: every iteration under evals/results, enter opens its report.md",
+		"  c            chain: promote a run's output into the next stage's fixture (output lane)",
+		"  t            a case's prompt becomes a trigger query — does that request pick the skill?",
+		"  L            results: every iteration under evals/results, enter opens its report.md rendered",
 		"  P            profiles: check the four sandboxes, u runs ensure on what fails",
 		"  esc          in a run table: back to the list, the run keeps going; x cancels it",
 		"  v / a        agent activity: v in the run table (live), a in the results browser",

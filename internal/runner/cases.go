@@ -14,12 +14,13 @@ import (
 // Case is one graded output case, resolved against the tree: the case's declared identity (its
 // slug), its prompt, and the fixture entries it stages.
 type Case struct {
-	Skill          string   `json:"skill"`
-	ID             int      `json:"id"`
-	Slug           string   `json:"slug"`
-	Prompt         string   `json:"prompt"`
-	ExpectedOutput string   `json:"expected_output"`
-	Files          []string `json:"files"`
+	Skill          string              `json:"skill"`
+	ID             int                 `json:"id"`
+	Slug           string              `json:"slug"`
+	Prompt         string              `json:"prompt"`
+	ExpectedOutput string              `json:"expected_output"`
+	Files          []string            `json:"files"`
+	Promoted       *store.PromotedFrom `json:"promoted_from,omitempty"`
 }
 
 // SlugRE is a single directory name: the case's identity and its fixture dir.
@@ -56,8 +57,12 @@ func LoadCases(s *store.Store, skills []string, only map[int]bool) ([]Case, erro
 			if files == nil {
 				files = []string{}
 			}
+			promoted, err := store.DecodePromotedFrom(c)
+			if err != nil {
+				return nil, fmt.Errorf("%s case %d: %w", skill, c.ID, err)
+			}
 			cases = append(cases, Case{Skill: skill, ID: c.ID, Slug: slug, Prompt: c.Prompt,
-				ExpectedOutput: c.ExpectedOutput, Files: files})
+				ExpectedOutput: c.ExpectedOutput, Files: files, Promoted: promoted})
 		}
 	}
 	// The slug is the fixture dir AND the results dir name, so it must be unique per iteration.

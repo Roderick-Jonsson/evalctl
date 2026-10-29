@@ -17,6 +17,9 @@ func runList(args []string) int {
 	label := fs.String("label", "", "trigger only: yes (should trigger) or no")
 	split := fs.String("split", "", "trigger only: train or validation")
 	search := fs.String("search", "", "case-insensitive substring of query/prompt/slug/why")
+	in := fs.String("in", "", "scope --search to one column: id, skill, slug, text, why …")
+	sortSpec := fs.String("sort", "", "order by a column: skill, id:desc, or skill,id:desc")
+	group := fs.String("group", "", "draw the table in sections by a column: skill, split, dupe …")
 	dupes := fs.Bool("dupes", false, "only rows with a near-duplicate twin")
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	width := fs.Int("width", 120, "wrap width for the text column")
@@ -29,7 +32,14 @@ func runList(args []string) int {
 	if *split != "" && *split != "train" && *split != "validation" {
 		return fail(fmt.Errorf("--split must be train or validation"))
 	}
-	filter := store.Filter{Skill: *skill, Label: *label, Split: *split, Search: *search, Dupes: *dupes}
+	if *group != "" && *sortSpec == "" {
+		// a grouped table reads best in the group's own order; --sort still overrides it
+		*sortSpec = *group
+	}
+	keys, err := store.ParseSort(*sortSpec)
+	if err != nil {
+		return fail(err)
+	}
 
 	lanes := []string{store.LaneTrigger, store.LaneOutput}
 	switch *lane {
@@ -41,10 +51,31 @@ func runList(args []string) int {
 	default:
 		return fail(fmt.Errorf("--lane must be trigger, output or both"))
 	}
+	// A column must exist somewhere in the selected lanes; one lane missing it (split on output)
+	// is not an error — that lane simply keeps its file order. A single lane gets the exact
+	// "this lane has: …" list instead.
+	if len(lanes) == 1 {
+		if err := (store.Order{Keys: keys, Group: *group}).Validate(lanes[0]); err != nil {
+			return fail(err)
+		}
+	} else {
+		for _, k := range keys {
+			if !laneHasColumn(lanes, k.Field) {
+				return fail(fmt.Errorf("--sort: unknown column %q", k.Field))
+			}
+		}
+		if *group != "" && !laneHasColumn(lanes, *group) {
+			return fail(fmt.Errorf("--group: unknown column %q", *group))
+		}
+	}
+	if *in != "" && !laneHasColumn(lanes, *in) {
+		return fail(fmt.Errorf("--in: unknown column %q", *in))
+	}
+	filter := store.Filter{Skill: *skill, Label: *label, Split: *split, Search: *search, In: *in, Dupes: *dupes}
 
 	var all []store.Entry
 	for _, l := range lanes {
-		all = append(all, c.s.Rows(l, filter)...)
+		all = append(all, c.s.RowsOrdered(l, filter, laneOrder(l, keys, *group))...)
 	}
 	if *asJSON {
 		if err := writeJSON(os.Stdout, all); err != nil {
@@ -58,48 +89,79 @@ func runList(args []string) int {
 		return 0
 	}
 	for _, l := range lanes {
-		rows := c.s.Rows(l, filter)
+		rows := c.s.RowsOrdered(l, filter, laneOrder(l, keys, *group))
 		if len(rows) == 0 {
 			continue
 		}
-		printLane(c.s, l, rows, *width, filter)
+		printLane(c.s, l, rows, *width, laneOrder(l, keys, *group))
 		fmt.Println()
 	}
 	printStats(c.s, lanes, filter)
 	return 0
 }
 
-func printLane(s *store.Store, lane string, rows []store.Entry, width int, f store.Filter) {
+func laneHasColumn(lanes []string, field string) bool {
+	for _, l := range lanes {
+		if store.ColumnExists(l, field) {
+			return true
+		}
+	}
+	return false
+}
+
+// laneOrder keeps the keys and the group column a lane actually has, so `--lane both --sort split`
+// orders the trigger lane and leaves the output lane in file order instead of failing outright.
+func laneOrder(lane string, keys []store.Sort, group string) store.Order {
+	o := store.Order{}
+	for _, k := range keys {
+		if store.ColumnExists(lane, k.Field) {
+			o.Keys = append(o.Keys, k)
+		}
+	}
+	if group != "" && store.ColumnExists(lane, group) {
+		o.Group = group
+	}
+	return o
+}
+
+func printLane(s *store.Store, lane string, rows []store.Entry, width int, order store.Order) {
 	textWidth := width - 50
 	if textWidth < 24 {
 		textWidth = 24
 	}
-	if lane == store.LaneTrigger {
-		fmt.Println(styleTitle.Render(fmt.Sprintf("trigger queries · %d", len(rows))))
-		header := []string{"ID", "SKILL", "TRIG", "SPLIT", "DUP", "QUERY"}
-		var cells [][]string
-		for _, e := range rows {
-			cells = append(cells, []string{
-				fmt.Sprintf("%d", e.ID), e.Skill, labelStyled(e.Label), e.Split, dupeCell(e.Dupe),
-				oneLine(e.Text),
-			})
+	var header []string
+	var limits []int
+	cells := func(e store.Entry) []string {
+		if lane == store.LaneTrigger {
+			return []string{fmt.Sprintf("%d", e.ID), e.Skill, labelStyled(e.Label), e.Split,
+				dupeCell(e.Dupe), oneLine(e.Text)}
 		}
-		table(os.Stdout, header, cells, []int{4, 20, 0, 11, 4, textWidth})
-		return
-	}
-	fmt.Println(styleTitle.Render(fmt.Sprintf("output cases · %d", len(rows))))
-	header := []string{"ID", "SKILL", "SLUG", "DUP", "PROMPT", "FIXTURE"}
-	var cells [][]string
-	for _, e := range rows {
 		fix := "-"
 		if s.FixtureExists(e.Skill, e.Slug) {
 			fix = fmt.Sprintf("%d file(s)", len(s.FixtureFiles(e.Skill, e.Slug)))
 		}
-		cells = append(cells, []string{
-			fmt.Sprintf("%d", e.ID), e.Skill, e.Slug, dupeCell(e.Dupe), oneLine(e.Text), fix,
-		})
+		return []string{fmt.Sprintf("%d", e.ID), e.Skill, e.Slug, dupeCell(e.Dupe), oneLine(e.Text), fix}
 	}
-	table(os.Stdout, header, cells, []int{4, 20, 24, 4, textWidth, 9})
+	if lane == store.LaneTrigger {
+		fmt.Println(styleTitle.Render(fmt.Sprintf("trigger queries · %d", len(rows))))
+		header, limits = []string{"ID", "SKILL", "TRIG", "SPLIT", "DUP", "QUERY"}, []int{4, 20, 0, 11, 4, textWidth}
+	} else {
+		fmt.Println(styleTitle.Render(fmt.Sprintf("output cases · %d", len(rows))))
+		header, limits = []string{"ID", "SKILL", "SLUG", "DUP", "PROMPT", "FIXTURE"}, []int{4, 20, 24, 4, textWidth, 9}
+	}
+	groups := store.GroupEntries(rows, order.Group)
+	out := make([]tableGroup, 0, len(groups))
+	for _, g := range groups {
+		tg := tableGroup{Label: store.GroupLabel(order.Group, g.Key)}
+		if order.Group == "" {
+			tg.Label = ""
+		}
+		for _, e := range g.Entries {
+			tg.Rows = append(tg.Rows, cells(e))
+		}
+		out = append(out, tg)
+	}
+	tableGroups(os.Stdout, header, out, limits)
 }
 
 func dupeCell(cluster int) string {
@@ -181,8 +243,11 @@ func runShow(args []string) int {
 			fmt.Printf("  why          %s\n", q.Why)
 		}
 		fmt.Printf("\n  query        %s\n", wrapIndent(q.Query, 6))
-		if len(q.Extra) > 0 {
-			fmt.Printf("\n  extra keys   %s\n", joinKeys(q.Extra))
+		if prov, err := store.DecodePromotedQuery(q); err == nil && prov != nil {
+			fmt.Printf("\n  promoted     %s case #%d (%s)\n", prov.Skill, prov.Case, prov.Slug)
+		}
+		if keys := joinKeys(q.Extra); keys != "" {
+			fmt.Printf("\n  extra keys   %s\n", keys)
 		}
 		return 0
 	}
@@ -204,8 +269,12 @@ func runShow(args []string) int {
 	} else {
 		fmt.Printf("  fixture      %s (absent)\n", dir)
 	}
-	if len(cse.Extra) > 0 {
-		fmt.Printf("  extra keys   %s\n", joinKeys(cse.Extra))
+	if keys := joinKeys(cse.Extra); keys != "" {
+		fmt.Printf("  extra keys   %s\n", keys)
+	}
+	if prov, err := store.DecodePromotedFrom(cse); err == nil && prov != nil {
+		fmt.Printf("\n  promoted     %s/%s/%s\n", prov.Run, prov.Case, prov.Arm)
+		fmt.Printf("  fixture sha  %s\n", prov.FixtureSHA256)
 	}
 	return 0
 }
@@ -246,9 +315,14 @@ func wrapIndent(text string, indent int) string {
 	return strings.Join(lines, "\n")
 }
 
+// joinKeys lists a row's unknown keys, leaving out the provenance an earlier line already
+// spelled out: a promotion is not an "extra key" to a reader.
 func joinKeys(m map[string]json.RawMessage) string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
+		if k == store.ProvenanceKey {
+			continue
+		}
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
