@@ -6,6 +6,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -16,37 +17,45 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"evalctl/internal/format"
 	"evalctl/internal/store"
 	"evalctl/internal/tui"
 )
 
+// usage is the whole command surface. It is the one place an operator finds a verb they half
+// remember, so it stays complete — but every line states a grammar and nothing else, and it is only
+// printed for `evalctl help`, never after an error (that is one line plus a pointer).
 const usage = `evalctl — manage and run the eval sets: trigger queries and output cases.
 
-  evalctl                          interactive TUI, opening on the skill list
+  evalctl                            interactive TUI, opening on the skill list
   evalctl tui [--skill S] [--lane L]  open a skill directly, or the unscoped lane view
-  evalctl skills                   the set by skill: cases, assertions, fixtures, trigger rows, health
-  evalctl ls                       list rows (--lane, --skill, --label, --split, --search, --dupes)
-                                   order: --sort skill,id:desc --group skill --in slug (search scope)
-  evalctl show <ref>               one row in full (ref: t12, o:skill:3, or 12 --lane)
-  evalctl add  --lane trigger ...  create a row
-  evalctl edit <ref> ...           change only the flags you pass
-  evalctl rm   <ref...> | --filters  delete rows (--with-fixture for output cases)
-  evalctl mv   <ref> --to-skill S  move an output case to another stage skill
+  evalctl skills                     the set by skill: cases, fixtures, trigger rows, health
+  evalctl ls                         list rows
+      --lane trigger|output|both  --skill S  --label yes|no  --split train|validation
+      --search Q [--in COL]  --sort skill,id:desc  --group COL  --dupes  --json  --width N
+  evalctl show <ref> [--lane]        one row in full (ref: t12, o:skill:3, or 12 --lane)
+  evalctl add  --lane trigger ...    create a row
+  evalctl edit <ref> ...             change only the flags you pass
+  evalctl rm   <ref...>              delete rows by ref
+  evalctl rm   --skill S --label yes|no --split … --search Q --dupes   delete by filter
+  evalctl rm   --all --lane L        delete every row of a lane
+      --with-fixture  --dry-run  --yes
+  evalctl mv   <ref> --to-skill S    move an output case to another stage skill
   evalctl promote --from R/C[/A] ...  a run's output becomes the next stage's fixture + case
   evalctl promote --to-references ...  that run output becomes the skill's references/ example
   evalctl promote --to-trigger ...    a case's prompt becomes a trigger query
-  evalctl dupes                    near-duplicate groups, the trim shortlist
-  evalctl stats                    counts per skill / label / split
-  evalctl validate                 check the tree against the runner's rules
-  evalctl renumber                 close id gaps (breaks comparability with old results)
-  evalctl version                  which build this is (version, commit, dirty, go)
+  evalctl dupes [--lane] [--threshold 0.60]   near-duplicate groups, the trim shortlist
+  evalctl stats                      counts per skill / label / split
+  evalctl validate [--strict] [--json]  check the tree against the runner's rules
+  evalctl renumber                   close id gaps (breaks comparability with old results)
+  evalctl version                    which build this is (version, commit, dirty, go)
 
-  evalctl run [flags]              output lane: each case with and without the skill
-  evalctl trigger [flags]          trigger lane: does the right skill load?
-  evalctl runs                     iterations per skill workspace, with pass rates
-  evalctl report <run>             print an iteration's report.md, rendered (--raw for the source)
-  evalctl profiles [cmd]           status/check/ensure/render/sync/scrub the eval profiles
-  evalctl theme [name]             the colour schemes, with each role's contrast on its background
+  evalctl run [flags]                output lane: each case with and without the skill
+  evalctl trigger [flags]            trigger lane: does the right skill load?
+  evalctl runs [--lane]              iterations per workspace, with pass rates
+  evalctl report <run>               an iteration's report.md, rendered (--raw for the source)
+  evalctl profiles [cmd]             status/check/ensure/render/sync/scrub the eval profiles
+  evalctl theme [name]               the colour schemes, with each role's contrast on its background
 
 Run flags: --skill, --case, --iteration, --arms, --model, --budget, --resume, --force,
            --no-verify, --isolate=false, --dry-run, --list, --log full|tools|off
@@ -58,6 +67,8 @@ the same lines to activity.log beside stream.jsonl; tools drops the prose, off w
 Global: --root DIR (default: nearest dir with the eval tree, or $EVALCTL_ROOT)
          --theme NAME (auto, midnight, high-contrast, daylight; or $EVALCTL_THEME)
 Refs:   12 --lane trigger | t12 | trigger:12 | o:slide-builder:3 | slide-builder:3
+
+Exit codes: 0 done · 1 interrupted · 2 refused (bad usage, unknown ref, validation errors).
 Every write to the sets is atomic and leaves a copy in .evalctl/backups/.
 `
 
@@ -123,7 +134,9 @@ func Run(args []string) int {
 	case "theme", "themes", "colour", "color":
 		return runTheme(rest)
 	default:
-		fmt.Fprintf(os.Stderr, "evalctl: unknown command %q\n\n%s", cmd, usage)
+		// One line, then a pointer. Dumping 45 lines of usage to stderr scrolls the actual error
+		// off the screen, which is the opposite of what an error is for.
+		fmt.Fprintf(os.Stderr, "evalctl: unknown command %q\ntry: evalctl help   (or evalctl <verb> -h)\n", cmd)
 		return 2
 	}
 }
@@ -166,7 +179,14 @@ func parseInterspersed(fs *flag.FlagSet, args []string) error {
 		}
 		f := fs.Lookup(name)
 		if f == nil {
-			return fmt.Errorf("unknown flag %q", a)
+			// -h/-help is the flag package's own: it is not in the set, but Parse answers it with
+			// the verb's defaults, which is exactly what the operator asked for.
+			if name == "h" || name == "help" {
+				flags = append(flags, a)
+				i++
+				continue
+			}
+			return usageErr{fmt.Errorf("unknown flag %q", a)}
 		}
 		if bf, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && bf.IsBoolFlag() {
 			i++
@@ -179,7 +199,22 @@ func parseInterspersed(fs *flag.FlagSet, args []string) error {
 		}
 		i++
 	}
-	return fs.Parse(append(flags, pos...))
+	return wrapUsage(fs.Parse(append(flags, pos...)))
+}
+
+// usageErr marks an error as a grammar problem ("what you typed cannot be parsed"), which is the
+// only kind that should be answered with "try <verb> -h". A missing row id is not a grammar
+// problem, and pointing at the flag reference for it sends the operator in the wrong direction.
+type usageErr struct{ err error }
+
+func (u usageErr) Error() string { return u.err.Error() }
+func (u usageErr) Unwrap() error { return u.err }
+
+func wrapUsage(err error) error {
+	if err == nil || errors.Is(err, flag.ErrHelp) {
+		return err
+	}
+	return usageErr{err}
 }
 
 // parse runs the flag set and opens the tree.
@@ -202,8 +237,17 @@ func (c *common) parse(fs *flag.FlagSet, args []string) error {
 	return nil
 }
 
+// fail is the one error contract: "evalctl: <what went wrong>", exit 2, and — only when the problem
+// is the grammar of the command — a pointer to that verb's own -h. `-h` itself is not an error.
 func fail(err error) int {
+	if errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
 	fmt.Fprintln(os.Stderr, "evalctl:", err)
+	var ue usageErr
+	if errors.As(err, &ue) {
+		fmt.Fprintln(os.Stderr, "try: evalctl <verb> -h")
+	}
 	return 2
 }
 
@@ -315,7 +359,10 @@ func refByID(s *store.Store, lane, skill string, id int) (store.RowRef, error) {
 		if skill != "" {
 			where = skill
 		}
-		return store.RowRef{}, fmt.Errorf("no %s row with id %d", where, id)
+		// Name what does exist. With ids 1-10 and 21-32, "no trigger row with id 12" leaves an
+		// operator with a dead end; the valid range and the closest id are one line away.
+		return store.RowRef{}, fmt.Errorf("no %s row with id %d — %s ids: %s",
+			where, id, where, idSpan(s, lane, skill))
 	case 1:
 		return hits[0], nil
 	default:
@@ -327,6 +374,51 @@ func refByID(s *store.Store, lane, skill string, id int) (store.RowRef, error) {
 		return store.RowRef{}, fmt.Errorf("id %d exists in several skills (%s): pass --lane or a skill-scoped ref like %s:%d",
 			id, strings.Join(names, ", "), names[0], id)
 	}
+}
+
+// idSpan is the id space a lane (or a skill's slice of it) actually holds, compressed to ranges:
+// "1-10, 21-32" says in one line that 12 was never issued and that deleting rows leaves gaps.
+func idSpan(s *store.Store, lane, skill string) string {
+	var ids []int
+	add := func(id int) { ids = append(ids, id) }
+	switch lane {
+	case store.LaneTrigger:
+		for _, q := range s.Trigger.Queries {
+			add(q.ID)
+		}
+	case store.LaneOutput:
+		for _, sk := range s.Skills {
+			if skill != "" && sk.Name != skill {
+				continue
+			}
+			for _, c := range sk.Output.Evals {
+				add(c.ID)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return "none"
+	}
+	sort.Ints(ids)
+	var parts []string
+	lo, prev := ids[0], ids[0]
+	for _, id := range ids[1:] {
+		if id == prev+1 {
+			prev = id
+			continue
+		}
+		parts = append(parts, span(lo, prev))
+		lo, prev = id, id
+	}
+	parts = append(parts, span(lo, prev))
+	return strings.Join(parts, ", ")
+}
+
+func span(lo, hi int) string {
+	if lo == hi {
+		return strconv.Itoa(lo)
+	}
+	return fmt.Sprintf("%d-%d", lo, hi)
 }
 
 func isAllDigits(s string) bool {
@@ -364,6 +456,7 @@ type tableGroup struct {
 // tableGroups prints one header over several sections, computing widths across every row so a
 // section label can never make the columns wobble between groups.
 func tableGroups(w io.Writer, header []string, groups []tableGroup, limits []int) {
+	right := numericColumns(header, groups)
 	widths := make([]int, len(header))
 	for i, h := range header {
 		widths[i] = lipgloss.Width(h)
@@ -384,7 +477,7 @@ func tableGroups(w io.Writer, header []string, groups []tableGroup, limits []int
 			widths[i] = limits[i]
 		}
 	}
-	fmt.Fprintln(w, styleHead.Render(padRow(header, widths)))
+	fmt.Fprintln(w, styleHead.Render(padRow(header, widths, right)))
 	for gi, g := range groups {
 		if g.Label != "" {
 			if gi > 0 {
@@ -393,12 +486,50 @@ func tableGroups(w io.Writer, header []string, groups []tableGroup, limits []int
 			fmt.Fprintln(w, styleGroup.Render(fmt.Sprintf("── %s · %d", g.Label, len(g.Rows))))
 		}
 		for _, row := range g.Rows {
-			fmt.Fprintln(w, padRow(row, widths))
+			fmt.Fprintln(w, padRow(row, widths, right))
 		}
 	}
 }
 
-func padRow(cells []string, widths []int) string {
+// numericColumns reports which columns hold counts. It is derived from the data and not declared
+// per call site, so a column cannot drift: every digit in a column that is all digits (or "3/4",
+// "100%") ends on the same edge, and every name starts on one.
+func numericColumns(header []string, groups []tableGroup) []bool {
+	out := make([]bool, len(header))
+	filled := make([]bool, len(header))
+	for i := range out {
+		out[i] = true
+	}
+	for _, g := range groups {
+		for _, row := range g.Rows {
+			for i := range out {
+				if i >= len(row) || row[i] == "" || row[i] == "-" {
+					continue
+				}
+				filled[i] = true
+				if !isNumericCell(row[i]) {
+					out[i] = false
+				}
+			}
+		}
+	}
+	for i := range out {
+		out[i] = out[i] && filled[i]
+	}
+	return out
+}
+
+func isNumericCell(s string) bool {
+	s = strings.TrimSuffix(s, "%")
+	if a, b, ok := strings.Cut(s, "/"); ok {
+		return isAllDigits(a) && isAllDigits(b)
+	}
+	return isAllDigits(s)
+}
+
+// padRow fits cells to their columns. Numeric columns are padded on the left so their digits line
+// up; a table of counts that leans left cannot be added down a column by eye.
+func padRow(cells []string, widths []int, right []bool) string {
 	var b strings.Builder
 	for i := range widths {
 		cell := ""
@@ -406,12 +537,23 @@ func padRow(cells []string, widths []int) string {
 			cell = cells[i]
 		}
 		cell = truncate(cell, widths[i])
+		pad := strings.Repeat(" ", max(0, widths[i]-lipgloss.Width(cell)))
 		if i == len(widths)-1 {
-			b.WriteString(cell)
+			// No trailing padding on the last column: it is invisible on screen and it is
+			// whitespace the moment anyone copies the output into a pipe or an editor.
+			if i < len(right) && right[i] {
+				b.WriteString(pad + cell)
+			} else {
+				b.WriteString(cell)
+			}
 			break
 		}
-		b.WriteString(cell)
-		b.WriteString(strings.Repeat(" ", widths[i]-lipgloss.Width(cell)+2))
+		if i < len(right) && right[i] {
+			b.WriteString(pad + cell)
+		} else {
+			b.WriteString(cell + pad)
+		}
+		b.WriteString("  ")
 	}
 	return b.String()
 }
@@ -464,7 +606,7 @@ func reportSave(s *store.Store, changes []string, touched map[string]bool) {
 		fmt.Println(styleDim.Render("  validate: clean"))
 		return
 	}
-	line := fmt.Sprintf("  validate: %d error(s), %d warning(s) — evalctl validate", errs, warns)
+	line := fmt.Sprintf("  validate: %s, %s — evalctl validate", format.Plural(errs, "error"), format.Plural(warns, "warning"))
 	if errs > 0 {
 		fmt.Println(styleErr.Render(line))
 	} else {
@@ -544,17 +686,9 @@ func runSkills(args []string) int {
 	}
 	rows := make([][]string, 0, len(sums))
 	for _, sum := range sums {
-		asr := "-"
+		graded := "-"
 		if sum.Cases > 0 {
-			asr = fmt.Sprintf("%d/%d", sum.Graded, sum.Cases)
-		}
-		fix := "-"
-		if sum.Fixtures > 0 {
-			fix = fmt.Sprintf("%d dirs · %d files", sum.Fixtures, sum.Files)
-		}
-		trig := "-"
-		if sum.Queries > 0 {
-			trig = fmt.Sprintf("%d · %d/%d", sum.Queries, sum.Should, sum.ShouldNot)
+			graded = fmt.Sprintf("%d/%d", sum.Graded, sum.Cases)
 		}
 		health := styleChange.Render(sum.Health())
 		switch {
@@ -567,12 +701,16 @@ func runSkills(args []string) int {
 		if !sum.OnDisk {
 			name += " (no evals.json)"
 		}
-		rows = append(rows, []string{name, fmt.Sprint(sum.Cases), asr, fix, trig, health})
+		// One number per column, the same columns the TUI draws: "3 dirs · 10 files" packed two
+		// counts into one cell and had to be re-read every time.
+		rows = append(rows, []string{name, fmt.Sprint(sum.Cases), graded,
+			fmt.Sprint(sum.Fixtures), fmt.Sprint(sum.Files),
+			fmt.Sprint(sum.Should), fmt.Sprint(sum.ShouldNot), health})
 	}
-	table(os.Stdout, []string{"SKILL", "CASES", "ASR", "FIXTURE", "TRIGGER", "HEALTH"}, rows, nil)
+	table(os.Stdout, []string{"SKILL", "CASES", "GRADED", "FIXT", "FILES", "TRIG+", "TRIG-", "HEALTH"}, rows, nil)
 	fmt.Println(styleDim.Render(fmt.Sprintf(
-		"  %d skill(s) · assertions: %d across %d case(s) · `evalctl ls --skill S` for one skill's rows",
-		len(sums), totalAssertions(sums), totalGraded(sums))))
+		"  TRIG+ should load · TRIG- should not · assertions: %d across %d graded case(s)",
+		totalAssertions(sums), totalGraded(sums))))
 	return 0
 }
 

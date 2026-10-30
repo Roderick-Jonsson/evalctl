@@ -34,8 +34,10 @@ func applyTheme(p theme.Palette) {
 	// styled with nothing is a hint at full brightness.
 	styleDim = lipgloss.NewStyle().Foreground(p.Color(p.Muted))
 	styleHead = lipgloss.NewStyle().Bold(true).Underline(true).Foreground(p.Color(p.Text))
-	styleYes = lipgloss.NewStyle().Foreground(p.Color(p.OK))
-	styleNo = lipgloss.NewStyle().Foreground(p.Color(p.Err))
+	// yes/no is a property of a row (should the skill load?), not a verdict: a "no" row is a valid
+	// negative test. Both read as text, so green stays "passed" and red stays "failed".
+	styleYes = lipgloss.NewStyle().Foreground(p.Color(p.Text))
+	styleNo = lipgloss.NewStyle().Foreground(p.Color(p.Muted))
 	styleDupe = lipgloss.NewStyle().Foreground(p.Color(p.Warn))
 	styleChange = lipgloss.NewStyle().Foreground(p.Color(p.OK))
 	styleErr = lipgloss.NewStyle().Foreground(p.Color(p.Err))

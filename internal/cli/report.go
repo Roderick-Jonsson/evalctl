@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"evalctl/internal/format"
 	"evalctl/internal/store"
 )
 
@@ -59,7 +60,7 @@ func runValidate(args []string) int {
 			fmt.Println(styleYes.Render("clean: both lanes match the runner's rules"))
 		} else {
 			fmt.Println()
-			fmt.Printf("%d error(s), %d warning(s)\n", errs, warns)
+			fmt.Printf("%s, %s\n", format.Plural(errs, "error"), format.Plural(warns, "warning"))
 		}
 	}
 	if errs > 0 || (*strict && warns > 0) {
@@ -134,7 +135,7 @@ func runDupes(args []string) int {
 		fmt.Println()
 	}
 	if total > 0 {
-		fmt.Println(styleDim.Render("trim interactively: evalctl   ·   or: evalctl ls --dupes   ·   rm --dupes --skill X --lane trigger"))
+		fmt.Println(styleDim.Render("trim: evalctl rm --dupes --lane <lane>   (add --dry-run to see the list first)"))
 	}
 	return 0
 }
@@ -163,18 +164,47 @@ func runStats(args []string) int {
 		return 0
 	}
 
-	fmt.Println(styleTitle.Render("trigger queries"))
-	fmt.Printf("  %d rows · %d should-trigger / %d should-not-trigger · %d train / %d validation\n",
-		trigger.Total, trigger.ByLabel["yes"], trigger.ByLabel["no"], trigger.BySplit["train"], trigger.BySplit["validation"])
-	printCounts("  per skill", trigger.BySkill)
-	fmt.Printf("  %d near-duplicate group(s) covering %d row(s)\n", trigger.Clusters, trigger.DupeRows)
-
+	// Two aligned blocks instead of two prose sentences: the row a reader wants (how many, split
+	// how, duplicated where) is a column, and the per-skill breakdown is its own table.
+	printLaneStats("trigger queries", trigger, true)
 	fmt.Println()
-	fmt.Println(styleTitle.Render("output cases"))
-	fmt.Printf("  %d cases in %d skill(s)\n", output.Total, len(output.BySkill))
-	printCounts("  per skill", output.BySkill)
-	fmt.Printf("  %d near-duplicate group(s) covering %d row(s)\n", output.Clusters, output.DupeRows)
+	printLaneStats("output cases", output, false)
 	return 0
+}
+
+// printLaneStats prints the counts that apply to a lane. label and split are trigger-only, so the
+// output lane shows two columns and not four zeroes: a column of zeroes reads as a fact about the
+// set when it is really a field the lane does not have.
+func printLaneStats(name string, st store.Stats, trigger bool) {
+	fmt.Println(styleTitle.Render(fmt.Sprintf("%s · %s", name, format.Plural(st.Total, "row"))))
+	if trigger {
+		table(os.Stdout, []string{"SHOULD", "NOT", "TRAIN", "VALID", "DUPES", "DUP ROWS"},
+			[][]string{{
+				fmt.Sprint(st.ByLabel["yes"]), fmt.Sprint(st.ByLabel["no"]),
+				fmt.Sprint(st.BySplit["train"]), fmt.Sprint(st.BySplit["validation"]),
+				fmt.Sprint(st.Clusters), fmt.Sprint(st.DupeRows),
+			}}, nil)
+	} else {
+		table(os.Stdout, []string{"DUPES", "DUP ROWS"},
+			[][]string{{fmt.Sprint(st.Clusters), fmt.Sprint(st.DupeRows)}}, nil)
+	}
+	if len(st.BySkill) > 0 {
+		fmt.Println()
+		rows := make([][]string, 0, len(st.BySkill))
+		for _, k := range sortedKeys(st.BySkill) {
+			rows = append(rows, []string{k, fmt.Sprint(st.BySkill[k])})
+		}
+		table(os.Stdout, []string{"SKILL", "ROWS"}, rows, nil)
+	}
+}
+
+func sortedKeys(m map[string]int) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func printCounts(title string, m map[string]int) {

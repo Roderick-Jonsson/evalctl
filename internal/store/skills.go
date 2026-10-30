@@ -1,8 +1,9 @@
 package store
 
 import (
-	"fmt"
 	"sort"
+
+	"evalctl/internal/format"
 )
 
 // SkillSummary is one stage skill as a unit of work: the cases it owns, how many of them carry
@@ -31,9 +32,9 @@ type SkillSummary struct {
 func (s SkillSummary) Health() string {
 	switch {
 	case s.Errors > 0:
-		return fmt.Sprintf("%d error(s)", s.Errors)
+		return format.Plural(s.Errors, "error")
 	case s.Warnings > 0:
-		return fmt.Sprintf("%d warning(s)", s.Warnings)
+		return format.Plural(s.Warnings, "warning")
 	}
 	return "clean"
 }

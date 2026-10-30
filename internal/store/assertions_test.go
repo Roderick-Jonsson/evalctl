@@ -110,7 +110,7 @@ func TestSummariesCountPerSkill(t *testing.T) {
 		a.Fixtures != 1 || a.Files != 1 || a.Queries != 2 || a.Should != 1 || a.ShouldNot != 1 {
 		t.Fatalf("alpha summary = %+v", a)
 	}
-	if b.Skill != "beta" || b.Cases != 0 || b.Queries != 1 || b.Health() != "1 warning(s)" {
+	if b.Skill != "beta" || b.Cases != 0 || b.Queries != 1 || b.Health() != "1 warning" {
 		t.Fatalf("beta summary = %+v", b)
 	}
 }

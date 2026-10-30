@@ -25,17 +25,23 @@ func TestStylesFollowPalette(t *testing.T) {
 	for _, p := range theme.Palettes() {
 		theme.Set(p)
 		applyStyles(p)
-		// The accent is the skill column's colour: the rendered sequence has to carry the index
-		// the palette maps that accent to, not a leftover from the previous palette.
-		if got := colSkill.Render("slide-builder"); !strings.Contains(got, p.ANSI256(p.Accent)) {
-			t.Errorf("%s: the skill column is %q, which does not use accent %s (%s)",
+		// The accent marks what takes keystrokes — the cursor — and no longer the skill column:
+		// a screenful of identical blue bold was decoration, and it competed with the cursor for
+		// the one cue that means "you type here".
+		if got := cursorMark.Render("▸"); !strings.Contains(got, p.ANSI256(p.Accent)) {
+			t.Errorf("%s: the cursor mark is %q, which does not use accent %s (%s)",
 				p.Name, got, p.Accent, p.ANSI256(p.Accent))
+		}
+		if got := colSkill.Render("slide-builder"); !strings.Contains(got, p.ANSI256(p.Text)) {
+			t.Errorf("%s: the skill column is %q, which does not use text %s", p.Name, got, p.Text)
 		}
 		if got := statusBad.Render("fail"); !strings.Contains(got, p.ANSI256(p.Err)) {
 			t.Errorf("%s: a failure is %q, which does not use err %s", p.Name, got, p.Err)
 		}
-		if got := box.Render("x"); !strings.Contains(got, p.ANSI256(p.Border)) {
-			t.Errorf("%s: the frame is %q, which does not use border %s", p.Name, got, p.Border)
+		// Amber has exactly one meaning left in this tool — a warning — so it is pinned here:
+		// the badge is the only thing allowed to carry it.
+		if got := badgeWarn.Render("2 warnings"); !strings.Contains(got, p.ANSI256(p.Warn)) {
+			t.Errorf("%s: the warning badge is %q, which does not use warn %s", p.Name, got, p.Warn)
 		}
 	}
 }

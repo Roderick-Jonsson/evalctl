@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"evalctl/internal/format"
 	"evalctl/internal/store"
 )
 
@@ -209,7 +210,7 @@ func printStats(s *store.Store, lanes []string, f store.Filter) {
 	}
 	line := strings.Join(parts, " · ")
 	if errs > 0 {
-		line += fmt.Sprintf(" · %d validation error(s)", errs)
+		line += " · " + format.Plural(errs, "validation error")
 		fmt.Println(styleErr.Render(line))
 	} else {
 		fmt.Println(styleDim.Render(line))

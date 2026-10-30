@@ -273,6 +273,24 @@ func (i RunInfo) Ref() string {
 	return i.Skill + "@" + i.Name
 }
 
+// ShortTime is how both faces print a run's started stamp: date and minute, because the table is
+// read to compare runs, and a 25-character timestamp with an offset is compared by squinting. The
+// full value stays in the run's own meta.json and report.
+func ShortTime(s string) string {
+	if s == "" {
+		return "-"
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05-0700", "2006-01-02T15:04:05Z07:00", "2006-01-02 15:04:05"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.Format("2006-01-02 15:04")
+		}
+	}
+	if len(s) > 16 {
+		return s[:16]
+	}
+	return s
+}
+
 type metaFile struct {
 	Iteration int      `json:"iteration"`
 	Lane      string   `json:"lane"`

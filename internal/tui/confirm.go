@@ -33,6 +33,9 @@ func (m *Model) openConfirm(rows []store.Entry) {
 	m.mode = screenConfirm
 }
 
+// updateConfirm is the one irreversible action in the tool, so it follows the convention every Unix
+// hand already has: y confirms, everything else — including a bare Enter — cancels. The Enter key
+// is what a tired operator presses without reading, and it must never be the destructive one.
 func (m *Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	c := m.confirm
 	if c == nil {
@@ -40,17 +43,7 @@ func (m *Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch msg.String() {
-	case "esc", "n", "q":
-		m.mode = screenList
-		m.confirm = nil
-		m.setStatus("delete cancelled", false)
-		return m, nil
-	case "f":
-		if c.hasOutput {
-			c.withFixture = !c.withFixture
-		}
-		return m, nil
-	case "y", "enter":
+	case "y":
 		refs := make([]store.RowRef, 0, len(c.rows))
 		touched := map[string]bool{}
 		for _, e := range c.rows {
@@ -80,28 +73,42 @@ func (m *Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.setStatus(msgText+" — ctrl+s to write", false)
 		return m, nil
+	case "f":
+		if c.hasOutput {
+			c.withFixture = !c.withFixture
+		}
+		return m, nil
+	case "esc", "enter", "n", "q":
+		m.mode = screenList
+		m.confirm = nil
+		m.setStatus("delete cancelled — nothing was written", false)
+		return m, nil
 	}
+	// Any other key is ignored rather than read as consent or as a cancel: a mistyped key must not
+	// dismiss the one dialog that stands between the operator and a deleted row.
 	return m, nil
 }
 
+// view is the delete dialog. It prints WHAT is going, by id and slug, because "delete 1 row?" over a
+// cursor you cannot see is not enough to say yes to — and it spells the default out.
 func (c *confirmState) view(width, height int) string {
 	var b strings.Builder
-	title := fmt.Sprintf("delete %d row(s)?", len(c.rows))
+	title := fmt.Sprintf("delete %d rows", len(c.rows))
+	if len(c.rows) == 1 {
+		title = "delete 1 row"
+	}
 	b.WriteString(statusBad.Render(title))
 	b.WriteString("\n\n")
-	limit := min(len(c.rows), max(4, height-14))
+	limit := min(len(c.rows), max(4, height-8))
 	for i := 0; i < limit; i++ {
 		e := c.rows[i]
-		name := e.Slug
+		name := fmt.Sprintf("#%-3d %-20s ", e.ID, e.Slug)
 		if e.Lane == store.LaneTrigger {
-			name = fmt.Sprintf("#%d %s/%s", e.ID, e.Label, e.Split)
-		} else {
-			name = fmt.Sprintf("#%d %s", e.ID, e.Slug)
+			name = fmt.Sprintf("#%-3d %-3s %-10s ", e.ID, e.Label, e.Split)
 		}
-		head := fmt.Sprintf("  %-20s %-24s ", e.Skill, name)
-		inner := min(width-2, 110) - 2
-		line := head + clipLine(e.Text, max(10, inner-lipgloss.Width(head)))
-		b.WriteString(line)
+		head := "  " + name
+		inner := min(width-2, 110)
+		b.WriteString(head + clipLine(e.Text, max(10, inner-2-lipgloss.Width(head))))
 		b.WriteString("\n")
 	}
 	if len(c.rows) > limit {
@@ -110,15 +117,16 @@ func (c *confirmState) view(width, height int) string {
 	}
 	b.WriteString("\n")
 	if c.hasOutput {
-		state := "keep fixture dirs on disk"
+		box := "[ ]"
 		if c.withFixture {
-			state = "ALSO delete fixture dirs"
+			box = "[x]"
 		}
-		b.WriteString(fmt.Sprintf("  [f] %s\n", state))
+		b.WriteString(fmt.Sprintf("  fixtures   %s delete the dirs too     f toggles\n", box))
 	}
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("  y / enter confirm · esc cancel · nothing is written until ctrl+s"))
-	return box.Width(min(width-2, 110)).Render(b.String())
+	b.WriteString("  " + statusBad.Render("y") + " confirm    " +
+		dimStyle.Render("enter / esc / n cancel    (ctrl+s writes it; nothing is on disk yet)") + "\n")
+	return b.String()
 }
 
 func clipLine(s string, n int) string {

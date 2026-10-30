@@ -6,6 +6,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -256,13 +257,10 @@ func (m *Model) enterSkill(name string) {
 		m.lane = store.LaneOutput
 	}
 	m.refresh()
-	if name == "" {
-		m.setStatus("every skill — tab switches lane, enter a skill to scope down", false)
-		return
-	}
-	sum, _ := m.store.SummaryOf(name)
-	m.setStatus(fmt.Sprintf("%s — %d case(s), %d trigger row(s); tab switches lane, esc comes back here",
-		name, sum.Cases, sum.Queries), false)
+	// No prose in the status slot on arrival: the header already names the scope, the lane and
+	// the counts. The status line is for what just happened, and it must be empty when nothing
+	// has.
+	m.setStatus("", false)
 }
 
 func searchPlaceholder(skill string) string {
@@ -285,8 +283,7 @@ func (m *Model) skillsView() string {
 	var b strings.Builder
 	b.WriteString(m.header())
 	b.WriteString("\n")
-	b.WriteString("   " + dimStyle.Render(fmt.Sprintf("%-24s %6s %7s %9s %11s  %s",
-		"SKILL", "CASES", "ASR", "FIXTURE", "TRIGGER", "HEALTH")))
+	b.WriteString(strings.Repeat(" ", rowGutter) + dimStyle.Render(skillHead()))
 	b.WriteString("\n")
 
 	h := m.skillsHeight()
@@ -299,7 +296,7 @@ func (m *Model) skillsView() string {
 	}
 	end := min(len(rows), st.offset+h)
 	for i := st.offset; i < end; i++ {
-		line := m.skillLine(rows[i])
+		line := m.skillLine(rows[i], i == st.cursor)
 		if i == st.cursor {
 			line = selected(line)
 		}
@@ -310,59 +307,98 @@ func (m *Model) skillsView() string {
 	return b.String()
 }
 
-func (m *Model) skillLine(r skillRow) string {
-	name := r.sum.Skill
-	if r.all {
-		name = "· all skills"
+// The skill list's columns, in one place: the head and every row are built from these widths, so
+// they cannot drift. Each value is a count you can act on — the old cells packed four numbers into
+// one field ("10·47f", "32·17/15") and needed a legend to read.
+var (
+	skillNameWidth = 22
+	skillColWidths = []int{5, 6, 4, 5, 5, 5} // cases, graded, fixtures, files, should, should-not
+	skillHeads     = []struct {
+		head  string
+		right bool
+	}{
+		{"CASES", true}, {"GRADED", true}, {"FIXT", true}, {"FILES", true}, {"TRIG+", true}, {"TRIG-", true},
 	}
-	nameCell := colSkill.Render(fmt.Sprintf("%-24s", truncateRunes(name, 24)))
+)
 
-	cases := colCases.Render(fmt.Sprintf("%6s", fmt.Sprintf("%d", r.sum.Cases)))
-
-	asr := colNone.Render(fmt.Sprintf("%7s", "-"))
-	if r.sum.Graded > 0 {
-		asr = colAsr.Render(fmt.Sprintf("%7s", fmt.Sprintf("%d/%d", r.sum.Graded, r.sum.Cases)))
-	} else if r.sum.Cases > 0 {
-		asr = dimStyle.Render(fmt.Sprintf("%7s", fmt.Sprintf("0/%d", r.sum.Cases)))
+func skillHead() string {
+	var b strings.Builder
+	b.WriteString(padCell("SKILL", skillNameWidth, false) + " ")
+	for i, c := range skillHeads {
+		b.WriteString(padCell(c.head, skillColWidths[i], c.right) + " ")
 	}
-
-	fix := dimStyle.Render(fmt.Sprintf("%9s", "—"))
-	if r.sum.Fixtures > 0 {
-		fix = dimStyle.Render(fmt.Sprintf("%9s", fmt.Sprintf("%d·%df", r.sum.Fixtures, r.sum.Files)))
-	}
-
-	trig := dimStyle.Render(fmt.Sprintf("%11s", "—"))
-	if r.sum.Queries > 0 {
-		trig = fmt.Sprintf("%11s", fmt.Sprintf("%d·%d/%d", r.sum.Queries, r.sum.Should, r.sum.ShouldNot))
-	}
-
-	health := statusOk.Render(r.sum.Health())
-	if r.sum.Errors > 0 {
-		health = statusBad.Render(r.sum.Health())
-	} else if r.sum.Warnings > 0 {
-		health = badgeWarn.Render(r.sum.Health())
-	}
-	if !r.all && !r.sum.OnDisk {
-		health = statusBad.Render("no evals.json")
-	}
-
-	mark := "  "
-	if r.sum.Skill == m.skill && !r.all && m.skill != "" {
-		mark = styleOn.Render("› ")
-	}
-	return mark + "\u00a0" + nameCell + " " + cases + " " + asr + " " + fix + " " + trig + "  " + health
+	return b.String() + "HEALTH"
 }
 
+func (m *Model) skillLine(r skillRow, isCursor bool) string {
+	name := r.sum.Skill
+	if r.all {
+		name = "all skills"
+	}
+	// One gutter, two marks: the cursor (what enter opens) and the skill you last had open. The
+	// band alone is 2.2:1 — visible, but not something to aim at under stress.
+	mark := "  "
+	switch {
+	case isCursor:
+		mark = cursorMark.Render("▸ ")
+	case r.sum.Skill == m.skill && !r.all && m.skill != "":
+		mark = selMark.Render("▪ ")
+	}
+
+	graded := "-"
+	if r.sum.Cases > 0 {
+		graded = fmt.Sprintf("%d/%d", r.sum.Graded, r.sum.Cases)
+	}
+	cells := []string{
+		strconv.Itoa(r.sum.Cases),
+		graded,
+		strconv.Itoa(r.sum.Fixtures),
+		strconv.Itoa(r.sum.Files),
+		strconv.Itoa(r.sum.Should),
+		strconv.Itoa(r.sum.ShouldNot),
+	}
+	var b strings.Builder
+	b.WriteString(mark)
+	b.WriteString(colSkill.Render(padCell(name, skillNameWidth, false)) + " ")
+	for i, v := range cells {
+		if v == "-" {
+			b.WriteString(dimStyle.Render(padCell(v, skillColWidths[i], true)) + " ")
+			continue
+		}
+		style := colCases
+		if i == 1 && r.sum.Graded < r.sum.Cases {
+			// Not yet graded is a gap worth seeing, but it is not a failure: amber, not red.
+			style = badgeWarn
+		}
+		b.WriteString(style.Render(padCell(v, skillColWidths[i], true)) + " ")
+	}
+
+	health, style := "ok", statusOk
+	switch {
+	case r.sum.Errors > 0:
+		health, style = plural(r.sum.Errors, "error"), statusBad
+	case r.sum.Warnings > 0:
+		health, style = plural(r.sum.Warnings, "warning"), badgeWarn
+	}
+	if !r.all && !r.sum.OnDisk {
+		health, style = "no evals.json", statusBad
+	}
+	b.WriteString(style.Render(health))
+	return b.String()
+}
+
+// skillsFooter keeps the same rules as the lane list: fixed keys first, everything else by rank.
 func (m *Model) skillsFooter() string {
 	st := m.skills
 	var hints string
-	switch {
-	case st.searching:
+	if st.searching {
 		hints = st.search.View() + dimStyle.Render("   enter apply · esc clear")
-	case m.width < 110:
-		hints = dimStyle.Render("enter open · j/k move · / filter · ? help · ctrl+s save · q quit")
-	default:
-		hints = dimStyle.Render("enter open a skill · j/k move · / filter · ? help · ctrl+s save · L results · P profiles · q quit")
+	} else {
+		hints = m.hintLine([]hint{
+			{"enter", "open", 0}, {"j k", "move", 1}, {"/", "filter", 2},
+			{"L", "results", 4}, {"P", "profiles", 6},
+			{"ctrl+s", "save", 0}, {"?", "keys", 0}, {"q", "quit", 5},
+		})
 	}
 	status := m.status
 	switch {
@@ -379,7 +415,7 @@ func (m *Model) skillsFooter() string {
 		status += "  " + badgeWarn.Render("unsaved — ctrl+s writes")
 	}
 	if m.runActive {
-		status += "  " + badgeWarn.Render("⟳ run in progress — R opens the table")
+		status += "  " + tabActive.Render("⟳ run in progress — R opens the table")
 	}
 	return hints + "\n" + status + "\n"
 }

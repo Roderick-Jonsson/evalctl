@@ -175,7 +175,9 @@ func (e *editorState) build() {
 	// block under a three-field group. Each group is sized by its fields instead.
 	form := huh.NewForm(groups...).
 		WithWidth(max(40, e.width-6)).
-		WithShowHelp(true).
+		// The app owns the key bar. huh's own bar says "↑ up ↓ down / filter shift+tab back
+		// enter select" one line above ours, which says most of the same things again.
+		WithShowHelp(false).
 		WithTheme(huh.ThemeBase())
 	_ = title
 	e.form = form
@@ -245,7 +247,7 @@ func (e *editorState) view(width int) string {
 		head += "\n" + statusBad.Render("not saved: "+e.errMsg)
 	}
 	body := e.form.View()
-	foot := dimStyle.Render("enter next / submit · alt+enter newline · shift+tab back · esc cancel · ctrl+s saves")
+	foot := dimStyle.Render("  enter next · alt+enter newline · shift+tab back · esc cancel · ctrl+s writes")
 	return head + "\n\n" + body + "\n" + foot
 }
 

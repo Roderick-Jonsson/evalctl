@@ -240,33 +240,27 @@ func runRuns(args []string) int {
 		if *lane != "" && info.Lane != *lane {
 			continue
 		}
-		pass := "—"
+		// Percent only: "100% (4/4)" printed the same fact twice, and the ratio is in the report.
+		pass := "-"
 		if info.PassRate != nil {
-			pass = fmt.Sprintf("%.0f%% (%d/%d)", *info.PassRate*100, info.Passed, info.Judged)
-		}
-		report := "no"
-		if info.HasReport {
-			report = "yes"
+			pass = fmt.Sprintf("%.0f%%", *info.PassRate*100)
 		}
 		runsCell := ""
 		if info.Runs > 0 {
 			runsCell = fmt.Sprintf("%d", info.Runs)
 		}
-		workspace := info.Skill
-		if workspace == "" {
-			workspace = "—"
-		}
-		rows = append(rows, []string{workspace, info.Name, info.Lane, fmt.Sprintf("%d", info.Cases), runsCell,
-			pass, info.Started, report})
+		rows = append(rows, []string{info.Name, info.Skill, info.Lane, fmt.Sprintf("%d", info.Cases), runsCell,
+			pass, runner.ShortTime(info.Started)})
 	}
 	if len(rows) == 0 {
 		fmt.Println(styleDim.Render("no iterations under any *-workspace — `evalctl run --dry-run` plans one"))
 		return 0
 	}
-	table(os.Stdout, []string{"WORKSPACE", "RUN", "LANE", "CASES", "RUNS", "PASS RATE", "STARTED", "REPORT"}, rows,
-		[]int{0, 0, 0, 0, 0, 0, 0, 0})
+	// No WORKSPACE-"—" column and no REPORT-"yes" column: a trigger run has no workspace and every
+	// finished run has a report. Both columns repeated one value on every row.
+	table(os.Stdout, []string{"RUN", "SKILL", "LANE", "CASES", "RUNS", "PASS", "STARTED"}, rows, nil)
 	fmt.Println()
-	fmt.Println(styleDim.Render("open one with: evalctl report <skill>@<run>   (a bare number works while it is unique)"))
+	fmt.Println(styleDim.Render("open one with: evalctl report <skill>@<run>"))
 	return 0
 }
 

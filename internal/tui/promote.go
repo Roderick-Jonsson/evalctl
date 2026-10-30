@@ -72,6 +72,78 @@ type promoteState struct {
 	preview    store.Promotion
 	reference  store.Reference
 	previewErr string
+
+	// The preview is a filesystem scan — on a real workspace it costs seconds, and a TUI that
+	// blocks on it freezes between every arrow key. It is therefore computed off the update loop:
+	// gen counts the form's states, scanned is the state the preview describes, and a scan whose
+	// gen is stale is thrown away. Nothing is promoted until the preview for what is on screen has
+	// landed, so the form can never stage files it did not show.
+	gen      int
+	scanned  int
+	scanning bool
+}
+
+// promotePreviewMsg carries a finished scan back to the update loop.
+type promotePreviewMsg struct {
+	gen       int
+	preview   store.Promotion
+	reference store.Reference
+	err       string
+}
+
+// ready reports whether the preview on screen describes the form as it stands.
+func (p *promoteState) ready() bool { return !p.scanning && p.scanned == p.gen }
+
+// snap is the plain copy of the form a scan needs. It is taken before the scan runs so the scan
+// never touches the model from another goroutine.
+type promoSnap struct {
+	src   string
+	dest  int
+	skill string
+	ws    string
+	files []string
+	as    string
+}
+
+func (p *promoteState) snap() promoSnap {
+	return promoSnap{src: p.sourceDir(), dest: p.dest, skill: p.skill(),
+		ws: p.workspace(), files: p.fileList(), as: p.as}
+}
+
+// scanPreview is the whole read-only half of the form: pure, given a store and a snapshot.
+func scanPreview(s *store.Store, sn promoSnap) (store.Promotion, store.Reference, string) {
+	if sn.src == "" {
+		return store.Promotion{}, store.Reference{}, "no arm on disk for this case"
+	}
+	if sn.dest == destReferences {
+		ref, err := s.ReferencePreview(store.ReferenceRequest{Skill: sn.skill, Source: sn.src,
+			Workspace: sn.ws, File: sn.files, As: sn.as})
+		if err != nil {
+			return store.Promotion{}, store.Reference{}, err.Error()
+		}
+		return store.Promotion{}, ref, ""
+	}
+	preview, err := store.PromotionPreview(sn.src, sn.skill)
+	if err != nil {
+		return store.Promotion{}, store.Reference{}, err.Error()
+	}
+	if len(preview.Files) == 0 {
+		return store.Promotion{}, store.Reference{}, "nothing to promote: no MC-*/ workspace here"
+	}
+	return preview, store.Reference{}, ""
+}
+
+// previewCmd schedules that scan and bumps the generation, so a result that lands after the form
+// has moved on is discarded rather than shown.
+func (p *promoteState) previewCmd(s *store.Store) tea.Cmd {
+	sn := p.snap()
+	p.gen++
+	gen := p.gen
+	p.scanning = true
+	return func() tea.Msg {
+		preview, ref, errStr := scanPreview(s, sn)
+		return promotePreviewMsg{gen: gen, preview: preview, reference: ref, err: errStr}
+	}
 }
 
 type promoRow struct{ label, value string }
@@ -80,23 +152,23 @@ type promoRow struct{ label, value string }
 
 // openPromote starts the form from where the cursor is: the newest output iteration, the focused
 // case inside it if that case ran there, and the stage *after* the one that produced it.
-func (m *Model) openPromote() {
+func (m *Model) openPromote() tea.Cmd {
 	if m.runActive {
 		m.setStatus("a run is in flight — promoting now would change what it stages", true)
-		return
+		return nil
 	}
 	if m.lane != store.LaneOutput {
 		m.setStatus("promote chains an output case — tab to the output lane first", true)
-		return
+		return nil
 	}
 	p := &promoteState{runs: promoRuns(m.store), skills: m.store.SkillNames()}
 	if len(p.runs) == 0 {
 		m.setStatus("no output iteration under any *-workspace — run a stage first (R)", true)
-		return
+		return nil
 	}
 	if len(p.skills) == 0 {
 		m.setStatus("no stage skill has an evals/evals.json to promote into", true)
-		return
+		return nil
 	}
 	p.runIx = len(p.runs) - 1
 	if e, ok := m.focused(); ok {
@@ -125,13 +197,17 @@ func (m *Model) openPromote() {
 	ti.CharLimit = 500
 	p.field = ti
 
-	p.refreshPreview(m.store)
+	// The scan runs as a command: the form is on screen and usable immediately, and the preview
+	// fills in when the filesystem answers. slug and prompt are suggested again then, because the
+	// prompt's workspace name comes out of the scan.
+	cmd := p.previewCmd(m.store)
 	p.slug = p.suggestSlug(m.store)
 	p.prompt = p.suggestPrompt()
 
 	m.promote = p
 	m.mode = screenPromote
 	m.setStatus("", false)
+	return cmd
 }
 
 // ---------------------------------------------------------------- data
@@ -455,10 +531,10 @@ func (m *Model) updatePromote(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			p.field.Blur()
 			return m, nil
 		case "enter":
-			m.commitPromoField(p.fieldOn, strings.TrimSpace(p.field.Value()))
+			cmd := m.commitPromoField(p.fieldOn, strings.TrimSpace(p.field.Value()))
 			p.editing = false
 			p.field.Blur()
-			return m, nil
+			return m, cmd
 		}
 		var cmd tea.Cmd
 		p.field, cmd = p.field.Update(msg)
@@ -498,11 +574,9 @@ func (m *Model) updatePromote(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "left", "h":
-		p.adjust(m, -1)
-		return m, nil
+		return m, p.adjust(m, -1)
 	case "right", "l", " ":
-		p.adjust(m, 1)
-		return m, nil
+		return m, p.adjust(m, 1)
 	}
 	return m, nil
 }
@@ -545,10 +619,10 @@ func (p *promoteState) fieldValue(label string) string {
 
 // commitPromoField writes an edited value back. A slug cleared back to nothing falls back to the
 // suggestion, and either way the suggestion stops overwriting what was typed.
-func (m *Model) commitPromoField(label, value string) {
+func (m *Model) commitPromoField(label, value string) tea.Cmd {
 	p := m.promote
 	if p == nil {
-		return
+		return nil
 	}
 	repreview := false
 	switch label {
@@ -580,13 +654,14 @@ func (m *Model) commitPromoField(label, value string) {
 		repreview = true
 	}
 	if repreview {
-		p.refreshPreview(m.store)
+		return p.previewCmd(m.store)
 	}
+	return nil
 }
 
 // adjust steps a row's value. Changing the source or the destination re-reads the preview and
 // re-suggests what the destination wants, unless it was typed by hand.
-func (p *promoteState) adjust(m *Model, dir int) {
+func (p *promoteState) adjust(m *Model, dir int) tea.Cmd {
 	label := p.rows()[p.cursor].label
 	cycle := func(values []string, ix *int) {
 		if len(values) == 0 {
@@ -638,17 +713,21 @@ func (p *promoteState) adjust(m *Model, dir int) {
 		}
 	}
 	if newSource {
-		p.refreshPreview(m.store)
+		cmd := p.previewCmd(m.store)
 		if !p.slugEdited && p.dest == destFixture {
 			p.slug = p.suggestSlug(m.store)
 		}
-		if !p.promptEdited && p.dest == destFixture {
-			p.prompt = p.suggestPrompt()
+		// The prompt's workspace name comes out of the scan, so it is re-suggested when the
+		// preview lands (see promotePreviewMsg) rather than here, where it would be guessed.
+		if label == "id" && !p.slugEdited {
+			p.slug = p.suggestSlug(m.store)
 		}
+		return cmd
 	}
 	if label == "id" && !p.slugEdited {
 		p.slug = p.suggestSlug(m.store)
 	}
+	return nil
 }
 
 // retarget points the target skill at what the chosen destination wants: the stage after the one
@@ -675,6 +754,12 @@ func (m *Model) doPromote() tea.Cmd {
 	}
 	if m.dirty {
 		m.setStatus("unsaved changes in memory — ctrl+s first: a promotion writes its case file immediately", true)
+		return nil
+	}
+	// The write path re-scans for itself, but the operator decides from the preview on screen:
+	// promoting while that preview is a scan behind would stage files they were never shown.
+	if !p.ready() {
+		m.setStatus("still reading the run's output — the preview is not ready yet", true)
 		return nil
 	}
 	if p.previewErr != "" {
@@ -879,6 +964,10 @@ func (m *Model) promoteView() string {
 	lines = append(lines, "")
 
 	switch {
+	case p.scanning:
+		// The scan is off the update loop, so the form is usable while it runs. Say so plainly
+		// instead of showing an empty list that would read as "nothing will be staged".
+		add(dimStyle, "  reading the run's output…")
 	case p.previewErr != "":
 		add(statusBad, "  "+p.previewErr)
 	case p.dest == destReferences && len(p.reference.Files) > 0:
@@ -948,7 +1037,7 @@ func (m *Model) promoteView() string {
 	if p.dryRun {
 		add(promoNote, "  dry run: reports what it would stage and writes nothing")
 	}
-	return box.Width(m.formWidth()).Render(strings.Join(lines, "\n"))
+	return strings.Join(lines, "\n")
 }
 
 // fitPlain truncates a plain line to width so the box never re-wraps it.

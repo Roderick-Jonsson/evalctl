@@ -28,7 +28,11 @@ var (
 	styleOff = lipgloss.NewStyle()
 	// styleCur is the row under the cursor: a background, so the row's own foregrounds survive.
 	styleCur = lipgloss.NewStyle()
-	box      = lipgloss.NewStyle()
+	// The gutter's two marks. Accent means "keystrokes go here", and it is the only thing on a
+	// row that carries it — green/amber/red stay reserved for state.
+	cursorMark = lipgloss.NewStyle()
+	selMark    = lipgloss.NewStyle()
+	box        = lipgloss.NewStyle()
 
 	statusOk   = lipgloss.NewStyle()
 	statusBad  = lipgloss.NewStyle()
@@ -70,32 +74,41 @@ func init() { applyStyles(theme.Current()) }
 // applyStyles rebuilds the table from a palette. It is called once at startup and again by Run
 // when the caller resolved a different theme, so nothing has to be threaded through the model.
 func applyStyles(p theme.Palette) {
-	colSkill = lipgloss.NewStyle().Foreground(p.Color(p.Accent)).Bold(true).Width(20)
-	colID = lipgloss.NewStyle().Foreground(p.Color(p.Faint))
-	colSlug = lipgloss.NewStyle().Foreground(p.Color(p.Text)).Width(24)
-	colYes = lipgloss.NewStyle().Foreground(p.Color(p.OK)).Width(4)
-	colNo = lipgloss.NewStyle().Foreground(p.Color(p.Err)).Width(4)
-	colSplit = lipgloss.NewStyle().Foreground(p.Color(p.Muted)).Width(11)
-	colDupe = lipgloss.NewStyle().Foreground(p.Color(p.Warn)).Width(4)
+	// Column styles carry colour only. Padding is done by the table from the column's own width
+	// and alignment, so no style can re-wrap a cell (or a badge) on its own.
+	colSkill = lipgloss.NewStyle().Foreground(p.Color(p.Text))
+	colID = lipgloss.NewStyle().Foreground(p.Color(p.Muted))
+	colSlug = lipgloss.NewStyle().Foreground(p.Color(p.Text))
+	// A yes/no label is a fact about the row, not a pass or a failure: a "no" row is a valid
+	// negative test. Text and Muted keep green and red for what they actually mean.
+	colYes = lipgloss.NewStyle().Foreground(p.Color(p.Text))
+	colNo = lipgloss.NewStyle().Foreground(p.Color(p.Muted))
+	colSplit = lipgloss.NewStyle().Foreground(p.Color(p.Muted))
+	// A near-duplicate IS a warning — the one thing in this table that earns amber.
+	colDupe = lipgloss.NewStyle().Foreground(p.Color(p.Warn))
 
-	styleOn = lipgloss.NewStyle().Foreground(p.Color(p.OK)).Bold(true)
+	styleOn = lipgloss.NewStyle().Foreground(p.Color(p.OK))
 	styleOff = lipgloss.NewStyle().Foreground(p.Color(p.Muted))
 	styleCur = lipgloss.NewStyle().Background(p.Color(p.Sel))
 	selSeq = escapeOf(styleCur)
-	box = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(p.Color(p.Border))
+	cursorMark = lipgloss.NewStyle().Foreground(p.Color(p.Accent)).Bold(true)
+	selMark = lipgloss.NewStyle().Foreground(p.Color(p.Accent))
 
 	statusOk = lipgloss.NewStyle().Foreground(p.Color(p.OK))
 	statusBad = lipgloss.NewStyle().Foreground(p.Color(p.Err))
 	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Text))
 	dimStyle = lipgloss.NewStyle().Foreground(p.Color(p.Faint))
-	activityTool = lipgloss.NewStyle().Foreground(p.Color(p.Warn))
+	// A tool-call line is activity, not a warning: cyan (accent2) is this palette's structural
+	// hue, and amber is kept for the one thing it means in this tool — a dupe or a validation
+	// warning.
+	activityTool = lipgloss.NewStyle().Foreground(p.Color(p.Accent2))
 
 	headerFocus = lipgloss.NewStyle().Bold(true).Underline(true).Foreground(p.Color(p.Accent))
 	headerSort = lipgloss.NewStyle().Underline(true).Foreground(p.Color(p.Text))
-	headerGroup = lipgloss.NewStyle().Foreground(p.Color(p.Warn)).Bold(true)
+	headerGroup = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Text))
 	tabActive = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Accent))
-	tabIdle = lipgloss.NewStyle().Foreground(p.Color(p.Faint))
-	styleGroup = lipgloss.NewStyle().Foreground(p.Color(p.Accent2)).Bold(true)
+	tabIdle = lipgloss.NewStyle().Foreground(p.Color(p.Muted))
+	styleGroup = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Text))
 	badgeWarn = lipgloss.NewStyle().Foreground(p.Color(p.Warn))
 
 	colCases = lipgloss.NewStyle().Foreground(p.Color(p.Text))

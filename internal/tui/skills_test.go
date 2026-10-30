@@ -18,7 +18,7 @@ func skillModel(t *testing.T) *Model {
 func TestSkillListCountsEverySkill(t *testing.T) {
 	m := skillModel(t)
 	view := m.View()
-	for _, want := range []string{"SKILL", "CASES", "ASR", "TRIGGER", "HEALTH", "alpha", "beta", "· all skills"} {
+	for _, want := range []string{"SKILL", "CASES", "GRADED", "FIXT", "FILES", "TRIG+", "TRIG-", "HEALTH", "alpha", "beta", "all skills"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("skill list missing %q:\n%s", want, view)
 		}
@@ -56,7 +56,7 @@ func TestEnteringASkillScopesBothLanes(t *testing.T) {
 	if strings.Contains(m.View(), "SKILL") {
 		t.Fatalf("scoped view still draws the skill column:\n%s", m.View())
 	}
-	if !strings.Contains(m.View(), "◆ alpha") {
+	if !strings.Contains(m.View(), " alpha ") {
 		t.Fatalf("header does not name the scope:\n%s", m.View())
 	}
 

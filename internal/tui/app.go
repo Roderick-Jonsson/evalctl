@@ -6,6 +6,7 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"evalctl/internal/format"
 	"evalctl/internal/runner"
 	"evalctl/internal/store"
 	"evalctl/internal/theme"
@@ -81,6 +83,7 @@ type Model struct {
 	runActive bool
 	runEvents chan runner.Event
 	help      bool
+	helpTop   int // first key-map line on screen
 	quit      bool
 	quitArmed bool
 
@@ -350,6 +353,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Batch(cmds...)
 		}
+		// The key map is a scrollable screen of its own: while it is open it owns the keyboard,
+		// so a stray letter cannot edit a row underneath it.
+		if m.help {
+			switch msg.String() {
+			case "?", "esc", "q":
+				m.help = false
+				return m, nil
+			}
+			m.scrollHelp(msg.String())
+			return m, nil
+		}
 		switch m.mode {
 		case screenSkills:
 			return m.updateSkills(msg)
@@ -372,6 +386,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runEventMsg:
 		m.applyEvent(msg.event)
 		return m, waitForEvent(m.runEvents)
+	case promotePreviewMsg:
+		// A scan result only lands if the form has not moved on since it was scheduled. The
+		// suggestions that depend on what was found are refreshed here, once.
+		p := m.promote
+		if p == nil || msg.gen != p.gen {
+			return m, nil
+		}
+		p.preview, p.reference, p.previewErr = msg.preview, msg.reference, msg.err
+		p.scanned, p.scanning = msg.gen, false
+		if !p.promptEdited && p.dest == destFixture {
+			p.prompt = p.suggestPrompt()
+		}
+		return m, nil
 	case runDoneMsg:
 		m.runActive = false
 		if m.progress != nil {
@@ -449,6 +476,12 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setStatus("a run is already going — this is its table", false)
 			return m, nil
 		}
+		// A run reads the files on disk. With edits still in memory it would grade a set the
+		// operator is not looking at, and report a number that belongs to a different tree.
+		if m.dirty {
+			m.setStatus("unsaved changes — a run grades the files on disk: ctrl+s writes first, q twice discards", true)
+			return m, nil
+		}
 		m.openLauncher()
 		return m, nil
 	case "L":
@@ -458,8 +491,7 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.openProfiles()
 		return m, nil
 	case "c":
-		m.openPromote()
-		return m, nil
+		return m, m.openPromote()
 	case "t":
 		m.promotePromptToTrigger()
 		return m, nil
@@ -502,6 +534,7 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "?":
 		m.help = !m.help
+		m.helpTop = 0
 		return m, nil
 	case "ctrl+v":
 		m.viewer = newIssueViewer(m.issues, m.width)
@@ -844,45 +877,63 @@ func (m *Model) listView() string {
 	return b.String()
 }
 
-// groupLine is a section header: what the section is, how many rows are in it, and a rule that
-// reaches the edge so a scrolled list still shows where one section ends.
+// groupLine is a section header: a short rule, then what the section is and how many rows are in
+// it. It stops where the text stops — a rule stretched to the terminal edge is a border, and a
+// border that carries nothing costs the reader a scan line per section.
 func (m *Model) groupLine(it listItem) string {
-	lead := "  ──"
 	label := fmt.Sprintf(" %s · %d ", it.label, it.count)
-	rule := strings.Repeat("─", max(0, m.width-lipgloss.Width(lead)-lipgloss.Width(label)-1))
-	return dimStyle.Render(lead) + styleGroup.Render(label) + dimStyle.Render(rule)
+	return dimStyle.Render("──") + styleGroup.Render(label)
 }
 
-// header is the frame the list is read in: which build, which skill, and the two lanes that
-// skill owns with their counts — the switch you make is a tab, not a mode you have to discover.
+// header is the frame the list is read in: three lines — identity, state, and the column head. It
+// carries what changes (scope, lane, counts, health) and nothing that does not: the tree's full
+// path lives in `?`, because a 60-character invariant repeated on every repaint is the least
+// informative thing a screen can spend its top row on.
 func (m *Model) header() string {
-	scope := dimStyle.Render("· all skills")
-	if m.skill != "" {
-		scope = titleStyle.Render("◆ " + m.skill)
+	line1 := titleStyle.Render("evalctl " + m.ver)
+	if m.mode == screenSkills {
+		// The skill list is the front door. The lane tabs belong to a lane view; drawing them
+		// here advertises a switch that does not apply to what is on screen.
+		cases, queries := 0, 0
+		for _, r := range m.skills.rows {
+			if r.all {
+				cases, queries = r.sum.Cases, r.sum.Queries
+			}
+		}
+		line1 += "  " + dimStyle.Render("all skills") +
+			"  " + fmt.Sprintf("%d cases · %d queries", cases, queries)
+	} else {
+		scope := dimStyle.Render("all skills")
+		if m.skill != "" {
+			scope = titleStyle.Render(m.skill)
+		}
+		line1 += "  " + scope + "  " + m.laneTabs()
 	}
-	line1 := strings.Join([]string{
-		titleStyle.Render("evalctl " + m.ver),
-		scope,
-		m.laneTabs(),
-	}, "  ")
 
 	errs, warns := m.counts()
 	badge := statusOk.Render("clean")
 	if errs > 0 {
-		badge = statusBad.Render(fmt.Sprintf("@ %d error(s)", errs))
+		badge = statusBad.Render(plural(errs, "error"))
 	} else if warns > 0 {
-		badge = badgeWarn.Render(fmt.Sprintf("! %d warning(s)", warns))
+		badge = badgeWarn.Render(plural(warns, "warning"))
 	}
-	shown := fmt.Sprintf("%d of %d", len(m.rows), len(m.store.Rows(m.lane, store.Filter{Skill: m.skill})))
-	line2 := dimStyle.Render(m.store.Root) + "  " + shown + "  " + badge
+	var line2 string
+	if m.mode == screenSkills {
+		line2 = dimStyle.Render(filepath.Base(m.store.Root)) + "  " +
+			fmt.Sprintf("%d skill(s)", len(m.skills.rows)-1)
+	} else {
+		shown := fmt.Sprintf("%d of %d", len(m.rows), len(m.store.Rows(m.lane, store.Filter{Skill: m.skill})))
+		line2 = dimStyle.Render(filepath.Base(m.store.Root)) + "  " + shown
+	}
+	line2 += "  " + badge
 	if n := len(m.chosen); n > 0 {
-		line2 += " · " + styleOn.Render(fmt.Sprintf("%d selected", n)) + m.selectionBreakdown()
+		line2 += "  " + selMark.Render(fmt.Sprintf("%d selected", n)) + m.selectionBreakdown()
 	}
 	if m.dirty {
-		line2 += " · " + badgeWarn.Render("unsaved")
+		line2 += "  " + badgeWarn.Render("unsaved")
 	}
 	if m.runActive {
-		line2 += " · " + badgeWarn.Render("⟳ run in progress")
+		line2 += "  " + tabActive.Render("⟳ run in progress")
 	}
 	if fh := m.filterHint(); fh != "" {
 		line2 += "  " + fh
@@ -891,13 +942,22 @@ func (m *Model) header() string {
 }
 
 // laneTabs draws both lanes of the current scope; the active one is bracketed and bright, the
-// other still carries its count so the number of trigger rows behind it is never a surprise.
+// other still carries its count so the number of trigger rows behind it is never a surprise. On a
+// narrow terminal the labels shorten rather than the line clipping: a header that runs off the edge
+// loses its counts, which is the only part of it that changes.
 func (m *Model) laneTabs() string {
 	var parts []string
+	compact := m.width > 0 && m.width < 90
 	for _, lane := range []string{store.LaneOutput, store.LaneTrigger} {
 		label := "trigger queries"
 		if lane == store.LaneOutput {
 			label = "output cases"
+		}
+		if compact {
+			label = "trig"
+			if lane == store.LaneOutput {
+				label = "out"
+			}
 		}
 		n := len(m.store.Rows(lane, store.Filter{Skill: m.skill}))
 		text := fmt.Sprintf("%s %d", label, n)
@@ -974,14 +1034,23 @@ func (m *Model) filterHint() string {
 }
 
 // column is one table column: the store field it shows, its header, its fixed width (0 = the
-// flexible text column) and how one cell is styled. The name is the store's column name, so the
-// number-key focus, sort, group and search reach the same field the table draws.
+// flexible text column), how one cell is coloured and whether the column is numeric. The name is
+// the store's column name, so the number-key focus, sort, group and search reach the same field
+// the table draws.
 type column struct {
 	name  string
 	head  string
 	width int
-	cell  func(store.Entry) string
+	right bool // numeric: right-aligned, so 1 and 21 end on the same edge
+	style lipgloss.Style
+	cell  func(store.Entry) string // raw text: padding and colour belong to the table
 }
+
+// rowGutter is the cursor/selection mark and the space after it, and it is the ONLY definition of
+// the table's left edge. The header and every row are padded from it; duplicating the number (a
+// header written as five spaces against a six-cell row) is what silently shifts every column by
+// one, which is exactly what this table used to do.
+const rowGutter = 2
 
 // columns is the table's column list for what is on screen. Scoped to one skill the SKILL column
 // would repeat the header on every row, so it is dropped — and the number keys renumber with it,
@@ -1002,60 +1071,86 @@ func (m *Model) columns() []column {
 }
 
 func laneColumns(lane string) []column {
-	id := func(e store.Entry) string { return colID.Render(fmt.Sprintf("%-4d", e.ID)) }
-	skill := func(e store.Entry) string { return colSkill.Render(e.Skill) }
+	id := func(e store.Entry) string { return strconv.Itoa(e.ID) }
 	dupe := func(e store.Entry) string {
-		v := "-"
-		if e.Dupe != 0 {
-			v = "#" + strconv.Itoa(e.Dupe)
+		if e.Dupe == 0 {
+			return "-"
 		}
-		return colDupe.Render(fmt.Sprintf("%-4s", v))
+		return "#" + strconv.Itoa(e.Dupe)
 	}
 	text := func(e store.Entry) string { return oneLine(e.Text) }
 	if lane == store.LaneOutput {
 		return []column{
-			{name: "id", head: "ID", width: 4, cell: id},
-			{name: "skill", head: "SKILL", width: 20, cell: skill},
-			{name: "slug", head: "SLUG", width: 24, cell: func(e store.Entry) string { return colSlug.Render(e.Slug) }},
-			{name: "assert", head: "ASR", width: 4, cell: func(e store.Entry) string {
+			{name: "id", head: "ID", width: 4, right: true, style: colID, cell: id},
+			{name: "skill", head: "SKILL", width: 20, style: colSkill, cell: func(e store.Entry) string { return e.Skill }},
+			{name: "slug", head: "SLUG", width: 24, style: colSlug, cell: func(e store.Entry) string { return e.Slug }},
+			{name: "assert", head: "ASR", width: 4, right: true, style: colAsr, cell: func(e store.Entry) string {
 				if e.Assert == 0 {
-					return colNone.Render("-   ")
+					return "-"
 				}
-				return colAsr.Render(fmt.Sprintf("%-4d", e.Assert))
+				return strconv.Itoa(e.Assert)
 			}},
-			{name: "dupe", head: "DUP", width: 4, cell: dupe},
-			{name: "text", head: "PROMPT", width: 0, cell: text},
+			{name: "dupe", head: "DUP", width: 4, right: true, style: colDupe, cell: dupe},
+			{name: "text", head: "PROMPT", width: 0, style: colNone, cell: text},
 		}
 	}
 	return []column{
-		{name: "id", head: "ID", width: 4, cell: id},
-		{name: "skill", head: "SKILL", width: 20, cell: skill},
-		{name: "label", head: "TRIG", width: 4, cell: func(e store.Entry) string {
+		{name: "id", head: "ID", width: 4, right: true, style: colID, cell: id},
+		{name: "skill", head: "SKILL", width: 20, style: colSkill, cell: func(e store.Entry) string { return e.Skill }},
+		{name: "label", head: "TRIG", width: 4, style: colYes, cell: func(e store.Entry) string {
+			// yes/no is a property of the row, not a verdict: a should-not-trigger row is a
+			// legitimate test. Colour them alike and let the word carry the meaning, so green
+			// stays "passed" and red stays "failed".
 			if e.Label == "no" {
-				return colNo.Render("no")
+				return "no"
 			}
-			return colYes.Render("yes")
+			return "yes"
 		}},
-		{name: "split", head: "SPLIT", width: 11, cell: func(e store.Entry) string { return colSplit.Render(e.Split) }},
-		{name: "dupe", head: "DUP", width: 4, cell: dupe},
-		{name: "text", head: "QUERY", width: 0, cell: text},
+		{name: "split", head: "SPLIT", width: 11, style: colSplit, cell: func(e store.Entry) string { return e.Split }},
+		{name: "dupe", head: "DUP", width: 4, right: true, style: colDupe, cell: dupe},
+		{name: "text", head: "QUERY", width: 0, style: colNone, cell: text},
 	}
 }
 
-// headCell pads a header to its column width. Padding (never a marker) is what keeps the header
-// in line with the rows: the focus, sort and group state is carried by the style and by the
-// filter line, both of which cost no characters.
-func headCell(label string, width int) string {
-	w := lipgloss.Width(label)
-	if width <= 0 || w >= width {
-		return label
+// padCell fits a value to its column: cut on a rune boundary if it is long, padded to the column's
+// edge if it is short. Numeric columns pad on the left so their digits line up. A width of 0 marks
+// the flexible text column, which is fitted by the caller instead.
+func padCell(s string, width int, right bool) string {
+	if width <= 0 {
+		return s
 	}
-	return label + strings.Repeat(" ", width-w)
+	s = ellipsis(s, width)
+	w := lipgloss.Width(s)
+	if w >= width {
+		return s
+	}
+	pad := strings.Repeat(" ", width-w)
+	if right {
+		return pad + s
+	}
+	return s + pad
+}
+
+// headCell pads a header to its column width and alignment. Padding (never a marker) is what keeps
+// the header in line with the rows: the focus, sort and group state is carried by the style and by
+// the filter line, both of which cost no characters.
+func headCell(label string, width int, right bool) string {
+	return padCell(label, width, right)
+}
+
+// cellText is one value, padded and coloured. A dash is a placeholder and is always faint:
+// "no assertion recorded" must not read as loudly as a count.
+func cellText(c column, e store.Entry) string {
+	raw := c.cell(e)
+	if raw == "" || raw == "-" {
+		return dimStyle.Render(padCell("-", c.width, c.right))
+	}
+	return c.style.Render(padCell(raw, c.width, c.right))
 }
 
 func (m *Model) columnHead() string {
 	var b strings.Builder
-	b.WriteString("     ") // the cursor mark and the checkbox gutter, exactly as a row
+	b.WriteString(strings.Repeat(" ", rowGutter))
 	cols := m.columns()
 	for i, c := range cols {
 		style := dimStyle
@@ -1067,7 +1162,7 @@ func (m *Model) columnHead() string {
 		case m.sortedBy(c.name):
 			style = headerSort
 		}
-		b.WriteString(style.Render(headCell(c.head, c.width)))
+		b.WriteString(style.Render(headCell(c.head, c.width, c.right)))
 		b.WriteString(" ")
 	}
 	return b.String()
@@ -1082,19 +1177,19 @@ func (m *Model) sortedBy(name string) bool {
 	return false
 }
 
+// rowLine is one row: a two-cell gutter (cursor, or selected, or neither), then the columns. There
+// is no checkbox column — a table whose every row starts with an empty box spends six characters a
+// line saying "not selected", and the box only ever carries information on the rows you did select.
 func (m *Model) rowLine(i int, e store.Entry) string {
 	mark := "  "
-	if i == m.cursor {
-		mark = styleOn.Render("▸ ")
-	} else if m.chosen[m.key(e)] {
-		mark = styleOn.Render("▌ ")
-	}
-	box := styleOff.Render("[ ]")
-	if m.chosen[m.key(e)] {
-		box = styleOn.Render("[x]")
+	switch {
+	case i == m.cursor:
+		mark = cursorMark.Render("▸ ")
+	case m.chosen[m.key(e)]:
+		mark = selMark.Render("▪ ")
 	}
 	cols := m.columns()
-	fixed := 6 // mark, box, the space after the box
+	fixed := rowGutter
 	for _, c := range cols {
 		if c.width > 0 {
 			fixed += c.width + 1
@@ -1106,14 +1201,12 @@ func (m *Model) rowLine(i int, e store.Entry) string {
 	}
 	var b strings.Builder
 	b.WriteString(mark)
-	b.WriteString(box)
-	b.WriteString(" ")
 	for _, c := range cols {
 		if c.width == 0 {
 			b.WriteString(ellipsis(c.cell(e), textWidth))
 			continue
 		}
-		b.WriteString(c.cell(e))
+		b.WriteString(cellText(c, e))
 		b.WriteString(" ")
 	}
 	return b.String()
@@ -1135,29 +1228,86 @@ func ellipsis(s string, width int) string {
 	return string(r) + "…"
 }
 
+// hint is one binding in the footer: the key, what it does, and how droppable it is. A hint line
+// cut at the screen edge is how a footer silently deletes the save key, so a narrow terminal drops
+// bindings by RANK, never by column.
+type hint struct {
+	key, act string
+	rank     int // higher = dropped sooner; 0 is never dropped
+}
+
+// hintLine renders the bindings that fit. Ranks 0 (save, keys) are unconditional: whatever else
+// goes, the operator can always find out how to write and how to ask for help.
+func (m *Model) hintLine(hints []hint) string {
+	render := func(hs []hint) string {
+		parts := make([]string, 0, len(hs))
+		for _, h := range hs {
+			parts = append(parts, h.key+" "+h.act)
+		}
+		return strings.Join(parts, " · ")
+	}
+	live := append([]hint(nil), hints...)
+	for {
+		line := render(live)
+		if m.width <= 0 || lipgloss.Width(line) <= m.width-1 {
+			return dimStyle.Render(line)
+		}
+		worst := -1
+		for i, h := range live {
+			if h.rank == 0 {
+				continue
+			}
+			if worst < 0 || h.rank >= live[worst].rank {
+				worst = i
+			}
+		}
+		if worst < 0 {
+			return dimStyle.Render(ellipsis(line, m.width-1))
+		}
+		live = append(live[:worst], live[worst+1:]...)
+	}
+}
+
+// listHints is ordered by how often a hand reaches for it, and ranked by how little is lost when it
+// has to go.
+func (m *Model) listHints() []hint {
+	scope := hint{"esc", "skills", 7}
+	if m.skill != "" {
+		scope = hint{"esc", "skills", 3}
+	}
+	hs := []hint{
+		{"space", "select", 1}, {"e", "edit", 2}, {"d", "delete", 5}, {"/", "search", 4},
+		{"tab", "lane", 6}, {"R", "run", 3}, {"L", "results", 8},
+		{"n", "new", 12}, {"v", "view", 10}, {"1–6", "column", 9},
+		{"c", "chain", 11}, {"t", "→trigger", 11}, {"P", "profiles", 13},
+		{"ctrl+s", "save", 0}, {"?", "keys", 0}, {"q", "quit", 10},
+		scope,
+	}
+	if m.lane == store.LaneTrigger {
+		hs = append(hs, hint{"u", "dupes", 14}, hint{"s", "split", 15}, hint{"l", "label", 15})
+	}
+	return hs
+}
+
 func (m *Model) footer() string {
 	var hints string
-	if m.searching {
+	switch {
+	case m.searching:
 		hints = m.search.View() + dimStyle.Render("   enter apply · esc clear")
-	} else if name := m.focusedColumnName(); name != "" {
+	case m.focusedColumnName() != "":
 		hints = dimStyle.Render(fmt.Sprintf(
-			"col %s ▸ o sort · g group · / search this column · 1–%d another · 0 / esc clear",
-			name, len(m.columns())))
-	} else if m.width < 150 {
-		hints = dimStyle.Render("space select · e edit · d delete · / search · tab lane · v view · R run · c chain · t →trigger · L results · ctrl+s save · ? help · esc skills")
-	} else {
-		scope := "f skill"
-		if m.skill != "" {
-			scope = "esc skills"
-		}
-		hints = dimStyle.Render("space select · e edit · n new · d delete · / search · 1–6 column (o sort · g group) · tab lane · u dupes · s split · l label · v view · R run · c chain · t →trigger · L results · P profiles · ctrl+s save · ? help · q quit · " + scope)
+			"col %s · o sort · g group · / search it · 0 clears",
+			m.focusedColumnName()))
+	default:
+		hints = m.hintLine(m.listHints())
 	}
 	status := m.status
-	if status == "" {
+	switch {
+	case status == "":
 		status = dimStyle.Render(m.position())
-	} else if m.statusErr {
+	case m.statusErr:
 		status = statusBad.Render(status)
-	} else {
+	default:
 		status = statusOk.Render(status)
 	}
 	return hints + "\n" + status + "\n"
@@ -1170,61 +1320,125 @@ func (m *Model) position() string {
 	return fmt.Sprintf("%d / %d", m.cursor+1, len(m.rows))
 }
 
-func (m *Model) helpView() string {
+// helpLines is the whole key map, one binding per line. It is a list and not a painted box: the box
+// was 35 rows tall, so on a 30-row terminal its first five lines — the skill-list section, the one
+// an operator opens help to find — could not be read, and nothing could scroll them back.
+func (m *Model) helpLines() []string {
+	row := func(key, act string) string {
+		return "  " + dimStyle.Render(fmt.Sprintf("%-14s", key)) + act
+	}
+	head := func(s string) string { return titleStyle.Render(s) }
 	lines := []string{
-		titleStyle.Render("evalctl — keys"),
+		titleStyle.Render("evalctl "+m.ver) + "  " + dimStyle.Render(m.store.Root),
 		"",
-		titleStyle.Render("  the skill list (where it opens)"),
-		"  j k ↑ ↓      move           enter / →  open a skill",
-		"  /            filter the skill names      esc  clear the filter",
-		"  · all skills  the first row: every skill, both lanes, as before",
-		"  L / P        results browser / profiles, from here too",
+		head("SKILL LIST"),
+		row("j k ↑ ↓", "move"),
+		row("enter →", "open the skill under the cursor"),
+		row("/", "filter the skill names"),
+		row("L / P", "results browser · profiles"),
 		"",
-		titleStyle.Render("  inside a skill"),
-		"  tab          its output cases ⇄ its trigger queries (the header carries both counts)",
-		"  esc          back to the skill list (after it has cleared a column focus or a selection)",
-		"  space        select row (and advance)      a  select all visible      A / esc  clear",
-		"  e enter      edit the focused row           n  new row in this lane, skill prefilled",
-		"  v            full text: prompt, expected_output, files, assertions",
-		"  d x          delete selection (or the focused row); asks first",
-		"  /            search prompt / slug / assertion      esc clears it",
-		"  u            show only near-duplicate rows — the trim shortlist",
-		"  s / l        cycle split / label (trigger lane)",
-		"  ctrl+s       write both lanes (atomic; backup in .evalctl/backups/)",
+		head("IN A SKILL"),
+		row("tab", "output cases ⇄ trigger queries"),
+		row("esc", "back to the skill list"),
+		row("space", "select the row (and move down)"),
+		row("a / A", "select all visible · clear the selection"),
+		row("e enter", "edit the row under the cursor"),
+		row("n", "new row in this lane"),
+		row("v", "full text: prompt, expected_output, files, assertions"),
+		row("d x", "delete the selection, or the row under the cursor — asks first"),
+		row("/", "search query / slug / assertion"),
+		row("u", "only near-duplicate rows — the trim shortlist"),
+		row("s / l", "cycle split / label (trigger lane)"),
+		row("ctrl+s", "write both lanes (atomic; previous bytes in .evalctl/backups/)"),
 		"",
-		dimStyle.Render("  everything else below works the same in a skill and in · all skills"),
+		head("MOVING"),
+		row("j k ↑ ↓", "move"),
+		row("g G", "first / last row"),
+		row("ctrl+d ctrl+u", "half page"),
 		"",
-		"  j k ↑ ↓      move           g G  top / bottom      ctrl+d ctrl+u  half page",
-		titleStyle.Render("  columns"),
-		"  1 … 6        focus a column of this lane (again, or 0 / esc, drops it)",
-		"  o            sort by the focused column: ascending → descending → file order",
-		"  g            group by the focused column: a section header with a count each",
-		"  /            with a column focused, search only that column",
-		dimStyle.Render("  sorting and grouping are the view only — the row key never changes, so a"),
-		dimStyle.Render("  selection, a delete or a run acts on the same rows in any order."),
+		head("COLUMNS"),
+		row("1 … 6", "focus a column (again, or 0, drops it)"),
+		row("o", "sort by it: ascending → descending → file order"),
+		row("g", "group by it: a section header with a count"),
+		row("/", "with a column focused, search only that column"),
 		"",
-		titleStyle.Render("  running the set"),
-		"  R            run what is selected (or the whole lane of this skill) — form, then enter",
-		"  c            chain: promote a run's output into the next stage's fixture (output lane)",
-		"  t            a case's prompt becomes a trigger query — does that request pick the skill?",
-		"  L            results: every iteration, per skill workspace, enter opens its report.md rendered",
-		"  P            profiles: check the four sandboxes, u runs ensure on what fails",
-		"  esc          in a run table: back to the list, the run keeps going; x cancels it",
-		"  v / a        agent activity: v in the run table (live), a in the results browser",
+		head("RUNNING"),
+		row("R", "run what is selected (or the whole lane of this skill)"),
+		row("c", "chain: a run's output becomes the next stage's fixture"),
+		row("t", "a case's prompt becomes a trigger query"),
+		row("L", "every iteration per skill workspace; enter opens its report"),
+		row("v / a", "agent activity: v in the run table, a in the results browser"),
+		row("x", "cancel the run in the run table"),
 		"",
-		"  q            quit (warns once if unsaved)",
+		head("STATE"),
+		row("ctrl+v", "the validation issues"),
+		row("q", "quit (warns once if unsaved)"),
 		"",
 		dimStyle.Render("  ids are never renumbered on delete: result dirs are keyed q<id>-<skill>,"),
-		dimStyle.Render("  so a gap is honest and a renumber is a separate, deliberate act (evalctl renumber)."),
-		"",
-		dimStyle.Render("  ctrl+v shows the validation issues · ? or esc closes this"),
+		dimStyle.Render("  so a gap is honest and a renumber is a separate act (evalctl renumber)."),
 	}
-	return box.Width(min(m.width-2, 96)).Render(strings.Join(lines, "\n"))
+	// Fit every line to the screen: a help line that wraps costs two rows and breaks the column.
+	for i, l := range lines {
+		if m.width > 2 && lipgloss.Width(l) > m.width-1 {
+			lines[i] = ellipsis(l, m.width-1)
+		}
+	}
+	return lines
+}
+
+func (m *Model) helpView() string {
+	lines := m.helpLines()
+	h := m.height - 1 // the last row is the scroll/close hint
+	if h < 3 {
+		h = 3
+	}
+	if maxTop := len(lines) - h; m.helpTop > maxTop {
+		m.helpTop = max(0, maxTop)
+	}
+	if m.helpTop < 0 {
+		m.helpTop = 0
+	}
+	end := min(len(lines), m.helpTop+h)
+	var b strings.Builder
+	for _, l := range lines[m.helpTop:end] {
+		b.WriteString(l + "\n")
+	}
+	pos := fmt.Sprintf("%d–%d / %d", m.helpTop+1, end, len(lines))
+	b.WriteString(dimStyle.Render("j k scroll · ? or esc closes") + "  " + dimStyle.Render(pos))
+	return b.String()
+}
+
+// scrollHelp moves the key map. g/G jump, j/k by a line, ctrl+d/ctrl+u by a screen — the same keys
+// the list uses, because help is a view of a long thing like any other.
+func (m *Model) scrollHelp(key string) {
+	h := max(3, m.height-1)
+	switch key {
+	case "j", "down":
+		m.helpTop += 1
+	case "k", "up":
+		m.helpTop -= 1
+	case "ctrl+d", "pgdown":
+		m.helpTop += h
+	case "ctrl+u", "pgup":
+		m.helpTop -= h
+	case "g", "home":
+		m.helpTop = 0
+	case "G", "end":
+		m.helpTop = len(m.helpLines())
+	}
+	if maxTop := len(m.helpLines()) - h; m.helpTop > maxTop {
+		m.helpTop = max(0, maxTop)
+	}
+	if m.helpTop < 0 {
+		m.helpTop = 0
+	}
 }
 
 func oneLine(s string) string {
 	return strings.Join(strings.Fields(strings.ReplaceAll(s, "\n", " ")), " ")
 }
+
+func plural(n int, noun string) string { return format.Plural(n, noun) }
 
 func min(a, b int) int {
 	if a < b {

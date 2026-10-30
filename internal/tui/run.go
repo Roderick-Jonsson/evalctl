@@ -136,17 +136,20 @@ func (m *Model) openLauncher() {
 }
 
 // options is the form's row list: label plus the current value and how to change it.
+// onOff renders a boolean as a checkbox, not as a word: "[x] resume" is a thing you can toggle,
+// "resume on" is a fact you have to reverse-engineer a key from.
+func onOff(b bool) string {
+	if b {
+		return "[x]"
+	}
+	return "[ ]"
+}
+
 func (m *Model) options() []struct{ label, value string } {
 	l := m.launcher
 	next := "next free"
 	if l.iteration > 0 {
 		next = fmt.Sprintf("%d", l.iteration)
-	}
-	onOff := func(b bool) string {
-		if b {
-			return "on"
-		}
-		return "off"
 	}
 	rows := []struct{ label, value string }{
 		{"target", l.target},
@@ -163,7 +166,7 @@ func (m *Model) options() []struct{ label, value string } {
 			struct{ label, value string }{"dry run", onOff(l.dryRun)},
 			struct{ label, value string }{"model", orDashText(l.model)},
 			struct{ label, value string }{"activity", l.activity},
-			struct{ label, value string }{"budget", fmt.Sprintf("%ds", l.budget)},
+			struct{ label, value string }{"budget", shortDuration(time.Duration(l.budget) * time.Second)},
 		)
 		return rows
 	}
@@ -183,7 +186,7 @@ func (m *Model) options() []struct{ label, value string } {
 		struct{ label, value string }{"dry run", onOff(l.dryRun)},
 		struct{ label, value string }{"model", orDashText(l.model)},
 		struct{ label, value string }{"activity", l.activity},
-		struct{ label, value string }{"budget", fmt.Sprintf("%ds", l.budget)},
+		struct{ label, value string }{"budget", shortDuration(time.Duration(l.budget) * time.Second)},
 	)
 	return rows
 }
@@ -351,18 +354,15 @@ func (m *Model) launcherView() string {
 	if l.lane == store.LaneTrigger {
 		laneName = "trigger lane — does the right skill load?"
 	}
-	b.WriteString(titleStyle.Render("run · "+laneName) + "\n\n")
-	if l.lane == store.LaneTrigger && len(l.queryIDs) > 0 {
-		b.WriteString(dimStyle.Render(fmt.Sprintf("  queries: %v\n", l.queryIDs)))
-	} else if l.lane == store.LaneOutput && len(l.caseIDs) > 0 {
-		b.WriteString(dimStyle.Render(fmt.Sprintf("  cases: %v · skills: %s\n", l.caseIDs,
-			orDashText(strings.Join(l.skills, ", ")))))
-	}
-	b.WriteString("\n")
+	b.WriteString(titleStyle.Render("run · "+laneName) + "\n")
+	// The scope, before Enter commits to it: what will be measured, how many jobs that is, and
+	// what it may cost. A form that never states the size of the job is a form that gets pressed
+	// on by accident.
+	b.WriteString("  " + m.runScope(l) + "\n\n")
 	for i, row := range m.options() {
 		mark := "  "
 		if i == l.cursor {
-			mark = styleOn.Render("▸ ")
+			mark = cursorMark.Render("▸ ")
 		}
 		label := fmt.Sprintf("%-16s", row.label)
 		value := row.value
@@ -370,7 +370,7 @@ func (m *Model) launcherView() string {
 			value = l.input.View()
 		}
 		if i == l.cursor {
-			value = styleOn.Render(value)
+			value = cursorMark.Render(value)
 		}
 		b.WriteString(mark + label + " " + value + "\n")
 	}
@@ -378,13 +378,51 @@ func (m *Model) launcherView() string {
 	if l.editing {
 		b.WriteString(dimStyle.Render("  type the model, enter keeps it, esc drops it"))
 	} else {
-		b.WriteString(dimStyle.Render("  j k move · ← → change · enter run · esc cancel"))
+		b.WriteString(dimStyle.Render("  j k move · ← → change · space toggles · enter run · esc cancel"))
 	}
 	b.WriteString("\n")
 	if l.dryRun {
-		b.WriteString(colDupe.Render("  dry run: prints the hermes commands and writes nothing"))
+		b.WriteString(badgeWarn.Render("  dry run: prints the hermes commands, writes nothing"))
 	}
-	return box.Width(min(m.width-2, 100)).Render(b.String())
+	return b.String()
+}
+
+// runScope is the one-line answer to "what am I about to start". It counts arms and cases, not
+// rows, because that is what the run will actually spawn — and it says the budget per arm.
+func (m *Model) runScope(l *launcherState) string {
+	arms := 2
+	if l.arms == "with" || l.arms == "without" {
+		arms = 1
+	}
+	n := len(l.caseIDs)
+	if l.lane == store.LaneTrigger {
+		n = len(l.queryIDs)
+	}
+	if n == 0 {
+		// No explicit selection: the run takes the whole lane of the scope on screen.
+		n = len(m.store.Rows(l.lane, store.Filter{Skill: m.skill}))
+	}
+	rows := "the whole lane"
+	if n > 0 {
+		rows = plural(n, "row")
+	}
+	jobs := n * arms
+	return fmt.Sprintf("%s × %s = %s · budget %s",
+		rows, plural(arms, "arm"), plural(jobs, "job"), shortDuration(time.Duration(l.budget)*time.Second))
+}
+
+// shortDuration says 1200s as 20m: the operator is deciding whether to wait, not reading a spec.
+func shortDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d%time.Minute == 0 && d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	if d >= time.Hour && d%time.Hour == 0 {
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	return d.Round(time.Minute).String()
 }
 
 // optionsOf builds the runner's options from the form.
@@ -697,9 +735,13 @@ func (m *Model) progressView() string {
 	b.WriteString("\n")
 	counter := fmt.Sprintf("  %d/%d arms done", done, total)
 	if failures > 0 {
-		counter += fmt.Sprintf(" · %d failure(s)", failures)
+		// The one line that summarises the run is green only when nothing failed: a green
+		// "3/10 arms done · 7 failures" is the exact colour that makes an operator stop reading.
+		counter += fmt.Sprintf(" · %s", plural(failures, "failure"))
+		b.WriteString(statusBad.Render(counter) + "\n")
+	} else {
+		b.WriteString(styleOn.Render(counter) + "\n")
 	}
-	b.WriteString(styleOn.Render(counter) + "\n")
 
 	if len(p.log) > 0 {
 		b.WriteString("\n" + dimStyle.Render("  activity") + "\n")
@@ -862,28 +904,26 @@ func (m *Model) runsView() string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(fmt.Sprintf("results · %d iteration(s)", len(list.infos))) + "\n")
-	b.WriteString(dimStyle.Render("  one workspace per skill — enter opens the report, r reloads") + "\n\n")
+	b.WriteString(titleStyle.Render(fmt.Sprintf("results · %s", plural(len(list.infos), "iteration"))) + "\n")
 	if len(list.infos) == 0 {
 		b.WriteString(dimStyle.Render("  nothing yet — R starts a run") + "\n")
 	} else {
-		b.WriteString(dimStyle.Render(fmt.Sprintf("     %-16s %-16s %-8s %-6s %-6s %-14s %s",
-			"WORKSPACE", "RUN", "LANE", "CASES", "RUNS", "PASS", "STARTED")) + "\n")
+		// No WORKSPACE dash column and no "REPORT yes" column: a trigger run has no workspace and
+		// every finished iteration has a report, so both columns were the same character on every
+		// row. They are stated once, in the footer, instead of ten times in the table.
+		b.WriteString("  " + dimStyle.Render(fmt.Sprintf("%-16s %-12s %-8s %6s %5s %6s  %s",
+			"RUN", "SKILL", "LANE", "CASES", "RUNS", "PASS", "STARTED")) + "\n")
 		for i, info := range list.infos {
 			mark := "  "
 			if i == list.cursor {
-				mark = styleOn.Render("▸ ")
+				mark = cursorMark.Render("▸ ")
 			}
-			pass := "—"
+			pass := "-"
 			if info.PassRate != nil {
-				pass = fmt.Sprintf("%.0f%% (%d/%d)", *info.PassRate*100, info.Passed, info.Judged)
+				pass = fmt.Sprintf("%.0f%%", *info.PassRate*100)
 			}
-			workspace := info.Skill
-			if workspace == "" {
-				workspace = "—"
-			}
-			line := fmt.Sprintf("%s%-16s %-16s %-8s %-6d %-6d %-14s %s", mark, workspace, info.Name,
-				info.Lane, info.Cases, info.Runs, pass, info.Started)
+			line := fmt.Sprintf("%s%-16s %-12s %-8s %6d %5d %6s  %s", mark, info.Name,
+				info.Skill, info.Lane, info.Cases, info.Runs, pass, shortTime(info.Started))
 			if i == list.cursor {
 				line = selected(line)
 			}
@@ -893,6 +933,10 @@ func (m *Model) runsView() string {
 	b.WriteString("\n" + dimStyle.Render("  esc back · enter report · a activity · r reload"))
 	return b.String()
 }
+
+// shortTime defers to the runner's formatter, so the TUI and the CLI cannot print two different
+// renderings of the same run's start.
+func shortTime(s string) string { return runner.ShortTime(s) }
 
 // textLines turns a log (activity.log, a live tail) into viewable lines. Logs are plain text by
 // nature, so they skip the markdown renderer; a *report* goes through newMarkdownViewer instead.

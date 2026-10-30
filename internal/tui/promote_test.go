@@ -6,8 +6,36 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"evalctl/internal/store"
 )
+
+// press sends one key and runs whatever command it returned, so a scan the form scheduled has
+// landed by the time an assertion reads the preview. It is how these tests drive the async path
+// the binary actually takes.
+func press(m *Model, k string) {
+	_, cmd := m.Update(key(k))
+	drainCmds(m, cmd, 0)
+}
+
+func drainCmds(m *Model, cmd tea.Cmd, depth int) {
+	if cmd == nil || depth > 6 {
+		return
+	}
+	msg := cmd()
+	if msg == nil {
+		return
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			drainCmds(m, c, depth+1)
+		}
+		return
+	}
+	_, next := m.Update(msg)
+	drainCmds(m, next, depth+1)
+}
 
 // promoteTree is a tree with two stage skills and one finished source-research run: the arm dir
 // holds the workspace it produced plus the target stage's own answers, which a promotion must
@@ -77,7 +105,7 @@ func focusRow(t *testing.T, m *Model, slug string) {
 func TestPromoteFormOpensFromTheOutputLane(t *testing.T) {
 	m := sized(newModel(promoteTree(t), store.LaneOutput), 140, 40)
 	focusRow(t, m, "src-4-agentskills")
-	m.Update(key("c"))
+	press(m, "c")
 	if m.mode != screenPromote || m.promote == nil {
 		t.Fatal("c did not open the promote form in the output lane")
 	}
@@ -112,9 +140,9 @@ func TestPromoteFromTheFormWritesTheFixtureAndTheCase(t *testing.T) {
 	s := promoteTree(t)
 	m := sized(newModel(s, store.LaneOutput), 140, 40)
 	focusRow(t, m, "src-4-agentskills")
-	m.Update(key("c"))
+	press(m, "c")
 	focusLabel(t, m, "enter to promote")
-	m.Update(key("enter"))
+	press(m, "enter")
 
 	if m.mode != screenList || m.promote != nil {
 		t.Fatal("a finished promotion should return to the list")
@@ -156,11 +184,11 @@ func TestPromoteFormDryRunWritesNothing(t *testing.T) {
 	s := promoteTree(t)
 	m := sized(newModel(s, store.LaneOutput), 140, 40)
 	focusRow(t, m, "src-4-agentskills")
-	m.Update(key("c"))
+	press(m, "c")
 	focusLabel(t, m, "dry run")
-	m.Update(key("right"))
+	press(m, "right")
 	focusLabel(t, m, "enter to promote")
-	m.Update(key("enter"))
+	press(m, "enter")
 
 	if !strings.Contains(m.status, "dry run") {
 		t.Fatalf("status = %q", m.status)
@@ -180,10 +208,10 @@ func TestPromoteFormRefusesOverUnsavedEdits(t *testing.T) {
 	s := promoteTree(t)
 	m := sized(newModel(s, store.LaneOutput), 140, 40)
 	focusRow(t, m, "src-4-agentskills")
-	m.Update(key("c"))
+	press(m, "c")
 	m.dirty = true
 	focusLabel(t, m, "enter to promote")
-	m.Update(key("enter"))
+	press(m, "enter")
 
 	if !strings.Contains(m.status, "ctrl+s first") {
 		t.Fatalf("status = %q, want the save-first refusal", m.status)
@@ -196,22 +224,22 @@ func TestPromoteFormRefusesOverUnsavedEdits(t *testing.T) {
 func TestPromoteFormEditsSlugAndCyclesTheTarget(t *testing.T) {
 	m := sized(newModel(promoteTree(t), store.LaneOutput), 140, 40)
 	focusRow(t, m, "src-4-agentskills")
-	m.Update(key("c"))
+	press(m, "c")
 
 	focusLabel(t, m, "slug")
-	m.Update(key("enter"))
+	press(m, "enter")
 	if !m.promote.editing {
 		t.Fatal("enter on the slug row should open the input")
 	}
 	m.promote.field.SetValue("lp-2-hand-picked")
-	m.Update(key("enter"))
+	press(m, "enter")
 	if m.promote.slug != "lp-2-hand-picked" {
 		t.Fatalf("slug = %q", m.promote.slug)
 	}
 
 	// Cycling the target re-reads the preview and keeps the hand-typed slug.
 	focusLabel(t, m, "target skill")
-	m.Update(key("right"))
+	press(m, "right")
 	if m.promote.skill() != "source-research" {
 		t.Fatalf("target = %q", m.promote.skill())
 	}
@@ -225,7 +253,7 @@ func TestPromoteFormEditsSlugAndCyclesTheTarget(t *testing.T) {
 
 func TestPromoteNeedsTheOutputLaneAndAFinishedRun(t *testing.T) {
 	m := sized(newModel(promoteTree(t), store.LaneTrigger), 140, 30)
-	m.Update(key("c"))
+	press(m, "c")
 	if m.mode == screenPromote {
 		t.Fatal("the trigger lane has nothing to promote")
 	}
@@ -244,8 +272,8 @@ func TestPromoteFormCancelWritesNothing(t *testing.T) {
 	s := promoteTree(t)
 	m := sized(newModel(s, store.LaneOutput), 140, 40)
 	focusRow(t, m, "src-4-agentskills")
-	m.Update(key("c"))
-	m.Update(key("esc"))
+	press(m, "c")
+	press(m, "esc")
 	if m.mode != screenList || m.promote != nil {
 		t.Fatal("esc should close the form")
 	}
@@ -259,9 +287,9 @@ func TestPromoteFormCancelWritesNothing(t *testing.T) {
 func TestPromoteFormSwitchesToReferences(t *testing.T) {
 	m := sized(newModel(promoteTree(t), store.LaneOutput), 140, 40)
 	focusRow(t, m, "src-4-agentskills")
-	m.Update(key("c"))
+	press(m, "c")
 	focusLabel(t, m, "destination")
-	m.Update(key("right"))
+	press(m, "right")
 
 	p := m.promote
 	if p.dest != destReferences {
@@ -284,14 +312,14 @@ func TestPromoteFormWritesTheReference(t *testing.T) {
 	s := promoteTree(t)
 	m := sized(newModel(s, store.LaneOutput), 140, 40)
 	focusRow(t, m, "src-4-agentskills")
-	m.Update(key("c"))
+	press(m, "c")
 	focusLabel(t, m, "destination")
-	m.Update(key("right"))
+	press(m, "right")
 	if got := strings.Join(m.promote.reference.Files, ","); got != "PS-written.md,sources/home.md" {
 		t.Fatalf("preview took %q", got)
 	}
 	focusLabel(t, m, "enter to promote")
-	m.Update(key("enter"))
+	press(m, "enter")
 
 	if m.mode != screenList || m.promote != nil {
 		t.Fatal("a finished promotion should return to the list")
@@ -328,9 +356,9 @@ func TestPromoteFormRefusesAReferenceAlreadyThere(t *testing.T) {
 	}
 	m := sized(newModel(s, store.LaneOutput), 140, 40)
 	focusRow(t, m, "src-4-agentskills")
-	m.Update(key("c"))
+	press(m, "c")
 	focusLabel(t, m, "destination")
-	m.Update(key("right"))
+	press(m, "right")
 
 	if strings.Join(m.promote.reference.Overwrote, ",") != "PS-written.md" {
 		t.Fatalf("collisions = %v", m.promote.reference.Overwrote)
@@ -339,7 +367,7 @@ func TestPromoteFormRefusesAReferenceAlreadyThere(t *testing.T) {
 		t.Fatalf("the form does not say the name is taken:\n%s", view)
 	}
 	focusLabel(t, m, "enter to promote")
-	m.Update(key("enter"))
+	press(m, "enter")
 	if !strings.Contains(m.status, "already in references/") {
 		t.Errorf("status = %q, want the refusal", m.status)
 	}
