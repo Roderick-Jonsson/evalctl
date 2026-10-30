@@ -10,16 +10,32 @@ Built with Bubble Tea, Bubbles, Lip Gloss and Huh, and Glamour for the reports.
 
 ```bash
 cd evalctl
-make build                    # stamped: commit, build time, dirty flag
+make                          # same as `make install`: the binary on PATH is the default goal
+make install                  # stamped build, put on PATH — then `evalctl` from anywhere in the tree
+make hooks                    # post-commit hook: reinstalls whenever a commit touches the tool
+make build                    # stamped: commit, build time, dirty flag → ./bin/evalctl
 go build -o bin/evalctl .     # plain build: commit comes from the Go build info
 ./bin/evalctl                 # TUI, opens on the skill list
-./bin/evalctl tui --skill slide-builder   # straight into one skill
-./bin/evalctl tui --glyphs ascii          # unicode marks and rules, or the ASCII fallback
-./bin/evalctl version         # which build this is
 ```
 
+Once installed (`$(go env GOPATH)/bin/evalctl`, which `make install` warns you about if it is not
+on `PATH`), no path into this directory is needed:
+
+```bash
+evalctl                       # TUI, opens on the skill list
+evalctl tui --skill slide-builder   # straight into one skill
+evalctl tui --glyphs ascii          # unicode marks and rules, or the ASCII fallback
+evalctl version               # which build this is
+make uninstall                # take it back off PATH
+```
+
+`make hooks` copies `githooks/post-commit` into `.git/hooks/` (refusing to overwrite a hook it did
+not write — merge by hand instead). It fires only when the commit touched Go sources, `go.mod`,
+`go.sum` or the Makefile, so commits to the eval sets stay fast, and a failed reinstall only prints
+a stale-binary warning — never a failed commit. It is per-clone: run it once after cloning.
+
 `--root` picks the tree (default: walk up for the eval tree, or `$EVALCTL_ROOT`). Running it from
-inside the repo just works.
+inside the repo just works, installed or not.
 
 `--glyphs auto|unicode|ascii` (`$EVALCTL_GLYPHS` as the default) picks the marks the frame draws
 itself: the cursor, the seam between the table and its pane, the rules, the sort arrows, a run in
@@ -37,7 +53,8 @@ harness is not comparable with the last one. It is also the first thing in the a
   (version, commit, dirty, `built_at`);
 - both `report.md` files name the build that generated them, and a run's start line prints it.
 
-`make build` stamps the commit, the build time and the dirty flag. A plain `go build` still names
+`make build` stamps the commit, the build time and the dirty flag; `make install` stamps it the same
+way and drops the binary in `$GOBIN`. A plain `go build` still names
 its commit through the Go build info — `evalctl version` says which of the three sources it used
 (ldflags, build info, or nothing but the declared number), so a release binary and a scratch build
 never look the same. `make check` runs gofmt and vet; `make test` the suite.

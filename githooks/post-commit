@@ -1,0 +1,18 @@
+#!/bin/sh
+# evalctl: reinstall on commit — the copy on PATH must never be the stale one.
+#
+# Installed by `make -C evalctl hooks`. It fires only when the commit touched the tool itself
+# (Go sources, go.mod/go.sum, the Makefile), so ordinary commits to the eval sets stay fast.
+# A failure here must never look like a failed commit: it prints and exits 0.
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+[ -n "$root" ] && [ -d "$root/evalctl" ] || exit 0
+
+changed=$(git diff-tree --no-commit-id --name-only -r -m HEAD -- evalctl 2>/dev/null)
+printf '%s\n' "$changed" | grep -qE '(^|/)([^/]+\.go|go\.mod|go\.sum|Makefile)$' || exit 0
+
+echo "evalctl: commit touched the tool — reinstalling the copy on PATH"
+if ! make -C "$root/evalctl" install; then
+	echo "evalctl: reinstall failed; the binary on PATH is now stale" >&2
+fi
+exit 0
