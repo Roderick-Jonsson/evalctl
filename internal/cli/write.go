@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"evalctl/internal/model"
+	"evalctl/internal/runner"
 	"evalctl/internal/store"
 )
 
@@ -91,6 +92,7 @@ func runAdd(args []string) int {
 		if q.ID == 0 {
 			q.ID = c.s.NextTriggerID()
 		}
+		adoptWarning(c.s.Root, store.LaneTrigger, *skill, q.ID)
 		var err error
 		if q.Query, err = value(*query); err != nil {
 			return fail(err)
@@ -117,6 +119,7 @@ func runAdd(args []string) int {
 	if cse.ID == 0 {
 		cse.ID = c.s.NextCaseID(*skill)
 	}
+	adoptWarning(c.s.Root, store.LaneOutput, *skill, cse.ID)
 	var err error
 	if cse.Prompt, err = value(*prompt); err != nil {
 		return fail(err)
@@ -143,7 +146,7 @@ func splitOrLabel(should bool, split string) string {
 func runEdit(args []string) int {
 	fs, c := newFS("edit")
 	lane := fs.String("lane", "", "trigger or output (needed for a bare numeric ref)")
-	id := fs.Int("id", 0, "new id")
+	id := fs.Int("id", 0, "new id (it is cited by earlier iterations, so this change asks first)")
 	skill := fs.String("skill", "", "new skill")
 	query := fs.String("query", "", "trigger: new query (- for stdin)")
 	why := fs.String("why", "", "trigger: new why")
@@ -155,6 +158,7 @@ func runEdit(args []string) int {
 	files := fs.String("files", "", "output: new fixture file list, comma-separated ('' to clear)")
 	assertions := fs.String("assertions", "", "output: new assertion list, one per line or ';'-separated ('' to clear)")
 	dry := fs.Bool("dry-run", false, "show the change without writing")
+	yes := fs.Bool("yes", false, "with --id: move it without asking")
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
 	}
@@ -168,6 +172,9 @@ func runEdit(args []string) int {
 	set := setFlags(fs)
 	if len(set) == 0 || (len(set) == 1 && set["root"]) {
 		return fail(fmt.Errorf("nothing to change: pass at least one field flag"))
+	}
+	if set["id"] && *id <= 0 {
+		return fail(fmt.Errorf("--id must be a positive integer"))
 	}
 
 	if ref.Lane == store.LaneTrigger {
@@ -202,6 +209,11 @@ func runEdit(args []string) int {
 				return fail(err)
 			}
 		}
+		if set["id"] && q.ID != before.ID {
+			if !idChangeGuard(c, store.LaneTrigger, before.Skill, before.ID, q.ID, *dry, *yes) {
+				return 0
+			}
+		}
 		if *dry {
 			printTriggerDiff(before, q)
 			return 0
@@ -219,6 +231,9 @@ func runEdit(args []string) int {
 	sk := c.s.Skill(ref.Skill)
 	cse := sk.Output.Evals[ref.Index]
 	before := cse
+	if set["id"] && set["skill"] && *skill != ref.Skill {
+		return fail(fmt.Errorf("a move re-ids the case (the target skill's next free id): move it first, then edit the id"))
+	}
 	if set["id"] {
 		cse.ID = *id
 	}
@@ -240,6 +255,11 @@ func runEdit(args []string) int {
 	}
 	if set["assertions"] {
 		cse.Assertions = splitAssertions(*assertions)
+	}
+	if set["id"] && cse.ID != before.ID {
+		if !idChangeGuard(c, store.LaneOutput, ref.Skill, before.ID, cse.ID, *dry, *yes) {
+			return 0
+		}
 	}
 	if *dry {
 		printCaseDiff(before, cse)
@@ -469,6 +489,60 @@ func confirm(prompt string) (bool, error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+// idChangeGuard says what still cites the old id and asks before it moves. An id is a citation
+// key, not just a field: trigger result dirs are q<id>-<skill> and every report prints the number,
+// so an edit re-points that history at a different row without touching a single file that cites
+// it. That is the one silent cost this tool must not charge, so the change asks the way renumber
+// does — and --yes is the answer a script gives. A dry run prints the same warning and writes
+// nothing.
+func idChangeGuard(c *common, lane, skill string, oldID, newID int, dry, yes bool) bool {
+	refs := runner.IDReferences(c.s.Root, lane, skill, oldID)
+	fmt.Println(styleWarn.Render(fmt.Sprintf("  id %d -> %d — earlier iterations record this row as #%d", oldID, newID, oldID)))
+	if len(refs) == 0 {
+		fmt.Println(styleDim.Render("  nothing on disk cites it yet (no result dirs, no reports)"))
+	} else {
+		fmt.Println(styleDim.Render(fmt.Sprintf("  %d artifact(s) still cite #%d:", len(refs), oldID)))
+		const limit = 8
+		for i, ref := range refs {
+			if i == limit {
+				fmt.Println(styleDim.Render(fmt.Sprintf("  … and %d more", len(refs)-limit)))
+				break
+			}
+			fmt.Println(styleDim.Render(fmt.Sprintf("  %-50s %s", ref.Path, ref.What)))
+		}
+	}
+	if dry || yes {
+		return true
+	}
+	ok, err := confirm(fmt.Sprintf("change #%d -> #%d anyway?", oldID, newID))
+	if err != nil || !ok {
+		fmt.Println("aborted")
+		return false
+	}
+	return true
+}
+
+// adoptWarning says that a row is being created with an id that history still cites. A gap in the
+// file is not a gap on disk: the deleted row's result dirs and reports are there, so the new row
+// would inherit results it never produced. It warns rather than asks — a create destroys nothing,
+// and a warning must never stop a script.
+func adoptWarning(root, lane, skill string, id int) {
+	refs := runner.IDReferences(root, lane, skill, id)
+	if len(refs) == 0 {
+		return
+	}
+	fmt.Println(styleWarn.Render(fmt.Sprintf("  #%d is free in the file but not on disk — %d artifact(s) still cite it:", id, len(refs))))
+	const limit = 5
+	for i, ref := range refs {
+		if i == limit {
+			fmt.Println(styleDim.Render(fmt.Sprintf("  … and %d more", len(refs)-limit)))
+			break
+		}
+		fmt.Println(styleDim.Render(fmt.Sprintf("  %-50s %s", ref.Path, ref.What)))
+	}
+	fmt.Println(styleDim.Render("  this row would adopt that history — pick the next free id to avoid it"))
 }
 
 // ---------------------------------------------------------------- mv

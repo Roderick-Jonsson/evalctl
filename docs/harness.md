@@ -44,7 +44,10 @@ One `evals/evals.json` per stage skill, in the agentskills.io format: every case
 `id`, `slug`, `prompt`, `expected_output`, `files`, and — once a run has shown what good looks
 like — `assertions`. `slug` is the case's identity and names
 its fixture dir `<skill>/evals/files/<slug>/`; it is declared, never derived, so `files` can
-be relative to it and the two can never disagree. `files` may be empty — a case that stages
+be relative to it and the two can never disagree. `id` is the other half: a per-skill counter
+(`max+1`) that the system issues, which reports and trigger result dirs then cite, so an id edit
+asks first and names the artifacts it would strand — and a create handed a number that history
+still cites says so without refusing. `files` may be empty — a case that stages
 nothing (a pure prompt, e.g. web research the skill must fetch itself) keeps `files: []` and
 has no dir on disk. The key itself always stays present so the standard's pre-flight check
 passes.

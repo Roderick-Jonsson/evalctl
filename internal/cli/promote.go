@@ -118,6 +118,16 @@ func runPromote(args []string) int {
 	}
 	defer unlock()
 
+	// The id is either handed in or the target's next free one; either way a number history still
+	// cites would attach that history to the new case.
+	if sk := c.s.Skill(*skill); sk != nil {
+		id := *id
+		if id == 0 {
+			id = c.s.NextCaseID(*skill)
+		}
+		adoptWarning(c.s.Root, store.LaneOutput, *skill, id)
+	}
+
 	res, err := c.s.PromoteOutput(cse)
 	if err != nil {
 		return fail(err)
@@ -170,6 +180,18 @@ func promotePrompt(c *common, from, skill, split, label, why string, id int, dry
 		return fail(err)
 	}
 	defer unlock()
+
+	// The row's skill defaults to the source case's skill; either way a cited id would take on
+	// history that belongs to a trigger row somebody deleted.
+	targetSkill := skill
+	if targetSkill == "" {
+		targetSkill = ref.Skill
+	}
+	qid := id
+	if qid == 0 {
+		qid = c.s.NextTriggerID()
+	}
+	adoptWarning(c.s.Root, store.LaneTrigger, targetSkill, qid)
 
 	res, err := c.s.PromotePrompt(req)
 	if err != nil {

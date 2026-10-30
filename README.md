@@ -245,6 +245,11 @@ unless you toggle it in the confirmation screen, and every write first copies th
 before it goes (`esc again discards your edits`); an untouched one leaves at once. The status line
 reports what just happened and is cleared by the next move, so it is never a stale claim.
 
+`ctrl+s` on a row whose **id** moved asks first, in the same `y` dialog a delete uses, and prints
+the result dirs and reports that still cite the old number; anything but `y` hands the form back
+with every typed field intact. Creating a row that takes an id history still cites asks the same
+question — a gap in the file is not a gap on disk.
+
 ### Column functions
 
 The table is the query surface, so its columns are operable. `1`–`6` focus one (the header
@@ -403,6 +408,7 @@ evalctl add --lane output --skill slide-builder --slug sb-4-x \
 the speaker script is prose, not bullets"
 evalctl edit t12 --split validation --label yes
 evalctl edit o:slide-builder:3 --slug sb-3-dense-item-renamed   # moves the fixture dir
+evalctl edit o:slide-builder:3 --id 9 --yes                     # lists what cites #3, then moves it
 evalctl edit o:slide-builder:3 --assertions "one page per top level item
 each page cites its Data Points"                                # replaces the assertion list
 evalctl mv o:slide-builder:3 --to-skill av-production           # moves case + fixture
@@ -635,7 +641,11 @@ for, two identical query strings.
 ## Deliberate choices
 
 - **Ids never shift on delete.** Results are keyed `q<id>-<skill>` and iteration reports quote
-  ids, so a gap is honest. `renumber` exists, asks first, and says what it breaks.
+  ids, so a gap is honest. `renumber` exists, asks first, and says what it breaks. `edit --id`
+  is the same bargain at one row: it lists the result dirs and reports that still cite the old
+  number and asks before the number moves (`--yes` when you mean it, `--dry-run` to only look).
+  `add` and `promote` warn when the id they are handed is one history still cites — a gap in the
+  file is not a gap on disk — but they never refuse: a create destroys nothing.
 - **Assertions are a first-class field, not a blob.** `assertions` is a list of strings on the
   case (the agentskills.io grading unit), written only when the case has any: the guide adds them
   after a first graded iteration, and `"assertions": []` in every case would claim the opposite.

@@ -17,10 +17,25 @@ import (
 
 // ---------------------------------------------------------------- delete confirm
 
+// confirmState is the one dialog the app stops on: it stands in front of what pressing esc cannot
+// undo. Two things ask for it — deleting rows, and moving a row's id, which leaves every result dir
+// and report that cites the old number pointing at a different row.
 type confirmState struct {
+	kind        string // "" = delete, "id" = consent to an id that is cited
 	rows        []store.Entry
 	withFixture bool
 	hasOutput   bool
+
+	ask *idAsk       // the id question, when kind == "id"
+	ed  *editorState // the form waiting behind it, applied if the answer is y
+}
+
+// idAsk is a number about to move and the artifacts that still cite it.
+type idAsk struct {
+	oldID, newID int
+	cite         int // the id the artifacts cite: the old one when editing, the new one when creating
+	isNew        bool
+	refs         []runner.IDRef
 }
 
 func (m *Model) openConfirm(rows []store.Entry) {
@@ -34,6 +49,13 @@ func (m *Model) openConfirm(rows []store.Entry) {
 	m.mode = screenConfirm
 }
 
+// openIDConfirm asks before an id moves. Same screen, same key: y means yes, everything else means
+// no and hands the form back with the typing intact.
+func (m *Model) openIDConfirm(e *editorState, ask *idAsk) {
+	m.confirm = &confirmState{kind: "id", ask: ask, ed: e}
+	m.mode = screenConfirm
+}
+
 // updateConfirm is the one irreversible action in the tool, so it follows the convention every Unix
 // hand already has: y confirms, everything else — including a bare Enter — cancels. The Enter key
 // is what a tired operator presses without reading, and it must never be the destructive one.
@@ -42,6 +64,9 @@ func (m *Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if c == nil {
 		m.mode = screenList
 		return m, nil
+	}
+	if c.kind == "id" {
+		return m.updateIDConfirm(msg)
 	}
 	switch msg.String() {
 	case "y":
@@ -93,6 +118,9 @@ func (m *Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // view is the delete dialog. It prints WHAT is going, by id and slug, because "delete 1 row?" over a
 // cursor you cannot see is not enough to say yes to — and it spells the default out.
 func (c *confirmState) view(width, height int) string {
+	if c.kind == "id" {
+		return c.idView(width, height)
+	}
 	var b strings.Builder
 	title := fmt.Sprintf("delete %d rows", len(c.rows))
 	if len(c.rows) == 1 {
@@ -136,6 +164,71 @@ func clipLine(s string, n int) string {
 		return s
 	}
 	return string([]rune(s)[:n-1]) + "…"
+}
+
+// ---------------------------------------------------------------- id confirm
+
+// updateIDConfirm answers the id question. y applies the draft the editor was holding; anything that
+// means no hands the form back with every typed field intact, so the number can be fixed without
+// retyping the prompt — and esc still drops the whole edit if that is what was meant.
+func (m *Model) updateIDConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	c := m.confirm
+	ed := c.ed
+	switch msg.String() {
+	case "y":
+		m.confirm = nil
+		m.mode = screenEditor
+		ed.applyNow(m)
+	case "esc", "enter", "n", "q":
+		m.confirm = nil
+		ed.errMsg = ""
+		ed.build() // a fresh form: the one that completed would apply again on the next key
+		m.mode = screenEditor
+		m.setStatus("id left where it was — fix the number, or esc to drop the edit", false)
+	}
+	// Any other key is ignored, for the reason the delete dialog gives: a mistyped key must not
+	// answer a question about a number other things already point at.
+	return m, nil
+}
+
+// idView is the id dialog: what is moving, what still cites it, and what y would do.
+func (c *confirmState) idView(width, height int) string {
+	ask := c.ask
+	title := fmt.Sprintf("move %s #%d -> #%d", c.ed.lane, ask.oldID, ask.newID)
+	if ask.isNew {
+		title = fmt.Sprintf("new %s row takes #%d", c.ed.lane, ask.newID)
+	}
+	var b strings.Builder
+	b.WriteString(statusBad.Render(title))
+	b.WriteString("\n\n")
+	if ask.isNew {
+		b.WriteString("  " + dimStyle.Render(fmt.Sprintf("#%d is free in the file, but not on disk:", ask.newID)) + "\n")
+		b.WriteString("  " + dimStyle.Render("a row taking it would own results it never produced") + "\n\n")
+	} else {
+		b.WriteString("  " + dimStyle.Render(fmt.Sprintf("earlier iterations record this row as #%d — moving it re-points:", ask.oldID)) + "\n\n")
+	}
+	inner := min(width-2, 110)
+	limit := min(len(ask.refs), max(3, height-12))
+	for i := 0; i < limit; i++ {
+		ref := ask.refs[i]
+		head := fmt.Sprintf("  %-46s ", ref.Path)
+		if len(head) > inner-2 {
+			head = "  " + fitPath(ref.Path, max(10, inner-16)) + " "
+		}
+		b.WriteString(head + dimStyle.Render(ref.What))
+		b.WriteString("\n")
+	}
+	if len(ask.refs) > limit {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  … %d more", len(ask.refs)-limit)))
+		b.WriteString("\n")
+	}
+	if len(ask.refs) == 0 {
+		b.WriteString(dimStyle.Render("  nothing on disk cites it yet") + "\n")
+	}
+	b.WriteString("\n")
+	b.WriteString("  " + statusBad.Render("y") + " move it    " +
+		dimStyle.Render("enter / esc / n keep the id    (ctrl+s writes it; nothing is on disk yet)") + "\n")
+	return b.String()
 }
 
 // ---------------------------------------------------------------- viewer

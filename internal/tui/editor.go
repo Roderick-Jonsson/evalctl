@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"evalctl/internal/model"
+	"evalctl/internal/runner"
 	"evalctl/internal/store"
 )
 
@@ -262,9 +263,49 @@ func (e *editorState) view(width int) string {
 	return head + "\n\n" + body + "\n" + foot
 }
 
-// apply writes the draft into the in-memory store. Errors keep the form open with the values
-// intact — a rejected slug must not cost the user the prompt they just typed.
+// apply writes the draft into the in-memory store, but an id that is moving asks first: the number
+// is what earlier result dirs and reports cite. Errors keep the form open with the values intact —
+// a rejected slug must not cost the user the prompt they just typed.
 func (e *editorState) apply(m *Model) {
+	// A case that moves skill takes the target skill's next free id, so a typed id would be
+	// dropped on the floor — say that here rather than let the form pretend it worked.
+	if id, err := strconv.Atoi(strings.TrimSpace(e.d.id)); err == nil && e.lane == store.LaneOutput &&
+		!e.isNew && e.d.skill != e.d.origSkill && id != e.d.origID {
+		e.errMsg = "a move re-ids the case — save the move, then edit the id"
+		e.build()
+		return
+	}
+	if ask := e.idAsk(); ask != nil {
+		m.openIDConfirm(e, ask)
+		return
+	}
+	e.applyNow(m)
+}
+
+// idAsk is the question an id edit raises, or nil when nothing about the number is changing. An edit
+// asks about the id it leaves behind; a new row asks about the id it takes, because a gap in the
+// file is not a gap on disk — the deleted row's results are still there, waiting for an owner.
+func (e *editorState) idAsk() *idAsk {
+	id, err := strconv.Atoi(strings.TrimSpace(e.d.id))
+	if err != nil || id <= 0 || e.d.skill == "" {
+		return nil // applyNow reports these, in the form's own words
+	}
+	if !e.isNew && id == e.d.origID {
+		return nil
+	}
+	skill, cite := e.d.origSkill, e.d.origID
+	if e.isNew {
+		skill, cite = e.d.skill, id
+	}
+	refs := runner.IDReferences(e.store.Root, e.lane, skill, cite)
+	if e.isNew && len(refs) == 0 {
+		return nil
+	}
+	return &idAsk{oldID: e.d.origID, newID: id, cite: cite, isNew: e.isNew, refs: refs}
+}
+
+// applyNow is apply without the id question: the answer is already in hand.
+func (e *editorState) applyNow(m *Model) {
 	id, err := strconv.Atoi(strings.TrimSpace(e.d.id))
 	if err != nil || id <= 0 {
 		e.errMsg = "id must be a positive integer"
