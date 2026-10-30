@@ -221,11 +221,12 @@ func runRuns(args []string) int {
 	fs, c := newFS("runs")
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	lane := fs.String("lane", "", "only one lane: output or trigger")
+	skill := fs.String("skill", "", "only one skill's iterations: its output runs and the trigger runs that measured it")
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
 	}
 	r := runner.New(c.s)
-	infos := r.ListRuns()
+	infos := r.ListRunsFor(*skill)
 	if *lane != "" && *lane != store.LaneTrigger && *lane != store.LaneOutput {
 		return fail(fmt.Errorf("--lane must be output or trigger"))
 	}
@@ -249,16 +250,31 @@ func runRuns(args []string) int {
 		if info.Runs > 0 {
 			runsCell = fmt.Sprintf("%d", info.Runs)
 		}
-		rows = append(rows, []string{info.Name, info.Skill, info.Lane, fmt.Sprintf("%d", info.Cases), runsCell,
-			pass, runner.ShortTime(info.Started)})
+		// Scoped to one skill, the SKILL column is a constant — and a trigger row has no skill of
+		// its own to print — so it drops, the way it does in the lanes.
+		cells := []string{info.Name}
+		if *skill == "" {
+			cells = append(cells, info.Skill)
+		}
+		cells = append(cells, info.Lane, fmt.Sprintf("%d", info.Cases), runsCell, pass,
+			runner.ShortTime(info.Started))
+		rows = append(rows, cells)
 	}
 	if len(rows) == 0 {
-		fmt.Println(styleDim.Render("no iterations under any *-workspace — `evalctl run --dry-run` plans one"))
+		if *skill != "" {
+			fmt.Println(styleDim.Render("no iterations for " + *skill + " — `evalctl run --dry-run` plans one"))
+		} else {
+			fmt.Println(styleDim.Render("no iterations under any *-workspace — `evalctl run --dry-run` plans one"))
+		}
 		return 0
 	}
 	// No WORKSPACE-"—" column and no REPORT-"yes" column: a trigger run has no workspace and every
 	// finished run has a report. Both columns repeated one value on every row.
-	table(os.Stdout, []string{"RUN", "SKILL", "LANE", "CASES", "RUNS", "PASS", "STARTED"}, rows, nil)
+	headers := []string{"RUN", "LANE", "CASES", "RUNS", "PASS", "STARTED"}
+	if *skill == "" {
+		headers = []string{"RUN", "SKILL", "LANE", "CASES", "RUNS", "PASS", "STARTED"}
+	}
+	table(os.Stdout, headers, rows, nil)
 	fmt.Println()
 	fmt.Println(styleDim.Render("open one with: evalctl report <skill>@<run>"))
 	return 0

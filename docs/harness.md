@@ -207,6 +207,7 @@ evalctl run --skill source-research         # one stage, next free iteration-N
 evalctl run --skill learning-path --case 1,3
 evalctl run --skill slide-builder --iteration 2 --resume    # add cases to an iteration
 evalctl runs                                # iterations on disk, with pass rates
+evalctl runs --skill slide-builder          # that skill's output runs + the trigger runs that measured it
 ```
 
 Chaining a stage onto a real upstream output — one command, then the run above:

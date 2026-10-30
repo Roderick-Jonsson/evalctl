@@ -220,7 +220,9 @@ func (m *Model) updateSkills(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = screenViewer
 		return m, nil
 	case "L":
-		m.openRuns()
+		// The skill list is the all-skills scope: the skill it remembers stays marked, but L here
+		// means every skill's iterations, not the one you last had open.
+		m.openRuns("")
 		return m, nil
 	case "P":
 		m.openProfiles()

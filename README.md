@@ -98,7 +98,7 @@ skill and `esc` is how you change it) |
 | `R` | **run** what is selected (or the whole lane) — form, then `enter` |
 | `c` | **chain / reference**: promote a run's output into the next stage's fixture, or into the skill's own `references/` — form, then `enter` (output lane) |
 | `t` | **to trigger**: the focused case's prompt becomes a trigger query — written at once (output lane) |
-| `L` | **results**: every iteration, one workspace per skill, `enter` opens its `report.md` rendered (markdown, re-wrapped to the window), `a` its activity logs |
+| `L` | **results** of this scope: inside a skill its own iterations, on the skill list every skill's — `enter` opens the `report.md` rendered (markdown, re-wrapped to the window), `a` its activity logs |
 | `P` | **profiles**: check the four sandboxes, `u` runs `ensure` on what fails |
 | `?` | help · `q` quit (asks once if there are unsaved changes or a run is going) |
 
@@ -206,6 +206,34 @@ fails an arm.
 `activity` in the run form (or `--log full|tools|off`) decides how much gets through: `full` adds
 the prose, `tools` keeps only the calls, `off` writes no log and emits nothing.
 
+### Results, per skill
+
+`L` shows the iterations of the scope you are in — the same rule as the case lanes, so there is
+never one list of everybody's runs to sort out by eye:
+
+```
+results · slide-builder · 3 iterations
+  RUN              LANE       CASES  RUNS   PASS  STARTED
+▸ iteration-5      output         5     2    100%  2026-10-24 11:02
+  trigger-7        trigger        1     3    100%  2026-10-24 09:41
+  trigger-4        trigger       10     3     90%  2026-10-22 16:20
+```
+
+From the `· all skills` row it is the unscoped two-lane list, with a `SKILL` column back in.
+
+The output lane needs no translation: an iteration lives in one skill's workspace. The trigger lane
+does — `trigger-workspace/` is bundle-level, so one iteration covers several skills at once. Each
+one is re-scored for the skill you are in, from the `skills` block `trigger.json` already carries:
+
+```
+all skills:  trigger-4 · 29/31 passed  (94%)
+slide-builder: trigger-4 · 10/10 passed (100%)
+```
+
+So `CASES` in a skill's view is that skill's queries in the iteration, and `PASS` is its own rate —
+an iteration that never ran the skill's queries is not in the list at all. `evalctl runs --skill`
+is the same filter on the command line, `--json` included.
+
 ## CLI
 
 Managing the sets:
@@ -271,6 +299,7 @@ Browsing and provisioning:
 
 ```bash
 evalctl runs                                # every iteration, with pass rates and report state
+evalctl runs --skill slide-builder          # that skill's output runs plus the trigger runs that measured it
 evalctl runs --lane trigger --json
 evalctl report 3                            # report.md of iteration-3, rendered as markdown
 evalctl report trigger-2                    # or of the trigger lane

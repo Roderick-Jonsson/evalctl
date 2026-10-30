@@ -810,10 +810,14 @@ func (m *Model) openReportFor(ref string) {
 type runsState struct {
 	infos  []runner.RunInfo
 	cursor int
+	skill  string // "" is every skill; otherwise the scope L was opened from
 }
 
-func (m *Model) openRuns() {
-	m.runsList = &runsState{infos: runner.New(m.store).ListRuns()}
+// openRuns shows the published results of one scope. The scope is passed in rather than read off
+// m.skill, because the skill list keeps the last opened skill marked while it is showing every
+// skill — the front door is the all-skills scope, and L there must mean all of them.
+func (m *Model) openRuns(skill string) {
+	m.runsList = &runsState{infos: runner.New(m.store).ListRunsFor(skill), skill: skill}
 	m.mode = screenRuns
 }
 
@@ -828,7 +832,7 @@ func (m *Model) updateRuns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = m.back()
 		return m, nil
 	case "r":
-		list.infos = runner.New(m.store).ListRuns()
+		list.infos = runner.New(m.store).ListRunsFor(list.skill)
 		m.setStatus("results reloaded", false)
 		return m, nil
 	case "up", "k":
@@ -904,15 +908,32 @@ func (m *Model) runsView() string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(fmt.Sprintf("results · %s", plural(len(list.infos), "iteration"))) + "\n")
+	title := "results"
+	if list.skill != "" {
+		title += " · " + list.skill
+	}
+	b.WriteString(titleStyle.Render(fmt.Sprintf("%s · %s", title, plural(len(list.infos), "iteration"))) + "\n")
 	if len(list.infos) == 0 {
-		b.WriteString(dimStyle.Render("  nothing yet — R starts a run") + "\n")
+		if list.skill != "" {
+			b.WriteString(dimStyle.Render("  nothing yet for "+list.skill+" — R starts a run") + "\n")
+		} else {
+			b.WriteString(dimStyle.Render("  nothing yet — R starts a run") + "\n")
+		}
 	} else {
 		// No WORKSPACE dash column and no "REPORT yes" column: a trigger run has no workspace and
 		// every finished iteration has a report, so both columns were the same character on every
-		// row. They are stated once, in the footer, instead of ten times in the table.
-		b.WriteString("  " + dimStyle.Render(fmt.Sprintf("%-16s %-12s %-8s %6s %5s %6s  %s",
-			"RUN", "SKILL", "LANE", "CASES", "RUNS", "PASS", "STARTED")) + "\n")
+		// row. They are stated once, in the footer, instead of ten times in the table. The SKILL
+		// column drops in a skill's own view for the same reason the lanes drop it — the title
+		// already says which skill this is.
+		head := "%-16s %-12s %-8s %6s %5s %6s  %s"
+		headArgs := []any{"RUN", "SKILL", "LANE", "CASES", "RUNS", "PASS", "STARTED"}
+		row := "%s%-16s %-12s %-8s %6d %5d %6s  %s"
+		if list.skill != "" {
+			head = "%-16s %-8s %6s %5s %6s  %s"
+			headArgs = []any{"RUN", "LANE", "CASES", "RUNS", "PASS", "STARTED"}
+			row = "%s%-16s %-8s %6d %5d %6s  %s"
+		}
+		b.WriteString("  " + dimStyle.Render(fmt.Sprintf(head, headArgs...)) + "\n")
 		for i, info := range list.infos {
 			mark := "  "
 			if i == list.cursor {
@@ -922,15 +943,25 @@ func (m *Model) runsView() string {
 			if info.PassRate != nil {
 				pass = fmt.Sprintf("%.0f%%", *info.PassRate*100)
 			}
-			line := fmt.Sprintf("%s%-16s %-12s %-8s %6d %5d %6s  %s", mark, info.Name,
-				info.Skill, info.Lane, info.Cases, info.Runs, pass, shortTime(info.Started))
+			var line string
+			if list.skill != "" {
+				line = fmt.Sprintf(row, mark, info.Name, info.Lane, info.Cases, info.Runs, pass,
+					shortTime(info.Started))
+			} else {
+				line = fmt.Sprintf(row, mark, info.Name, info.Skill, info.Lane, info.Cases, info.Runs,
+					pass, shortTime(info.Started))
+			}
 			if i == list.cursor {
 				line = selected(line)
 			}
 			b.WriteString(line + "\n")
 		}
 	}
-	b.WriteString("\n" + dimStyle.Render("  esc back · enter report · a activity · r reload"))
+	foot := "  esc back · enter report · a activity · r reload"
+	if list.skill != "" {
+		foot = "  esc back to " + list.skill + " · enter report · a activity · r reload"
+	}
+	b.WriteString("\n" + dimStyle.Render(foot))
 	return b.String()
 }
 

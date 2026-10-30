@@ -262,6 +262,11 @@ type RunInfo struct {
 	PassRate  *float64  `json:"pass_rate"`
 	HasReport bool      `json:"has_report"`
 	Updated   time.Time `json:"-"`
+
+	// tallies is the trigger lane's per-skill breakdown, kept out of the JSON because it is only
+	// consulted to re-score one iteration for one skill (see ListRunsFor). An output iteration
+	// lives in one skill's workspace, so it never needs it.
+	tallies map[string]Tallies
 }
 
 // Ref is how a run is named in prose and on a command line: "source-research@iteration-2", so a
@@ -311,7 +316,21 @@ type triggerScoreFile struct {
 			Passed int      `json:"passed"`
 			Rate   *float64 `json:"rate"`
 		} `json:"overall"`
+		// Skills is the same tally, split per skill: a trigger iteration is global (one
+		// trigger-workspace/) but every query in it belongs to one skill, so this is what lets a
+		// skill-scoped results view quote that skill instead of the iteration's overall rate.
+		Skills map[string]struct {
+			All Tallies `json:"all"`
+		} `json:"skills"`
 	} `json:"score"`
+}
+
+// Tallies mirrors the "all" tally of one skill's block in trigger.json.
+type Tallies struct {
+	Rows   int      `json:"rows"`
+	Judged int      `json:"judged"`
+	Passed int      `json:"passed"`
+	Rate   *float64 `json:"rate"`
 }
 
 // ListRuns reads every workspace back: each skill's own iterations from <skill>-workspace/, then
@@ -323,6 +342,38 @@ func (r *Runner) ListRuns() []RunInfo {
 		out = append(out, r.listRunsIn(r.WorkspaceDir(skill), "iteration", LaneOutput, skill)...)
 	}
 	return append(out, r.listRunsIn(r.TriggerWorkspace(), "trigger", LaneTrigger, "")...)
+}
+
+// ListRunsFor is ListRuns scoped to one skill, the way the case lanes are scoped: the skill's own
+// output iterations, then the trigger iterations that actually measured it. An empty skill is
+// every skill — the "· all skills" scope, not an error.
+//
+// The trigger lane is global (one trigger-workspace/), so an iteration is not owned by a skill;
+// each one is re-scored from its own per-skill tally instead. That is the difference between
+// "trigger-4 passed 29 of 31 queries" and "trigger-4 passed 10 of slide-builder's 10", and the
+// second is the only one that means anything while you are working on slide-builder.
+func (r *Runner) ListRunsFor(skill string) []RunInfo {
+	all := r.ListRuns()
+	if skill == "" {
+		return all
+	}
+	out := make([]RunInfo, 0, len(all))
+	for _, info := range all {
+		if info.Lane != LaneTrigger {
+			if info.Skill == skill {
+				out = append(out, info)
+			}
+			continue
+		}
+		tally, ok := info.tallies[skill]
+		if !ok || tally.Rows == 0 {
+			continue // this iteration never ran that skill's queries
+		}
+		info.Cases = tally.Rows
+		info.Judged, info.Passed, info.PassRate = tally.Judged, tally.Passed, tally.Rate
+		out = append(out, info)
+	}
+	return out
 }
 
 // listRunsIn reads one workspace's finished (or in-progress) run dirs.
@@ -369,6 +420,12 @@ func (r *Runner) listRunsIn(workspace, prefix, lane, skill string) []RunInfo {
 					}
 					if scored.Score.Runs > 0 {
 						info.Runs = scored.Score.Runs
+					}
+					if len(scored.Score.Skills) > 0 {
+						info.tallies = make(map[string]Tallies, len(scored.Score.Skills))
+						for skill, block := range scored.Score.Skills {
+							info.tallies[skill] = block.All
+						}
 					}
 				}
 			}

@@ -485,7 +485,8 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.openLauncher()
 		return m, nil
 	case "L":
-		m.openRuns()
+		// Results follow the scope you are looking at: inside a skill, that skill's iterations.
+		m.openRuns(m.skill)
 		return m, nil
 	case "P":
 		m.openProfiles()
@@ -1366,7 +1367,7 @@ func (m *Model) helpLines() []string {
 		row("R", "run what is selected (or the whole lane of this skill)"),
 		row("c", "chain: a run's output becomes the next stage's fixture"),
 		row("t", "a case's prompt becomes a trigger query"),
-		row("L", "every iteration per skill workspace; enter opens its report"),
+		row("L", "results of this scope — inside a skill, that skill's iterations"),
 		row("v / a", "agent activity: v in the run table, a in the results browser"),
 		row("x", "cancel the run in the run table"),
 		"",

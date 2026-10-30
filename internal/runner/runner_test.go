@@ -433,6 +433,64 @@ func TestNextIterationAndListRuns(t *testing.T) {
 	}
 }
 
+// ListRunsFor is the skill-scoped results view: its own output iterations, plus the trigger
+// iterations that measured it — scored from that skill's tally, not the iteration's overall one.
+func TestListRunsForScopesEveryLaneToOneSkill(t *testing.T) {
+	s, root := newTree(t)
+	r := New(s)
+	writeFile(t, filepath.Join(root, "slide-builder-workspace", "iteration-2", "meta.json"),
+		`{"iteration":2,"cases":["sb-1-slides","sb-2-no-outline"]}`)
+	writeFile(t, filepath.Join(root, "slide-builder-workspace", "iteration-2", "report.md"), "# x")
+	writeFile(t, filepath.Join(root, "source-research-workspace", "iteration-1", "meta.json"),
+		`{"iteration":1,"cases":["src-1-new-topic"]}`)
+	// One global trigger iteration: 4 slide-builder queries all passed, 10 source-research queries
+	// of which 9 passed, and a third skill that it never actually ran (rows 0).
+	writeFile(t, filepath.Join(root, "trigger-workspace", "trigger-1", "trigger.json"), `{"score":{
+  "threshold":0.5,"runs":3,
+  "overall":{"judged":14,"passed":13,"rate":0.93},
+  "skills":{
+    "slide-builder":{"all":{"rows":4,"judged":4,"passed":4,"rate":1}},
+    "source-research":{"all":{"rows":10,"judged":10,"passed":9,"rate":0.9}},
+    "learning-path":{"all":{"rows":0,"judged":0,"passed":0,"rate":null}}
+  }}}`)
+
+	if all := r.ListRunsFor(""); len(all) != 3 {
+		t.Fatalf("an empty scope is every run: %+v", all)
+	}
+
+	slide := r.ListRunsFor("slide-builder")
+	if len(slide) != 2 {
+		t.Fatalf("slide-builder should see its iteration and the trigger one: %+v", slide)
+	}
+	if slide[0].Ref() != "slide-builder@iteration-2" {
+		t.Fatalf("output run ref = %q", slide[0].Ref())
+	}
+	trigger := slide[1]
+	if trigger.Lane != LaneTrigger {
+		t.Fatalf("second run = %+v", trigger)
+	}
+	// The skill's own number, not the iteration's 93%.
+	if trigger.Cases != 4 || trigger.Judged != 4 || trigger.Passed != 4 ||
+		trigger.PassRate == nil || *trigger.PassRate != 1 {
+		t.Fatalf("trigger run was not re-scored for slide-builder: %+v", trigger)
+	}
+
+	if src := r.ListRunsFor("source-research"); len(src) != 2 || src[1].Cases != 10 {
+		t.Fatalf("source-research scope = %+v", src)
+	}
+	// A skill an iteration never measured does not inherit its row: rows 0 is not a 0% pass.
+	if lp := r.ListRunsFor("learning-path"); len(lp) != 0 {
+		t.Fatalf("learning-path was never measured, got %+v", lp)
+	}
+	// The unscoped list still reports the iteration as a whole.
+	for _, info := range r.ListRuns() {
+		if info.Lane == LaneTrigger && (info.Judged != 14 || info.Passed != 13 ||
+			info.PassRate == nil || *info.PassRate != 0.93) {
+			t.Fatalf("the unscoped view must keep the global rate: %+v", info)
+		}
+	}
+}
+
 func TestArmsAreKnown(t *testing.T) {
 	s, _ := newTree(t)
 	r := New(s)

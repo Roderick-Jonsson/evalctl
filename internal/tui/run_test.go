@@ -27,7 +27,17 @@ func writeFile(t *testing.T, path, body string) {
 
 func testModel(t *testing.T) *Model {
 	t.Helper()
+	return modelWith(t, nil)
+}
+
+// modelWith builds testModel's tree plus whatever extra writes before the store is opened — a
+// second skill, a published workspace — so a test can exercise a view that spans more than one.
+func modelWith(t *testing.T, extra func(root string)) *Model {
+	t.Helper()
 	root := t.TempDir()
+	if extra != nil {
+		extra(root)
+	}
 	writeFile(t, filepath.Join(root, "trigger", "trigger-evals.json"), `{
   "queries": [
     {"id": 1, "skill": "slide-builder", "should_trigger": true, "split": "train", "query": "build slides"},
@@ -138,7 +148,7 @@ func TestResultsBrowserReadsReportIntoTheViewer(t *testing.T) {
 		`{"score":{"threshold":0.5,"runs":3,"overall":{"judged":1,"passed":1,"rate":1}}}`)
 	writeFile(t, filepath.Join(root, "trigger-workspace", "trigger-2", "report.md"), "# Trigger eval 2\n\n**Pass rate 100%**\n")
 
-	m.openRuns()
+	m.openRuns("")
 	if len(m.runsList.infos) != 1 || m.runsList.infos[0].Name != "trigger-2" {
 		t.Fatalf("runs = %+v", m.runsList)
 	}
@@ -151,6 +161,63 @@ func TestResultsBrowserReadsReportIntoTheViewer(t *testing.T) {
 	}
 	if !contains(joinLines(m.viewer.lines), "Pass rate 100%") {
 		t.Fatalf("viewer lines = %v", m.viewer.lines)
+	}
+}
+
+func TestResultsBrowserFollowsTheSkillScope(t *testing.T) {
+	m := modelWith(t, func(root string) {
+		writeFile(t, filepath.Join(root, "source-research", "evals", "evals.json"), `{
+  "skill_name": "source-research",
+  "evals": [{"id": 1, "slug": "src-1-new-topic", "prompt": "research this", "expected_output": "PS.md", "files": []}]
+}`)
+	})
+	root := m.store.Root
+	writeFile(t, filepath.Join(root, "slide-builder-workspace", "iteration-2", "meta.json"),
+		`{"iteration":2,"cases":["sb-1-slides","sb-2-no-outline"]}`)
+	writeFile(t, filepath.Join(root, "slide-builder-workspace", "iteration-2", "report.md"), "# sb\n")
+	writeFile(t, filepath.Join(root, "source-research-workspace", "iteration-1", "meta.json"),
+		`{"iteration":1,"cases":["src-1-new-topic"]}`)
+	writeFile(t, filepath.Join(root, "trigger-workspace", "trigger-2", "trigger.json"),
+		`{"score":{"threshold":0.5,"runs":3,"overall":{"judged":6,"passed":5,"rate":0.83},`+
+			`"skills":{"slide-builder":{"all":{"rows":4,"judged":4,"passed":3,"rate":0.75}},`+
+			`"source-research":{"all":{"rows":2,"judged":2,"passed":2,"rate":1}}}}}`)
+
+	// The front door is the all-skills scope, whatever skill it happens to have marked.
+	m.skill = "slide-builder"
+	m.openSkills()
+	m.updateSkills(key("L"))
+	if m.mode != screenRuns || m.runsList.skill != "" || len(m.runsList.infos) != 3 {
+		t.Fatalf("L on the skill list must list every run: mode=%v state=%+v", m.mode, m.runsList)
+	}
+	if view := m.runsView(); !contains(view, "SKILL") {
+		t.Fatalf("the unscoped table keeps its SKILL column:\n%s", view)
+	}
+
+	// Inside a skill, L shows that skill's iterations and nobody else's.
+	m.updateRuns(key("esc"))
+	m.mode = screenList
+	m.updateList(key("L"))
+	if m.runsList.skill != "slide-builder" || len(m.runsList.infos) != 2 {
+		t.Fatalf("scoped runs = %+v", m.runsList)
+	}
+	for _, info := range m.runsList.infos {
+		if info.Lane == store.LaneOutput && info.Skill != "slide-builder" {
+			t.Fatalf("a sibling skill's iteration leaked in: %+v", info)
+		}
+	}
+	// The trigger row carries slide-builder's own rate, not the iteration's 83%.
+	trigger := m.runsList.infos[1]
+	if trigger.Cases != 4 || trigger.PassRate == nil || *trigger.PassRate != 0.75 {
+		t.Fatalf("trigger row = %+v", trigger)
+	}
+	view := m.runsView()
+	if !contains(view, "results · slide-builder") || contains(view, "SKILL") {
+		t.Fatalf("the scoped view should name the skill and drop the column:\n%s", view)
+	}
+	// A skill with nothing published says so instead of showing an empty table.
+	m.openRuns("learning-path")
+	if view := m.runsView(); !contains(view, "nothing yet for learning-path") {
+		t.Fatalf("empty scope view:\n%s", view)
 	}
 }
 
@@ -208,7 +275,7 @@ func TestNewScreensFitTheWindow(t *testing.T) {
 	m.applyEvent(runner.Event{Kind: runner.EventCase, Case: "sb-1-slides", Message: "sb-1-slides"})
 	m.applyEvent(runner.Event{Kind: runner.EventArmStart, Case: "sb-1-slides", Arm: runner.ArmWith})
 	m.openLauncher()
-	m.runsList = &runsState{infos: runner.New(m.store).ListRuns()}
+	m.runsList = &runsState{infos: runner.New(m.store).ListRunsFor("")}
 
 	for name, view := range map[string]string{
 		"launcher": m.launcherView(),
@@ -383,7 +450,7 @@ func TestReportViewerRendersMarkdownAndReflows(t *testing.T) {
 		`{"iteration":4,"lane":"trigger","queries":["q01-slide-builder"]}`)
 	writeFile(t, filepath.Join(root, "trigger-workspace", "trigger-4", "report.md"), report)
 
-	m.openRuns()
+	m.openRuns("")
 	m.updateRuns(key("enter"))
 	if m.viewer == nil || m.viewer.md == "" {
 		t.Fatal("the report should be held as markdown, not as pre-split lines")

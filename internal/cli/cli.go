@@ -52,7 +52,7 @@ const usage = `evalctl — manage and run the eval sets: trigger queries and out
 
   evalctl run [flags]                output lane: each case with and without the skill
   evalctl trigger [flags]            trigger lane: does the right skill load?
-  evalctl runs [--lane]              iterations per workspace, with pass rates
+  evalctl runs [--lane] [--skill]     iterations per workspace, with pass rates
   evalctl report <run>               an iteration's report.md, rendered (--raw for the source)
   evalctl profiles [cmd]             status/check/ensure/render/sync/scrub the eval profiles
   evalctl theme [name]               the colour schemes, with each role's contrast on its background
