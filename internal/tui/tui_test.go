@@ -66,6 +66,8 @@ func key(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyTab}
 	case "enter":
 		return tea.KeyMsg{Type: tea.KeyEnter}
+	case "shift+tab":
+		return tea.KeyMsg{Type: tea.KeyShiftTab}
 	case "up":
 		return tea.KeyMsg{Type: tea.KeyUp}
 	case "down":
@@ -93,10 +95,16 @@ func TestListViewRenders(t *testing.T) {
 	if !strings.Contains(view, "output cases 2") {
 		t.Fatalf("header does not name the other lane:\n%s", view)
 	}
-	m.Update(key("tab"))
+	// tab walks the scope's three views: cases → queries → results → cases.
+	m.Update(key("shift+tab"))
 	after := m.View()
 	if !strings.Contains(after, "[output cases 2]") || !strings.Contains(after, "PROMPT") {
-		t.Fatalf("tab did not switch lanes:\n%s", after)
+		t.Fatalf("shift+tab did not walk back to the cases lane:\n%s", after)
+	}
+	m.Update(key("tab"))
+	m.Update(key("tab"))
+	if view := m.View(); !strings.Contains(view, "[results") {
+		t.Fatalf("tab did not reach the results view:\n%s", view)
 	}
 }
 

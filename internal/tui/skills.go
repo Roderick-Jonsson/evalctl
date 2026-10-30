@@ -119,8 +119,9 @@ func (m *Model) clampSkillsScroll() {
 	}
 }
 
-// skillsHeight is the room the rows get: header (2), the list's own head and rule (2), footer (2).
-func (m *Model) skillsHeight() int { return m.height - 7 }
+// skillsHeight is the room the rows get, under the same frame as a lane view: header (2), the
+// list's own head (1), then the hint and the status on the last two rows of the window.
+func (m *Model) skillsHeight() int { return max(1, m.height-5) }
 
 func (m *Model) updateSkills(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	st := m.skills
@@ -221,8 +222,9 @@ func (m *Model) updateSkills(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "L":
 		// The skill list is the all-skills scope: the skill it remembers stays marked, but L here
-		// means every skill's iterations, not the one you last had open.
-		m.openRuns("")
+		// means every skill's iterations, not the one you last had open. It opens the same results
+		// tab the list has, so there is one results view and one set of keys for it.
+		m.openResultsScope("")
 		return m, nil
 	case "P":
 		m.openProfiles()
@@ -253,12 +255,19 @@ func (m *Model) enterSkill(name string) {
 	m.search.SetValue("")
 	m.search.Placeholder = "search " + searchPlaceholder(name)
 	m.cursor, m.offset = 0, 0
+	// Entering a scope lands on its cases: that is the lane a skill is worked on for, and the tab
+	// you were in last time belongs to the last scope, not this one.
+	m.tab = tabCases
+	m.tabCursor, m.tabOffset = [3]int{}, [3]int{}
 	m.mode = screenList
 	m.returnTo = screenList
 	if name != "" {
 		m.lane = store.LaneOutput
 	}
 	m.refresh()
+	// The results tab's count is part of the header, so the iterations behind it are read once on
+	// arrival rather than on every repaint.
+	m.loadRuns()
 	// No prose in the status slot on arrival: the header already names the scope, the lane and
 	// the counts. The status line is for what just happened, and it must be empty when nothing
 	// has.
@@ -282,31 +291,95 @@ func (m *Model) skillsView() string {
 	}
 	st := m.skills
 	rows := st.filtered()
-	var b strings.Builder
-	b.WriteString(m.header())
-	b.WriteString("\n")
-	b.WriteString(strings.Repeat(" ", rowGutter) + dimStyle.Render(skillHead()))
-	b.WriteString("\n")
 
-	h := m.skillsHeight()
-	if h < 3 {
-		h = 3
-	}
+	lines := append(m.headerLines(), strings.Repeat(" ", rowGutter)+dimStyle.Render(m.skillHead()))
 	if len(rows) == 0 {
-		b.WriteString(dimStyle.Render("  no skill matches"))
-		b.WriteString("\n")
+		lines = append(lines, "  "+dimStyle.Render("no skill matches"))
 	}
-	end := min(len(rows), st.offset+h)
+	end := min(len(rows), st.offset+m.skillsHeight())
 	for i := st.offset; i < end; i++ {
 		line := m.skillLine(rows[i], i == st.cursor)
 		if i == st.cursor {
 			line = selected(line)
 		}
-		b.WriteString(line)
-		b.WriteString("\n")
+		lines = append(lines, line)
 	}
-	b.WriteString(m.skillsFooter())
-	return b.String()
+
+	// The detail block fills the rows the list does not. This screen is five rows of table in a
+	// window four times that tall, and the findings behind "2 warnings" are the only thing on it
+	// that is currently behind a number. It sits under the list, not beside it: the emptiness here
+	// is vertical, a right-hand pane would be a tall empty column against five short rows, and
+	// findings are prose, not a column of values.
+	if room := m.height - len(lines) - 2; room >= 4 {
+		lines = append(lines, m.skillsDetail(rows, room)...)
+	}
+	for len(lines) < m.height-2 {
+		lines = append(lines, "")
+	}
+	lines = append(lines, m.skillsHint(), m.skillsStatus())
+	return strings.Join(lines, "\n")
+}
+
+// skillsDetail is the selected skill spelled out: the counts its one line compresses, then the
+// findings that line collapses into "2 warnings". It is cut to the room it has — the frame is the
+// window, the block is content.
+func (m *Model) skillsDetail(rows []skillRow, room int) []string {
+	row, ok := m.skills.current(rows)
+	if !ok {
+		return nil
+	}
+	w := max(20, m.width-1)
+	sum := row.sum
+	name := sum.Skill
+	if row.all {
+		name = "all skills"
+	}
+
+	parts := []string{plural(sum.Cases, "case"), fmt.Sprintf("%d/%d graded", sum.Graded, sum.Cases),
+		plural(sum.Assertions, "assertion"), plural(sum.Fixtures, "fixture dir"),
+		plural(sum.Files, "file"), plural(sum.Queries, "trigger row"),
+		fmt.Sprintf("%d yes · %d no", sum.Should, sum.ShouldNot)}
+	out := []string{"", detailRule(name, w), dimStyle.Render(fitParts(parts, " · ", w))}
+
+	issues := m.issuesFor(row)
+	if len(issues) == 0 {
+		out = append(out, "", statusOk.Render("clean — nothing to fix here"))
+	} else {
+		out = append(out, "", dimStyle.Render(fmt.Sprintf("FINDINGS (%d)", len(issues))))
+		out = append(out, issueLines(issues, w, true, 5)...)
+	}
+
+	if len(out) > room {
+		out = out[:room]
+		out[room-1] = dimStyle.Render("…")
+	}
+	return out
+}
+
+// detailRule is the section header over the block: a rule that carries the name it belongs to.
+// A rule with nothing on it is the one kind of border this tool does not draw.
+func detailRule(name string, w int) string {
+	label := "── " + name + " "
+	if n := w - len([]rune(label)); n < 0 {
+		return dimStyle.Render(fitPlain(label, w))
+	} else {
+		return dimStyle.Render("── ") + titleStyle.Render(name) + dimStyle.Render(" "+strings.Repeat("─", n))
+	}
+}
+
+// issuesFor is a skill's own findings; on the aggregate row it is every finding in the tree, which
+// is what "all skills" means.
+func (m *Model) issuesFor(row skillRow) []store.Issue {
+	if row.all {
+		return m.issues
+	}
+	var out []store.Issue
+	for _, is := range m.issues {
+		if is.Skill == row.sum.Skill {
+			out = append(out, is)
+		}
+	}
+	return out
 }
 
 // The skill list's columns, in one place: the head and every row are built from these widths, so
@@ -321,13 +394,48 @@ var (
 	}{
 		{"CASES", true}, {"GRADED", true}, {"FIXT", true}, {"FILES", true}, {"TRIG+", true}, {"TRIG-", true},
 	}
+	// skillDropOrder is the order the counts are given up when the table is wider than the
+	// terminal: file counts first, then fixture dirs, then the should-not and should-trigger split.
+	// A row is never clipped — a column that cannot fit is dropped whole, the way the key line
+	// drops a binding, rather than pushed past the edge where nobody can read it.
+	skillDropOrder = []int{3, 2, 5, 4}
+	// skillMinHealth is what HEALTH needs for the worst thing it ever says.
+	skillMinHealth = 14 // "no evals.json"
 )
 
-func skillHead() string {
+// skillCols is the columns that fit at this width, in table order: the counts are given up one at a
+// time, in skillDropOrder, until the row fits the window.
+func (m *Model) skillCols() []int {
+	all := []int{0, 1, 2, 3, 4, 5}
+	if m.width <= 0 {
+		return all
+	}
+	for k := 0; k <= len(skillDropOrder); k++ {
+		dropped := map[int]bool{}
+		for _, d := range skillDropOrder[:k] {
+			dropped[d] = true
+		}
+		need := rowGutter + skillNameWidth + 1 + skillMinHealth
+		out := make([]int, 0, len(all))
+		for _, i := range all {
+			if dropped[i] {
+				continue
+			}
+			need += skillColWidths[i] + 1
+			out = append(out, i)
+		}
+		if need <= m.width-1 || k == len(skillDropOrder) {
+			return out
+		}
+	}
+	return all
+}
+
+func (m *Model) skillHead() string {
 	var b strings.Builder
 	b.WriteString(padCell("SKILL", skillNameWidth, false) + " ")
-	for i, c := range skillHeads {
-		b.WriteString(padCell(c.head, skillColWidths[i], c.right) + " ")
+	for _, i := range m.skillCols() {
+		b.WriteString(padCell(skillHeads[i].head, skillColWidths[i], skillHeads[i].right) + " ")
 	}
 	return b.String() + "HEALTH"
 }
@@ -362,7 +470,8 @@ func (m *Model) skillLine(r skillRow, isCursor bool) string {
 	var b strings.Builder
 	b.WriteString(mark)
 	b.WriteString(colSkill.Render(padCell(name, skillNameWidth, false)) + " ")
-	for i, v := range cells {
+	for _, i := range m.skillCols() {
+		v := cells[i]
 		if v == "-" {
 			b.WriteString(dimStyle.Render(padCell(v, skillColWidths[i], true)) + " ")
 			continue
@@ -389,19 +498,33 @@ func (m *Model) skillLine(r skillRow, isCursor bool) string {
 	return b.String()
 }
 
-// skillsFooter keeps the same rules as the lane list: fixed keys first, everything else by rank.
-func (m *Model) skillsFooter() string {
+// skillsHint keeps the same rules as the lane list: fixed keys first, everything else by rank.
+func (m *Model) skillsHint() string {
 	st := m.skills
-	var hints string
 	if st.searching {
-		hints = st.search.View() + dimStyle.Render("   enter apply · esc clear")
-	} else {
-		hints = m.hintLine([]hint{
-			{"enter", "open", 0}, {"j k", "move", 1}, {"/", "filter", 2},
-			{"L", "results", 4}, {"P", "profiles", 6},
-			{"ctrl+s", "save", 0}, {"?", "keys", 0}, {"q", "quit", 5},
-		})
+		return st.search.View() + dimStyle.Render("   enter apply · esc clear")
 	}
+	return m.hintLine(m.skillsHints())
+}
+
+// skillsHints is the front door's verb list: the footer renders it and ? explains it.
+func (m *Model) skillsHints() []hint {
+	return []hint{
+		{key: "enter", act: "open", rank: 0, help: "open the skill under the cursor (· all skills = every skill)"},
+		{key: "j k", act: "move", rank: 1, help: "move"},
+		{key: "/", act: "filter", rank: 2, help: "filter the skill names"},
+		{key: "L", act: "results", rank: 4, help: "every iteration under the tree — the same results tab a scope has"},
+		{key: "P", act: "profiles", rank: 6, help: "the four sandboxes: what exists and what is stale"},
+		{key: "ctrl+s", act: "save", rank: 0, help: "write both lanes atomically"},
+		{key: "?", act: "keys", rank: 0, help: "this key map"},
+		{key: "q", act: "quit", rank: 5, help: "quit — asks once if there is an unsaved edit or a run in flight"},
+	}
+}
+
+// skillsStatus is the last row of the window, like the lane list's: position and whatever just
+// happened, then the two whole-tree states — an unsaved edit and a live run — because this is the
+// only screen that shows the whole tree.
+func (m *Model) skillsStatus() string {
 	status := m.status
 	switch {
 	case status == "":
@@ -411,15 +534,13 @@ func (m *Model) skillsFooter() string {
 	default:
 		status = statusOk.Render(status)
 	}
-	// The list is also where an unsaved edit and a live run have to stay visible: both are states
-	// of the whole tree, and this is the only screen that shows all of it.
 	if m.dirty {
 		status += "  " + badgeWarn.Render("unsaved — ctrl+s writes")
 	}
 	if m.runActive {
 		status += "  " + tabActive.Render("⟳ run in progress — R opens the table")
 	}
-	return hints + "\n" + status + "\n"
+	return status
 }
 
 func (m *Model) skillsPosition() string {

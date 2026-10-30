@@ -72,19 +72,28 @@ func TestRunRefusesWhileDirty(t *testing.T) {
 // TestFooterNeverClips: the hint line drops bindings by importance, never by column. At every
 // width the save key and the way to the key map survive, and no line exceeds the screen.
 func TestFooterNeverClips(t *testing.T) {
-	for _, w := range []int{60, 80, 100, 118, 160} {
+	for _, w := range []int{60, 80, 100, 118, 160, 200} {
 		m := sized(newModel(testStore(t), store.LaneTrigger), w, 30)
 		view := m.View()
-		for _, line := range strings.Split(view, "\n") {
+		lines := strings.Split(view, "\n")
+		for _, line := range lines {
 			if n := ansi.StringWidth(line); n > w {
 				t.Errorf("%d cols: a line is %d wide: %q", w, n, line)
 			}
 		}
-		hint := strings.Split(view, "\n")[len(strings.Split(view, "\n"))-3]
+		// The frame is anchored: the hint is the second-to-last row and the status is the last,
+		// whatever the list's length.
+		if len(lines) != 30 {
+			t.Errorf("%d cols: view is %d rows on a 30-row terminal", w, len(lines))
+		}
+		hint := lines[len(lines)-2]
 		for _, want := range []string{"ctrl+s save", "? keys"} {
 			if !strings.Contains(hint, want) {
 				t.Errorf("%d cols: the footer lost %q: %q", w, want, hint)
 			}
+		}
+		if status := strings.TrimSpace(ansi.Strip(lines[len(lines)-1])); status != "1 / 4" {
+			t.Errorf("%d cols: status row = %q, want the position", w, status)
 		}
 	}
 }
@@ -145,7 +154,7 @@ func TestHelpScrollsToTheEnd(t *testing.T) {
 	m := sized(newModel(testStore(t), store.LaneTrigger), 100, 24)
 	m.Update(key("?"))
 	first := m.View()
-	if !strings.Contains(first, "SKILL LIST") {
+	if !strings.Contains(first, "FRONT DOOR") {
 		t.Fatalf("help does not open at the top:\n%s", first)
 	}
 	if strings.Contains(first, "ids are never renumbered") {
@@ -158,7 +167,7 @@ func TestHelpScrollsToTheEnd(t *testing.T) {
 		t.Fatalf("G did not reach the end of the key map:\n%s", m.View())
 	}
 	m.Update(key("g"))
-	if !strings.Contains(m.View(), "SKILL LIST") {
+	if !strings.Contains(m.View(), "FRONT DOOR") {
 		t.Fatalf("g did not return to the top:\n%s", m.View())
 	}
 	// While the map is open it owns the keyboard: no stray letter may reach the list behind it.

@@ -123,7 +123,7 @@ func TestColumnFocusClearsAndDropsOnLaneSwitch(t *testing.T) {
 	if m.groupField != "split" {
 		t.Fatal("clearing the focus also dropped the grouping")
 	}
-	m.Update(key("tab")) // output lane has no split column
+	m.Update(key("shift+tab")) // the output lane has no split column
 	if m.groupField != "" || len(m.sortKeys) != 0 {
 		t.Fatalf("lane switch kept group=%q sort=%+v", m.groupField, m.sortKeys)
 	}

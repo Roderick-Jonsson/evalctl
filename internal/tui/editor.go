@@ -38,11 +38,18 @@ type editorState struct {
 	isNew  bool
 	target store.RowRef
 	d      draft
+	// orig is the row as it was opened: the difference between it and d is what esc would throw
+	// away, so esc asks before throwing it away.
+	orig   draft
+	armed  bool // esc has been pressed once on an edited form
 	form   *huh.Form
 	errMsg string
 	width  int
 	height int
 }
+
+// dirty is "there is typing here that leaving the form would lose".
+func (e *editorState) dirty() bool { return e.d != e.orig }
 
 func (m *Model) openEditor(e store.Entry, isNew bool) tea.Cmd {
 	st := &editorState{store: m.store, lane: e.Lane, isNew: isNew, width: m.width, height: m.height,
@@ -81,6 +88,7 @@ func (m *Model) openEditor(e store.Entry, isNew bool) tea.Cmd {
 			origID: c.ID, origSkill: sk.Name, origSlug: c.Slug}
 	}
 	st.build()
+	st.orig = st.d
 	m.editor = st
 	m.mode = screenEditor
 	return st.form.Init() // huh focuses the first field and renders nothing until this runs
@@ -248,6 +256,9 @@ func (e *editorState) view(width int) string {
 	}
 	body := e.form.View()
 	foot := dimStyle.Render("  enter next · alt+enter newline · shift+tab back · esc cancel · ctrl+s writes")
+	if e.armed {
+		foot = badgeWarn.Render("  esc again discards your edits — nothing is written until ctrl+s")
+	}
 	return head + "\n\n" + body + "\n" + foot
 }
 
@@ -339,6 +350,12 @@ func (e *editorState) apply(m *Model) {
 }
 
 func (m *Model) updateEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	leave := func() (tea.Model, tea.Cmd) {
+		m.mode = screenList
+		m.editor = nil
+		m.setStatus("edit cancelled — nothing written", false)
+		return m, nil
+	}
 	if m.editor == nil {
 		m.mode = screenList
 		return m, nil
@@ -348,17 +365,27 @@ func (m *Model) updateEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editor.apply(m)
 		return m, nil
 	case huh.StateAborted:
-		m.mode = screenList
-		m.setStatus("edit cancelled — nothing written", false)
-		m.editor = nil
-		return m, nil
+		return leave()
+	}
+	// esc is this app's "one level up", and the form library does not bind it (its own quit is
+	// ctrl+c), so the editor answers for it here. Leaving with typing in hand asks once: losing a
+	// paragraph of prompt to a stray esc is worse than one extra keystroke.
+	if msg.String() == "esc" {
+		if !m.editor.armed && m.editor.dirty() {
+			m.editor.armed = true
+			return m, nil
+		}
+		return leave()
+	}
+	if m.editor.armed {
+		m.editor.armed = false
 	}
 	cmd := m.editor.update(msg)
-	if m.editor.form.State == huh.StateAborted {
-		m.mode = screenList
-		m.setStatus("edit cancelled — nothing written", false)
-		m.editor = nil
+	if m.editor == nil {
 		return m, nil
+	}
+	if m.editor.form.State == huh.StateAborted {
+		return leave()
 	}
 	if m.editor.form.State == huh.StateCompleted {
 		m.editor.apply(m)

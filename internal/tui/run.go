@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -649,7 +650,7 @@ func (m *Model) updateProgress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// The run keeps going: detaching from the table must not kill a 20-minute arm.
 		m.mode = screenList
 		if m.runActive {
-			m.setStatus("run continues in the background — R opens the table, L the results", false)
+			m.setStatus("run continues in the background — R opens its table, tab 2× the results", false)
 		}
 		return m, nil
 	case "x":
@@ -810,66 +811,281 @@ func (m *Model) openReportFor(ref string) {
 type runsState struct {
 	infos  []runner.RunInfo
 	cursor int
-	skill  string // "" is every skill; otherwise the scope L was opened from
+	skill  string // "" is every skill; otherwise the scope the results tab is open in
 }
 
-// openRuns shows the published results of one scope. The scope is passed in rather than read off
-// m.skill, because the skill list keeps the last opened skill marked while it is showing every
-// skill — the front door is the all-skills scope, and L there must mean all of them.
-func (m *Model) openRuns(skill string) {
-	m.runsList = &runsState{infos: runner.New(m.store).ListRunsFor(skill), skill: skill}
-	m.mode = screenRuns
+// loadRuns (re)reads the published results of the current scope. It is called on entering a scope,
+// on entering the results tab, after a run finishes and after a promote — and not on every
+// keystroke, because it walks the results tree.
+func (m *Model) loadRuns() {
+	m.runsList = &runsState{infos: runner.New(m.store).ListRunsFor(m.skill), skill: m.skill}
 }
 
-func (m *Model) updateRuns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+// The results tab is a table of iterations, not of rows: a different set of columns from the lanes,
+// and no flexible prose column, so it takes its own frame. Whatever width is left over goes to the
+// detail card — that is the only content the results tab has that a single row cannot show.
+const resultsPaneMax = 96
+
+func (m *Model) resultsFrame() frame {
+	fixed := rowGutter
+	for _, c := range resultsColumns(m.runsList) {
+		fixed += c.width + 1
+	}
+	avail := m.width - 1
+	if avail < 20 {
+		return frame{table: max(avail, 10)}
+	}
+	sep := len([]rune(paneSep))
+	if pane := avail - fixed - sep; pane >= paneMin {
+		return frame{table: fixed, pane: min(pane, resultsPaneMax)}
+	}
+	return frame{table: fixed}
+}
+
+// resCol is one column of the results table. A row here is a run, not an eval entry, so it cannot
+// reuse the lane drawer's column type — but it is drawn by the same rules: fixed widths, right
+// alignment for numbers, and no cell that pads itself.
+type resCol struct {
+	name  string
+	head  string
+	width int
+	right bool
+	style lipgloss.Style
+	cell  func(runner.RunInfo) string
+}
+
+// resultsColumns drops the SKILL column inside a skill's own scope: the header already says which
+// skill this is. A trigger run has no workspace and every finished iteration has a report, so
+// neither is a column — what a row is not is not a column of dashes.
+func resultsColumns(list *runsState) []resCol {
+	cols := []resCol{
+		{name: "run", head: "RUN", width: 16, style: colSkill, cell: func(i runner.RunInfo) string { return i.Name }},
+	}
+	if list == nil || list.skill == "" {
+		cols = append(cols, resCol{name: "skill", head: "SKILL", width: 12, style: colSkill, cell: func(i runner.RunInfo) string { return i.Skill }})
+	}
+	return append(cols,
+		resCol{name: "lane", head: "LANE", width: 7, style: colSplit, cell: func(i runner.RunInfo) string { return i.Lane }},
+		resCol{name: "cases", head: "CASES", width: 5, right: true, style: colCases, cell: func(i runner.RunInfo) string { return strconv.Itoa(i.Cases) }},
+		resCol{name: "runs", head: "RUNS", width: 4, right: true, style: colSplit, cell: func(i runner.RunInfo) string { return strconv.Itoa(i.Runs) }},
+		resCol{name: "pass", head: "PASS", width: 5, right: true, style: colAsr, cell: func(i runner.RunInfo) string {
+			if i.PassRate == nil {
+				return "-"
+			}
+			return fmt.Sprintf("%.0f%%", *i.PassRate*100)
+		}},
+		resCol{name: "started", head: "STARTED", width: 16, style: dimStyle, cell: func(i runner.RunInfo) string { return shortTime(i.Started) }},
+	)
+}
+
+func (m *Model) resultsHead(f frame) string {
+	var b strings.Builder
+	b.WriteString(strings.Repeat(" ", rowGutter))
+	for _, c := range resultsColumns(m.runsList) {
+		b.WriteString(dimStyle.Render(headCell(c.head, c.width, c.right)) + " ")
+	}
+	if f.pane == 0 {
+		return b.String()
+	}
+	head := padCell(b.String(), f.table, false)
+	title := "no iteration yet"
+	if list := m.runsList; list != nil && list.cursor < len(list.infos) {
+		title = list.infos[list.cursor].Ref()
+	}
+	return head + dimStyle.Render(paneSep) + dimStyle.Render(padCell(ellipsis(title, f.pane), f.pane, false))
+}
+
+// resultsBody is the iterations, then the detail card for the one under the cursor.
+func (m *Model) resultsBody(f frame, h int) []string {
+	var left []string
+	list := m.runsList
+	if list == nil || len(list.infos) == 0 {
+		hint := "nothing yet — R starts a run"
+		if list != nil && list.skill != "" {
+			hint = "nothing yet for " + list.skill + " — R starts a run"
+		}
+		left = append(left, "  "+dimStyle.Render(hint))
+	} else {
+		for i, info := range list.infos {
+			mark := "  "
+			if i == list.cursor {
+				mark = cursorMark.Render("▸ ")
+			}
+			var b strings.Builder
+			b.WriteString(mark)
+			for _, c := range resultsColumns(list) {
+				b.WriteString(c.style.Render(padCell(c.cell(info), c.width, c.right)) + " ")
+			}
+			line := b.String()
+			if f.pane > 0 {
+				line = padCell(line, f.table, false)
+			}
+			if i == list.cursor {
+				line = selected(line)
+			}
+			left = append(left, line)
+		}
+	}
+
+	pane := m.resultsPaneColumn(f, h)
+	out := make([]string, 0, h)
+	for i := 0; i < h; i++ {
+		var line string
+		if i < len(left) {
+			line = left[i]
+		}
+		if f.pane > 0 {
+			if i >= len(left) {
+				line = strings.Repeat(" ", f.table)
+			}
+			line += dimStyle.Render(paneSep) + pane[i]
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// resultsPaneColumn is one iteration read properly: what it measured, how it scored, where it lives,
+// and what you can do with it. It is the same shape as a row's pane — the cursor's object, spelled
+// out — so the two tabs teach each other.
+func (m *Model) resultsPaneColumn(f frame, h int) []string {
+	out := make([]string, h)
+	list := m.runsList
+	if f.pane == 0 || list == nil || list.cursor >= len(list.infos) {
+		return out
+	}
+	w := f.pane
+	info := list.infos[list.cursor]
+	var lines []string
+	lines = append(lines, dimStyle.Render(strings.Repeat("─", w)))
+	row := func(k, v string) {
+		lines = append(lines, dimStyle.Render(padCell(k, 12, false))+colSkill.Render(ellipsis(v, w-12)))
+	}
+	row("lane", info.Lane)
+	row("cases", strconv.Itoa(info.Cases))
+	row("runs", strconv.Itoa(info.Runs))
+	row("judged", fmt.Sprintf("%d of %d", info.Judged, info.Cases))
+	pass := "-"
+	if info.PassRate != nil {
+		pass = fmt.Sprintf("%.0f%% (%d/%d passed)", *info.PassRate*100, info.Passed, info.Judged)
+	}
+	row("pass", pass)
+	if info.Model != "" {
+		row("model", info.Model)
+	}
+	if info.Threshold > 0 {
+		row("threshold", fmt.Sprintf("%.2f", info.Threshold))
+	}
+	row("started", shortTime(info.Started))
+	lines = append(lines, "", dimStyle.Render("PATH"))
+	for _, l := range wrapPlain(strings.TrimPrefix(info.Path, strings.TrimSuffix(m.store.Root, "/")+"/"), w) {
+		lines = append(lines, l)
+	}
+	lines = append(lines, "", dimStyle.Render("KEYS"))
+	lines = append(lines, "enter the report it wrote")
+	lines = append(lines, "c     promote its output into the next fixture")
+	lines = append(lines, "r     re-read results/ for runs finished elsewhere")
+
+	if len(lines) > h {
+		lines = lines[:h]
+		lines[h-1] = dimStyle.Render("…")
+	}
+	for i := range out {
+		if i < len(lines) {
+			out[i] = lines[i]
+		}
+	}
+	return out
+}
+
+// updateResultsTab is the results view's key map: movement, open, refresh, and the promote that
+// turns a run's output into a fixture. Nothing here writes to the set, so no key here edits it.
+func (m *Model) updateResultsTab(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	list := m.runsList
 	if list == nil {
-		m.mode = m.back()
-		return m, nil
+		m.loadRuns()
+		list = m.runsList
 	}
+	n := 0
+	if list != nil {
+		n = len(list.infos)
+	}
+	clearStatusOnMove(m, msg)
 	switch msg.String() {
-	case "esc", "q":
-		m.mode = m.back()
-		return m, nil
-	case "r":
-		list.infos = runner.New(m.store).ListRunsFor(list.skill)
-		m.setStatus("results reloaded", false)
-		return m, nil
 	case "up", "k":
-		if list.cursor > 0 {
+		if list != nil && list.cursor > 0 {
 			list.cursor--
 		}
-		return m, nil
 	case "down", "j":
-		if list.cursor < len(list.infos)-1 {
+		if list != nil && list.cursor < n-1 {
 			list.cursor++
 		}
-		return m, nil
-	case "g":
-		list.cursor = 0
-		return m, nil
-	case "G":
-		list.cursor = max(0, len(list.infos)-1)
-		return m, nil
+	case "home", "g":
+		if list != nil {
+			list.cursor = 0
+		}
+	case "G", "end":
+		if list != nil {
+			list.cursor = max(0, n-1)
+		}
+	case "pgup", "ctrl+u":
+		if list != nil {
+			list.cursor = max(0, list.cursor-m.listHeight()/2)
+		}
+	case "pgdown", "ctrl+d":
+		if list != nil {
+			list.cursor = min(n-1, list.cursor+m.listHeight()/2)
+		}
 	case "enter", "v":
-		if list.cursor < len(list.infos) {
-			info := list.infos[list.cursor]
-			text, err := runner.ReadReport(runner.New(m.store).ReportPath(info))
-			if err != nil {
-				m.setStatus(info.Ref()+" has no report.md yet", true)
-				return m, nil
-			}
-			m.viewer = newMarkdownViewer(info.Ref()+" · report.md", text, m.width)
-			m.mode = screenViewer
+		m.openRunReport()
+	case "c":
+		return m, m.openPromote()
+	case "r":
+		m.loadRuns()
+		if m.runsList != nil {
+			m.runsList.cursor = min(list.cursor, max(0, len(m.runsList.infos)-1))
 		}
-		return m, nil
-	case "a":
-		if list.cursor < len(list.infos) {
-			m.openRunActivity(list.infos[list.cursor])
-		}
-		return m, nil
+		m.setStatus("results re-read from the tree", false)
+	case "esc":
+		return m.escUp()
 	}
 	return m, nil
+}
+
+// resultsHints is the results tab's own verbs. There is no select, edit, new or delete here: the
+// results are what a run wrote, and the way to change them is to change the set and run again.
+func (m *Model) resultsHints() []hint {
+	return []hint{
+		{key: "enter", act: "report", rank: 1, help: "open the report.md the iteration wrote, rendered"},
+		{key: "c", act: "chain", rank: 3, help: "promote: a run's output becomes the next stage's fixture"},
+		{key: "r", act: "re-read", rank: 5, help: "re-read results/ for iterations finished elsewhere"},
+		{key: "tab", act: "next tab", rank: 6, help: "walk the scope's views back to the lanes"},
+		{key: "R", act: "run", rank: 3, help: "run what is selected, or the whole lane of this scope"},
+		{key: "P", act: "profiles", rank: 13, help: "the four sandboxes: what exists and what is stale"},
+		{key: "ctrl+s", act: "save", rank: 0, help: "write both lanes atomically"},
+		{key: "?", act: "keys", rank: 0, help: "this key map"},
+		{key: "q", act: "quit", rank: 10, help: "quit — asks once if there is an unsaved edit or a run in flight"},
+		{key: "esc", act: m.escLabel(), rank: 0, help: "one level up — the footer always names the level"},
+	}
+}
+
+// openRunReport opens the report.md an iteration wrote, as a document. The document knows which run
+// it came from, so `a` inside it can switch to the activity log — one object, two views.
+func (m *Model) openRunReport() {
+	list := m.runsList
+	if list == nil || list.cursor >= len(list.infos) {
+		return
+	}
+	info := list.infos[list.cursor]
+	text, err := runner.ReadReport(runner.New(m.store).ReportPath(info))
+	if err != nil {
+		m.setStatus(info.Ref()+" has no report.md yet", true)
+		return
+	}
+	v := newMarkdownViewer(info.Ref()+" · report.md", text, m.width)
+	v.run = &info
+	m.viewer = v
+	m.mode = screenViewer
 }
 
 // openRunActivity concatenates every arm's activity.log under an iteration: a finished run can be
@@ -900,69 +1116,6 @@ func (m *Model) openRunActivity(info runner.RunInfo) {
 	m.viewer = &viewerState{kind: "run-activity",
 		title: fmt.Sprintf("%s · activity · %d arms", info.Ref(), len(files)), lines: lines}
 	m.mode = screenViewer
-}
-
-func (m *Model) runsView() string {
-	list := m.runsList
-	if list == nil {
-		return ""
-	}
-	var b strings.Builder
-	title := "results"
-	if list.skill != "" {
-		title += " · " + list.skill
-	}
-	b.WriteString(titleStyle.Render(fmt.Sprintf("%s · %s", title, plural(len(list.infos), "iteration"))) + "\n")
-	if len(list.infos) == 0 {
-		if list.skill != "" {
-			b.WriteString(dimStyle.Render("  nothing yet for "+list.skill+" — R starts a run") + "\n")
-		} else {
-			b.WriteString(dimStyle.Render("  nothing yet — R starts a run") + "\n")
-		}
-	} else {
-		// No WORKSPACE dash column and no "REPORT yes" column: a trigger run has no workspace and
-		// every finished iteration has a report, so both columns were the same character on every
-		// row. They are stated once, in the footer, instead of ten times in the table. The SKILL
-		// column drops in a skill's own view for the same reason the lanes drop it — the title
-		// already says which skill this is.
-		head := "%-16s %-12s %-8s %6s %5s %6s  %s"
-		headArgs := []any{"RUN", "SKILL", "LANE", "CASES", "RUNS", "PASS", "STARTED"}
-		row := "%s%-16s %-12s %-8s %6d %5d %6s  %s"
-		if list.skill != "" {
-			head = "%-16s %-8s %6s %5s %6s  %s"
-			headArgs = []any{"RUN", "LANE", "CASES", "RUNS", "PASS", "STARTED"}
-			row = "%s%-16s %-8s %6d %5d %6s  %s"
-		}
-		b.WriteString("  " + dimStyle.Render(fmt.Sprintf(head, headArgs...)) + "\n")
-		for i, info := range list.infos {
-			mark := "  "
-			if i == list.cursor {
-				mark = cursorMark.Render("▸ ")
-			}
-			pass := "-"
-			if info.PassRate != nil {
-				pass = fmt.Sprintf("%.0f%%", *info.PassRate*100)
-			}
-			var line string
-			if list.skill != "" {
-				line = fmt.Sprintf(row, mark, info.Name, info.Lane, info.Cases, info.Runs, pass,
-					shortTime(info.Started))
-			} else {
-				line = fmt.Sprintf(row, mark, info.Name, info.Skill, info.Lane, info.Cases, info.Runs,
-					pass, shortTime(info.Started))
-			}
-			if i == list.cursor {
-				line = selected(line)
-			}
-			b.WriteString(line + "\n")
-		}
-	}
-	foot := "  esc back · enter report · a activity · r reload"
-	if list.skill != "" {
-		foot = "  esc back to " + list.skill + " · enter report · a activity · r reload"
-	}
-	b.WriteString("\n" + dimStyle.Render(foot))
-	return b.String()
 }
 
 // shortTime defers to the runner's formatter, so the TUI and the CLI cannot print two different

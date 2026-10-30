@@ -148,14 +148,14 @@ func TestResultsBrowserReadsReportIntoTheViewer(t *testing.T) {
 		`{"score":{"threshold":0.5,"runs":3,"overall":{"judged":1,"passed":1,"rate":1}}}`)
 	writeFile(t, filepath.Join(root, "trigger-workspace", "trigger-2", "report.md"), "# Trigger eval 2\n\n**Pass rate 100%**\n")
 
-	m.openRuns("")
+	m.openResultsScope("")
 	if len(m.runsList.infos) != 1 || m.runsList.infos[0].Name != "trigger-2" {
 		t.Fatalf("runs = %+v", m.runsList)
 	}
 	if rate := m.runsList.infos[0].PassRate; rate == nil || *rate != 1 {
 		t.Fatalf("pass rate = %v", rate)
 	}
-	m.updateRuns(key("enter"))
+	m.Update(key("enter"))
 	if m.mode != screenViewer || m.viewer == nil {
 		t.Fatalf("enter should open the report, mode=%v", m.mode)
 	}
@@ -186,17 +186,28 @@ func TestResultsBrowserFollowsTheSkillScope(t *testing.T) {
 	m.skill = "slide-builder"
 	m.openSkills()
 	m.updateSkills(key("L"))
-	if m.mode != screenRuns || m.runsList.skill != "" || len(m.runsList.infos) != 3 {
-		t.Fatalf("L on the skill list must list every run: mode=%v state=%+v", m.mode, m.runsList)
+	if m.mode != screenList || m.tab != tabResults || m.runsList.skill != "" || len(m.runsList.infos) != 3 {
+		t.Fatalf("L on the skill list must open the results tab for every run: mode=%v tab=%v state=%+v",
+			m.mode, m.tab, m.runsList)
 	}
-	if view := m.runsView(); !contains(view, "SKILL") {
+	if view := m.listView(); !contains(view, "SKILL") {
 		t.Fatalf("the unscoped table keeps its SKILL column:\n%s", view)
 	}
 
-	// Inside a skill, L shows that skill's iterations and nobody else's.
-	m.updateRuns(key("esc"))
-	m.mode = screenList
-	m.updateList(key("L"))
+	// Inside a skill, the results tab shows that skill's iterations and nobody else's.
+	m.Update(key("esc")) // back to the front door
+	m.Update(key("enter"))
+	if m.tab != tabCases {
+		t.Fatalf("opening a skill should start on its cases tab, got %v", m.tab)
+	}
+	m.updateList(key("tab"))
+	m.updateList(key("tab"))
+	if m.tab != tabResults || m.runsList.skill != "" {
+		t.Fatalf("two tabs should reach results, got tab=%v scope=%q", m.tab, m.runsList.skill)
+	}
+	m.enterSkill("slide-builder")
+	m.updateList(key("tab"))
+	m.updateList(key("tab"))
 	if m.runsList.skill != "slide-builder" || len(m.runsList.infos) != 2 {
 		t.Fatalf("scoped runs = %+v", m.runsList)
 	}
@@ -210,13 +221,15 @@ func TestResultsBrowserFollowsTheSkillScope(t *testing.T) {
 	if trigger.Cases != 4 || trigger.PassRate == nil || *trigger.PassRate != 0.75 {
 		t.Fatalf("trigger row = %+v", trigger)
 	}
-	view := m.runsView()
-	if !contains(view, "results · slide-builder") || contains(view, "SKILL") {
+	view := m.listView()
+	if !contains(view, "slide-builder") || contains(view, "SKILL") {
 		t.Fatalf("the scoped view should name the skill and drop the column:\n%s", view)
 	}
 	// A skill with nothing published says so instead of showing an empty table.
-	m.openRuns("learning-path")
-	if view := m.runsView(); !contains(view, "nothing yet for learning-path") {
+	m.enterSkill("learning-path")
+	m.updateList(key("tab"))
+	m.updateList(key("tab"))
+	if view := m.listView(); !contains(view, "nothing yet for learning-path") {
 		t.Fatalf("empty scope view:\n%s", view)
 	}
 }
@@ -280,7 +293,6 @@ func TestNewScreensFitTheWindow(t *testing.T) {
 	for name, view := range map[string]string{
 		"launcher": m.launcherView(),
 		"progress": m.progressView(),
-		"runs":     m.runsView(),
 	} {
 		if view == "" {
 			t.Fatalf("%s rendered empty", name)
@@ -450,8 +462,8 @@ func TestReportViewerRendersMarkdownAndReflows(t *testing.T) {
 		`{"iteration":4,"lane":"trigger","queries":["q01-slide-builder"]}`)
 	writeFile(t, filepath.Join(root, "trigger-workspace", "trigger-4", "report.md"), report)
 
-	m.openRuns("")
-	m.updateRuns(key("enter"))
+	m.openResultsScope("")
+	m.Update(key("enter"))
 	if m.viewer == nil || m.viewer.md == "" {
 		t.Fatal("the report should be held as markdown, not as pre-split lines")
 	}

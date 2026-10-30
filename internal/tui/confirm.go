@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"evalctl/internal/markdown"
+	"evalctl/internal/runner"
 	"evalctl/internal/store"
 )
 
@@ -151,6 +152,10 @@ type viewerState struct {
 	// a resize re-wraps it instead of scrolling a layout made for another window.
 	md      string
 	mdWidth int
+
+	// run is the iteration a report came from, so the document can switch to that run's activity
+	// log: one object, two views. It is nil for every other document.
+	run *runner.RunInfo
 }
 
 // newMarkdownViewer shows a markdown document — a report, a note — rendered rather than raw.
@@ -198,22 +203,119 @@ func newIssueViewer(issues []store.Issue, width int) *viewerState {
 	return v
 }
 
-func newViewer(s *store.Store, e store.Entry, width, height int) *viewerState {
-	v := &viewerState{}
-	wrap := max(30, width-6)
-	add := func(label, text string) {
-		if strings.TrimSpace(text) == "" {
+// docLine is a line of a record before it is fitted and styled: the styling is applied after the
+// cut, because a cut through an escape sequence is a broken screen.
+type docLine struct {
+	text  string
+	style lipgloss.Style
+}
+
+// recordLines is one row as a document: every field of the record, laid out for a width. The pane
+// and the v view both draw from this, so there is exactly one answer to "what is in this row" —
+// the pane is the same document at 50 cells, and v is it at the width of the window.
+func recordLines(s *store.Store, e store.Entry, w int) []string {
+	var doc []docLine
+	section := func(label string, body ...docLine) {
+		if len(body) == 0 {
 			return
 		}
-		v.lines = append(v.lines, dimStyle.Render(label))
-		for _, para := range strings.Split(strings.TrimSpace(text), "\n") {
-			for _, line := range wrapText(para, wrap) {
-				v.lines = append(v.lines, "  "+line)
+		doc = append(doc, docLine{"", dimStyle}, docLine{label, dimStyle})
+		doc = append(doc, body...)
+	}
+	text := func(label, body string) {
+		var lines []docLine
+		for _, l := range wrapPlain(body, w) {
+			lines = append(lines, docLine{l, lipgloss.NewStyle()})
+		}
+		section(label, lines...)
+	}
+	paths := func(label string, list []string) {
+		var lines []docLine
+		for _, p := range list {
+			lines = append(lines, docLine{p, lipgloss.NewStyle()})
+		}
+		section(label, lines...)
+	}
+	numbered := func(label string, items []string) {
+		var lines []docLine
+		for i, a := range items {
+			head := fmt.Sprintf("%d. ", i+1)
+			for j, l := range wrapPlain(a, w-len(head)) {
+				if j == 0 {
+					lines = append(lines, docLine{head + l, lipgloss.NewStyle()})
+					continue
+				}
+				lines = append(lines, docLine{strings.Repeat(" ", len(head)) + l, lipgloss.NewStyle()})
 			}
 		}
-		v.lines = append(v.lines, "")
+		section(label, lines...)
 	}
 
+	if e.Lane == store.LaneTrigger {
+		q := s.Trigger.Queries[e.Index]
+		text("QUERY", q.Query)
+		text("WHY", q.Why)
+		if len(q.Extra) > 0 {
+			text("EXTRA KEYS · kept on save", strings.Join(keysOf(q.Extra), ", "))
+		}
+	} else {
+		sk := s.Skill(e.Skill)
+		c := sk.Output.Evals[e.Index]
+		text("PROMPT", c.Prompt)
+		// An empty expected_output is the thing validation warns about, so it is said out loud
+		// rather than skipped the way an empty field would be: a missing section reads as "no
+		// such field".
+		if strings.TrimSpace(c.ExpectedOutput) == "" {
+			section("EXPECTED OUTPUT", docLine{"(empty — grading has nothing to check against)", badgeWarn})
+		} else {
+			text("EXPECTED OUTPUT", c.ExpectedOutput)
+		}
+		if len(c.Assertions) > 0 {
+			numbered(fmt.Sprintf("ASSERTIONS (%d)", len(c.Assertions)), c.Assertions)
+		} else {
+			section("ASSERTIONS", docLine{"(none yet — add them once a run has shown what good looks like)", dimStyle})
+		}
+		if len(c.Files) > 0 {
+			paths("FILES · declared", c.Files)
+		}
+		// The dir is shown relative to the tree the header already names: an absolute path here is
+		// half the window's width of the same prefix on every case.
+		rel := strings.TrimPrefix(s.FixtureDir(sk.Name, c.Slug), strings.TrimSuffix(s.Root, "/")+"/")
+		if files := s.FixtureFiles(sk.Name, c.Slug); files != nil {
+			section("FIXTURE", append([]docLine{{rel, dimStyle}}, pathLines(files)...)...)
+		} else {
+			section("FIXTURE", docLine{rel + " (absent)", dimStyle})
+		}
+		if len(c.Extra) > 0 {
+			text("EXTRA KEYS · kept on save", strings.Join(keysOf(c.Extra), ", "))
+		}
+	}
+
+	out := make([]string, 0, len(doc))
+	for _, d := range doc {
+		fitted := d.text
+		switch {
+		case lipgloss.Width(fitted) <= w:
+		case strings.Contains(fitted, "/"):
+			fitted = fitPath(fitted, w)
+		default:
+			fitted = fitPlain(fitted, w)
+		}
+		out = append(out, d.style.Render(fitted))
+	}
+	return out
+}
+
+func pathLines(list []string) []docLine {
+	out := make([]docLine, 0, len(list))
+	for _, p := range list {
+		out = append(out, docLine{p, lipgloss.NewStyle()})
+	}
+	return out
+}
+
+func newViewer(s *store.Store, e store.Entry, width, height int) *viewerState {
+	v := &viewerState{}
 	if e.Lane == store.LaneTrigger {
 		q := s.Trigger.Queries[e.Index]
 		state := "should not trigger"
@@ -221,45 +323,15 @@ func newViewer(s *store.Store, e store.Entry, width, height int) *viewerState {
 			state = "should trigger"
 		}
 		v.title = fmt.Sprintf("trigger #%d · %s · %s · %s", q.ID, q.Skill, state, q.Split)
-		add("query", q.Query)
-		add("why", q.Why)
-		if len(q.Extra) > 0 {
-			add("extra keys (preserved on save)", strings.Join(keysOf(q.Extra), ", "))
-		}
-		return v
-	}
-
-	sk := s.Skill(e.Skill)
-	c := sk.Output.Evals[e.Index]
-	v.title = fmt.Sprintf("%s case #%d · %s", sk.Name, c.ID, c.Slug)
-	add("prompt", c.Prompt)
-	add("expected_output", c.ExpectedOutput)
-	if len(c.Assertions) > 0 {
-		var b strings.Builder
-		for i, a := range c.Assertions {
-			b.WriteString(fmt.Sprintf("%d. %s", i+1, a))
-			if i < len(c.Assertions)-1 {
-				b.WriteString("\n")
-			}
-		}
-		add(fmt.Sprintf("assertions (%d)", len(c.Assertions)), b.String())
 	} else {
-		add("assertions", "(none yet — add them once a run has shown what good looks like)")
+		c := s.Skill(e.Skill).Output.Evals[e.Index]
+		v.title = fmt.Sprintf("%s case #%d · %s", e.Skill, c.ID, c.Slug)
 	}
-	if len(c.Files) > 0 {
-		add("files", strings.Join(c.Files, "\n"))
-	} else {
-		add("files", "(none — the run root starts empty)")
+	lines := recordLines(s, e, max(30, width-6))
+	if len(lines) > 0 && lines[0] == "" {
+		lines = lines[1:] // the document's first section needs no gap above it
 	}
-	dir := s.FixtureDir(sk.Name, c.Slug)
-	if files := s.FixtureFiles(sk.Name, c.Slug); files != nil {
-		add("fixture dir "+dir, strings.Join(files, "\n"))
-	} else {
-		add("fixture dir", dir+"\n(absent)")
-	}
-	if len(c.Extra) > 0 {
-		add("extra keys (preserved on save)", strings.Join(keysOf(c.Extra), ", "))
-	}
+	v.lines = lines
 	return v
 }
 
@@ -305,6 +377,11 @@ func (m *Model) updateViewer(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	h := max(4, m.height-6)
 	switch msg.String() {
+	case "a":
+		// A report and its activity log are two views of one run; read the other one from here.
+		if v.run != nil {
+			m.openRunActivity(*v.run)
+		}
 	case "esc", "q", "v":
 		// A live activity tail belongs to the run table it came from.
 		if v.kind == "activity" && m.runActive {

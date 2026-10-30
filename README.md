@@ -53,54 +53,95 @@ checkable against what the old loop produced.
 
 ## TUI
 
-It opens on the skill list — one line per stage skill, the thing you actually work on:
+It opens on the skill list — one line per stage skill, the thing you actually work on — and the row
+under the cursor is spelled out underneath it:
 
 ```
-   SKILL                     CASES     ASR   FIXTURE     TRIGGER  HEALTH
-   · all skills                 12    0/12    10·47f    32·17/15  2 warning(s)
-   av-production                 3     0/3     3·10f      10·5/5  clean
-   learning-path                 2     0/2     2·18f       1·1/0  1 warning(s)
-   slide-builder                 5     0/5     5·19f      11·6/5  1 warning(s)
-   source-research               2     0/2         —      10·5/5  clean
+evalctl v0.6.0  all skills  12 cases · 32 queries
+presentation-skill  4 skill(s)  2 warnings
+  SKILL                  CASES GRADED FIXT FILES TRIG+ TRIG- HEALTH
+▸ all skills                12   0/12   10    47    17    15 2 warnings
+  av-production              3    0/3    3    10     5     5 ok
+  learning-path              2    0/2    2    18     1     0 1 warning
+  slide-builder              5    0/5    5    19     6     5 1 warning
+  source-research            2    0/2    0     0     5     5 ok
+
+── slide-builder ─────────────────────────────────────────────────────────────
+5 cases · 0/5 graded · 0 assertions · 5 fixture dirs · 19 files · 11 trigger rows · 6 yes · 5 no
+
+FINDINGS (1)
+! output #4 sb-4-agentskills
+  expected_output is empty: grading has nothing to check against
 ```
 
-`CASES` is the cases the skill owns, `ASR` how many of them carry assertions, `FIXTURE` the dirs
-and files they stage, `TRIGGER` the rows that test its description (`total · should/should-not`),
-and `HEALTH` the validation findings that belong to this skill — its own cases and its own
-queries. The first row is `· all skills`, the unscoped two-lane view. Every number is counted from
-the tree in memory, so an unsaved edit shows up here before it is written.
+`CASES` is the cases the skill owns, `GRADED` how many of them carry assertions, `FIXT`/`FILES` the
+fixture dirs they stage and what is in them, `TRIG+`/`TRIG-` the trigger rows that test its
+description, and `HEALTH` the validation findings that belong to this skill. The first row is
+`· all skills`, the unscoped two-lane view. Every number is counted from the tree in memory, so an
+unsaved edit shows up here before it is written.
 
-`enter` opens a skill: its output cases (on the case lane — the thing a skill is worked on for),
-with its trigger queries one `tab` away and both counts in the header. Nothing else is in the
-list; `esc` goes back.
+The block under the list is the row under the cursor said out loud: the counts spelled out, and the
+findings `HEALTH` collapses into "1 warning" — which is the only thing on this screen that was
+behind a number. `j`/`k` move it, and on a terminal too short for it the block gives way to the key
+line rather than pushing it off. Narrow terminals drop whole columns by importance (`FILES` first,
+then `FIXT`, then the should-trigger split) instead of clipping the row.
+
+`enter` opens a skill on its **cases** tab: the output cases are what a skill is worked on for, and
+its trigger queries and its results are the two tabs beside it. Nothing else is in the list; `esc`
+goes back.
+
+### The tabs
+
+A scope — a skill, or `· all skills` — has three views, and `tab` / `shift+tab` walk them in both
+directions. They share the frame, the header, the status line and the keys that mean the same thing
+everywhere; only the body and the verbs in the footer change.
+
+```
+evalctl v0.6.0  slide-builder  [output cases 5]  trigger queries 11   results 3
+                      ↑ the tab you are on        ↑ its count      ↑ a run in flight shows ⟳
+```
+
+| tab | what it is | writable |
+|---|---|---|
+| `output cases` | the cases the skill is graded on | yes |
+| `trigger queries` | the rows that test its description | yes |
+| `results` | the iterations measured against them | no — read, open, promote, run again |
+
+Each tab keeps its own cursor, so switching away and back leaves you where you were. `L` is the
+results tab on the front door only; inside a scope `tab` is the one way across, and `l` is therefore
+never one keystroke away from meaning something else.
 
 | key | action |
 |---|---|
 | `j k ↑ ↓` `enter` | skill list: move / open a skill (`· all skills` = every skill) |
-| `esc` | back to the skill list (after it has cleared a column focus, the help, or a selection) |
-| `tab` | switch lane inside the scope (output cases / trigger queries) |
-| `j k ↑ ↓` `g G` `ctrl+d ctrl+u` | in a lane: move / top / bottom / half page |
+| `tab` `shift+tab` | walk the scope's tabs — cases → queries → results, and back |
+| `esc` | one level up. The footer names the level: `esc clear column`, `esc clear selection`, `esc skills` — and esc does exactly that one thing |
+| `j k ↑ ↓` `home G` `ctrl+d ctrl+u` | in a tab: move / first / last / half page |
 | `space` | select row and advance — the trim gesture |
-| `a` / `A` `esc` | select all visible / clear selection |
+| `a` / `A` | select all visible / clear selection |
 | `/` | search query, prompt, slug, why, assertion, skill (esc clears) |
-| `f` `F` | cycle skill filter forward / back (unscoped view only — inside a skill the scope is the
-skill and `esc` is how you change it) |
-| `s` `l` | cycle split / label filter (trigger lane) |
+| `f` `F` | cycle skill filter forward / back (unscoped view only — inside a skill the scope is the skill and `esc` is how you change it) |
+| `s` `l` | cycle split / label filter (queries tab) |
 | `u` | show only near-duplicate rows — the trim shortlist |
-| `1`–`6` | focus a column of this lane (`0` / `esc` drops it) — see columns below |
-| `o` `g` | with a column focused: sort by it (asc → desc → file order) · group by it |
+| `1`–`6` | focus a column of this tab (`0` / `esc` drops it) — see columns below |
+| `o` `g` | with a column focused: sort by it (asc → desc → file order) · group by it. `g` groups and nothing else — `home` is the first row |
 | `e` `enter` | edit the focused row |
-| `n` | new row in this lane |
+| `n` | new row in this tab's lane |
 | `d` `x` | delete selection (or the focused row); confirmation screen, `f` toggles deleting fixture dirs too |
-| `v` | full text of the focused row |
+| `v` | the focused row in full, at the width of the window — the pane shows it already when it fits |
 | `ctrl+v` | the validation findings, scrollable |
 | `ctrl+s` | write both lanes (atomic; previous bytes in `.evalctl/backups/`) |
 | `R` | **run** what is selected (or the whole lane) — form, then `enter` |
-| `c` | **chain / reference**: promote a run's output into the next stage's fixture, or into the skill's own `references/` — form, then `enter` (output lane) |
-| `t` | **to trigger**: the focused case's prompt becomes a trigger query — written at once (output lane) |
-| `L` | **results** of this scope: inside a skill its own iterations, on the skill list every skill's — `enter` opens the `report.md` rendered (markdown, re-wrapped to the window), `a` its activity logs |
+| `c` | **chain / reference**: promote a run's output into the next stage's fixture, or into the skill's own `references/` — form, then `enter` (cases and results tabs) |
+| `t` | **to trigger**: the focused case's prompt becomes a trigger query — written at once (cases tab) |
 | `P` | **profiles**: check the four sandboxes, `u` runs `ensure` on what fails |
 | `?` | help · `q` quit (asks once if there are unsaved changes or a run is going) |
+
+On the **results** tab the verbs are only the ones a read-only view can honour — `enter` (the
+report the iteration wrote, rendered; `a` inside it switches to that run's activity log), `c`
+(promote its output), `r` (re-read `results/` for iterations finished elsewhere), `R`, `tab`, `?`.
+There is no select, edit, new or delete there: results are what a run wrote, and the way to change
+them is to change the set and run again.
 
 The header carries the scope and both lanes of it, so the state is legible without a keystroke:
 
@@ -109,12 +150,56 @@ evalctl v0.6.0  ◆ av-production  [output cases 3]  trigger queries 10
 /Users/…/presentation-skill  3 of 3  clean
 ```
 
+### The frame
+
+The view is anchored to the terminal, not to the data: two header rows, the column head, the body,
+then the key line and the status line — and the status line is the **last row of the window**,
+whatever the list's length. Filtering down to two rows does not lift the footer up the screen; the
+empty rows below are the frame.
+
+Width is spent in the order the table asks for it: the columns the lane has, then a readable
+measure of the text column (capped at 96 cells — a query read across 200 columns is scanned, not
+read), then, **only while width is left over after both, a detail pane** on the right of a divider:
+
+```
+ID SKILL            TRIG SPLIT      DUP QUERY                                    │ ROW 4 · source-research
+   1 source-research yes  train    -   New masterclass on Kubernetes operato…   │ ──────────────────────────
+▸  4 source-research yes  train    -   MC-kubernetes-operators already has a…  │ yes · train
+   5 source-research yes  validation - Scrap the solar-efficiency research, …   │
+                                                                               │ QUERY
+                                                                               │ MC-kubernetes-operators already
+                                                                               │ has a PS.md from last month. …
+                                                                               │ WHY
+                                                                               │ extend an existing PS.md, not
+                                                                               │ build a new one
+─────────────────────────────────────────────────────────────────────────────────────────────────────
+space select · e edit · / search · tab lane · ctrl+s save · ? keys · q quit             4 / 32
+```
+
+The pane follows the cursor and holds **the whole record**, not a summary of it: the text, the
+`expected_output`, the assertions numbered, the declared files, the fixture dir as it stands on
+disk, the preserved extra keys, the near-twin cluster — and anything validation says about that row,
+in the colour it said it. It is the same document `v` opens at the width of the window, from the
+same function, so the two cannot drift; `v` survives for the record that will not fit in the pane,
+and the pane says so and names the key when it cuts one. There is no breakpoint constant: the pane
+appears at the width where the table and the text measure stop needing the surplus, which is later
+for the six-column output lane than for the five-column trigger lane. Below that width nothing is
+hidden — the text column takes the whole width and the pane simply does not exist. Scroll keys never
+touch the pane; `j`/`k` move the row it describes.
+
+The skill list has the same frame and the same split, turned the other way: it is five rows of table
+in a window four times that tall, so the detail (the selected skill's counts and findings) is a block
+**under** the list, where the emptiness is. A pane beside five short rows would have been a tall empty
+column.
+
 `R` in a skill's view runs that skill's lane: the selection, or every row of *that skill* — the
 list on screen is the filter, so the form says exactly what it will measure.
 
 Nothing in the set files is written until `ctrl+s`. Deleting a row leaves its fixture dir alone
 unless you toggle it in the confirmation screen, and every write first copies the old file to
-`.evalctl/backups/`.
+`.evalctl/backups/`. `esc` in a form is the one way to lose typing, so an edited form asks once
+before it goes (`esc again discards your edits`); an untouched one leaves at once. The status line
+reports what just happened and is cleared by the next move, so it is never a stale claim.
 
 ### Column functions
 
@@ -138,11 +223,15 @@ map.
 | `0` `esc` | drop the focus; the sort and the grouping stay until you cycle them off |
 
 ```
-── skill alpha · 2 ─────────────────────────────────────────────
-▸ [ ] 1    alpha    yes  train   -    research the operator pattern …
-  [ ] 2    alpha    no   train   -    paste the three numbers here …
-── skill beta · 2 ──────────────────────────────────────────────
+── skill alpha · 2 ─────────────────────────────
+▸    1 alpha    yes  train      -  research the operator pattern …
+     2 alpha    no   train      -  paste the three numbers here …
+── skill beta · 2 ──────────────────────────────
+     3 beta     yes  validation -  turn the research into a teaching order …
 ```
+
+The sections are drawn over the rows, not interleaved into the row space: `j` walks rows and never
+lands on a header.
 
 Sorting and grouping are the view only. The row key (`lane|skill|index`) never changes, so a
 selection, a delete, a chain or a run acts on the same rows in any order — the header's filter
@@ -199,7 +288,7 @@ result and cost, `│` the agent's own streamed prose — coalesced, because the
 per token. Every line carries `+seconds` since the arm started.
 
 The same lines are written to `activity.log` next to `stream.jsonl`, so a finished run can be read
-back: `L` → `a` shows every arm's log in one pane. The file is the evidence and the log is the
+back: the results tab → `enter` → `a` shows every arm's log in one pane. The file is the evidence and the log is the
 narrative; nothing about how the arm launches changes, and a log that cannot be written never
 fails an arm.
 
@@ -208,18 +297,27 @@ the prose, `tools` keeps only the calls, `off` writes no log and emits nothing.
 
 ### Results, per skill
 
-`L` shows the iterations of the scope you are in — the same rule as the case lanes, so there is
-never one list of everybody's runs to sort out by eye:
+The results **tab** shows the iterations of the scope you are in — the same rule as the case lanes,
+so there is never one list of everybody's runs to sort out by eye:
 
 ```
-results · slide-builder · 3 iterations
-  RUN              LANE       CASES  RUNS   PASS  STARTED
-▸ iteration-5      output         5     2    100%  2026-10-24 11:02
-  trigger-7        trigger        1     3    100%  2026-10-24 09:41
-  trigger-4        trigger       10     3     90%  2026-10-22 16:20
+  RUN              LANE    CASES RUNS  PASS STARTED           │ slide-builder@iteration-5
+▸ iteration-5      output      5    2  100% 2026-10-24 11:02  │ ──────────────────────────────
+  trigger-7        trigger     1    3  100% 2026-10-24 09:41  │ lane        output
+  trigger-4        trigger    10    3   90% 2026-10-22 16:20  │ cases       5
+                                                             │ judged      5 of 5
+                                                             │ pass        100% (5/5 passed)
+                                                             │ PATH
+                                                             │ slide-builder-workspace/
+                                                             │   iteration-5
 ```
 
-From the `· all skills` row it is the unscoped two-lane list, with a `SKILL` column back in.
+`enter` opens the `report.md` that iteration wrote, rendered and re-wrapped to the window (`a`
+inside it switches to the run's activity log — one run, two views). The pane is the iteration
+under the cursor read properly: what it measured, how it scored, where it lives.
+
+On the front door (`L`) it is the unscoped list of every iteration, with a `SKILL` column back in —
+the same tab, in the all-skills scope.
 
 The output lane needs no translation: an iteration lives in one skill's workspace. The trigger lane
 does — `trigger-workspace/` is bundle-level, so one iteration covers several skills at once. Each
