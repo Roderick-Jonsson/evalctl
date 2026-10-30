@@ -13,6 +13,8 @@ import (
 	"github.com/charmbracelet/glamour/styles"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
+
+	"evalctl/internal/theme"
 )
 
 // MinWidth is the narrowest wrap the renderer accepts. Below it a table stops being a table and
@@ -27,42 +29,45 @@ const DefaultWidth = 100
 const Indent = 2
 
 // Styles is glamour's dark theme with evalctl's palette and a tighter document frame: the
-// yellow-on-purple h1 badge is replaced by a plain bold title, and headings step down through
-// the blue/magenta the table columns already use.
+// yellow-on-purple h1 badge is replaced by a plain bold title, and headings step down through the
+// accent and label colours the table columns already use. Colours go in as xterm-256 indices
+// rather than hex (see theme.Palette.ANSI256): the renderer is pinned to 256 colours, and this
+// package's mapping is the perceptually nearest entry, not the default converter's guess.
 func Styles() glamansi.StyleConfig {
+	p := theme.Current()
 	cfg := styles.DarkStyleConfig
-	cfg.Document.Color = str("252")
+	cfg.Document.Color = str(p.ANSI256(p.Text))
 	cfg.Document.Margin = uintp(Indent)
 
 	cfg.H1 = glamansi.StyleBlock{
 		StylePrimitive: glamansi.StylePrimitive{
 			BlockSuffix: "\n",
-			Color:       str("15"),
+			Color:       str(p.ANSI256(p.Text)),
 			Bold:        boolp(true),
 		},
 	}
 	cfg.Heading.BlockSuffix = "\n"
-	cfg.Heading.Color = str("12")
+	cfg.Heading.Color = str(p.ANSI256(p.Accent))
 	cfg.Heading.Bold = boolp(true)
-	cfg.H2 = glamansi.StyleBlock{StylePrimitive: glamansi.StylePrimitive{Prefix: "▍ ", Color: str("12"), Bold: boolp(true)}}
-	cfg.H3 = glamansi.StyleBlock{StylePrimitive: glamansi.StylePrimitive{Prefix: "▸ ", Color: str("13"), Bold: boolp(true)}}
-	cfg.H4 = glamansi.StyleBlock{StylePrimitive: glamansi.StylePrimitive{Prefix: "  ", Color: str("252")}}
-	cfg.H5 = glamansi.StyleBlock{StylePrimitive: glamansi.StylePrimitive{Prefix: "  ", Color: str("245")}}
-	cfg.H6 = glamansi.StyleBlock{StylePrimitive: glamansi.StylePrimitive{Prefix: "  ", Color: str("243"), Bold: boolp(false)}}
+	cfg.H2 = glamansi.StyleBlock{StylePrimitive: glamansi.StylePrimitive{Prefix: "▍ ", Color: str(p.ANSI256(p.Accent)), Bold: boolp(true)}}
+	cfg.H3 = glamansi.StyleBlock{StylePrimitive: glamansi.StylePrimitive{Prefix: "▸ ", Color: str(p.ANSI256(p.Accent2)), Bold: boolp(true)}}
+	cfg.H4 = glamansi.StyleBlock{StylePrimitive: glamansi.StylePrimitive{Prefix: "  ", Color: str(p.ANSI256(p.Text))}}
+	cfg.H5 = glamansi.StyleBlock{StylePrimitive: glamansi.StylePrimitive{Prefix: "  ", Color: str(p.ANSI256(p.Muted))}}
+	cfg.H6 = glamansi.StyleBlock{StylePrimitive: glamansi.StylePrimitive{Prefix: "  ", Color: str(p.ANSI256(p.Faint)), Bold: boolp(false)}}
 
-	cfg.Strong = glamansi.StylePrimitive{Bold: boolp(true), Color: str("15")}
-	cfg.Emph = glamansi.StylePrimitive{Italic: boolp(true), Color: str("252")}
-	cfg.HorizontalRule = glamansi.StylePrimitive{Color: str("237"), Format: "\n--------\n"}
+	cfg.Strong = glamansi.StylePrimitive{Bold: boolp(true), Color: str(p.ANSI256(p.Text))}
+	cfg.Emph = glamansi.StylePrimitive{Italic: boolp(true), Color: str(p.ANSI256(p.Muted))}
+	cfg.HorizontalRule = glamansi.StylePrimitive{Color: str(p.ANSI256(p.Border)), Format: "\n--------\n"}
 	cfg.Item = glamansi.StylePrimitive{BlockPrefix: "• "}
-	cfg.Link = glamansi.StylePrimitive{Color: str("12"), Underline: boolp(true)}
-	cfg.LinkText = glamansi.StylePrimitive{Color: str("12"), Bold: boolp(true)}
+	cfg.Link = glamansi.StylePrimitive{Color: str(p.ANSI256(p.Accent)), Underline: boolp(true)}
+	cfg.LinkText = glamansi.StylePrimitive{Color: str(p.ANSI256(p.Accent)), Bold: boolp(true)}
 	cfg.Code = glamansi.StyleBlock{StylePrimitive: glamansi.StylePrimitive{
-		Prefix: " ", Suffix: " ", Color: str("3"), BackgroundColor: str("236"),
+		Prefix: " ", Suffix: " ", Color: str(p.ANSI256(p.CodeFG)), BackgroundColor: str(p.ANSI256(p.CodeBG)),
 	}}
-	cfg.CodeBlock.Color = str("245")
+	cfg.CodeBlock.Color = str(p.ANSI256(p.Muted))
 	cfg.CodeBlock.Margin = uintp(Indent)
 	cfg.Table = glamansi.StyleTable{
-		StyleBlock: glamansi.StyleBlock{StylePrimitive: glamansi.StylePrimitive{Color: str("250")}},
+		StyleBlock: glamansi.StyleBlock{StylePrimitive: glamansi.StylePrimitive{Color: str(p.ANSI256(p.Text))}},
 	}
 	cfg.Table.RowSeparator = str("─")
 	cfg.Table.ColumnSeparator = str("│")

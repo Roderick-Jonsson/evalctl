@@ -10,7 +10,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"evalctl/internal/store"
 )
@@ -275,11 +274,7 @@ func searchPlaceholder(skill string) string {
 
 // ---------------------------------------------------------------- view
 
-var (
-	colCases = lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
-	colAsr   = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	colNone  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-)
+// colCases/colAsr/colNone are styled in theme.go.
 
 func (m *Model) skillsView() string {
 	if m.help {
@@ -306,7 +301,7 @@ func (m *Model) skillsView() string {
 	for i := st.offset; i < end; i++ {
 		line := m.skillLine(rows[i])
 		if i == st.cursor {
-			line = styleCur.Render(line)
+			line = selected(line)
 		}
 		b.WriteString(line)
 		b.WriteString("\n")

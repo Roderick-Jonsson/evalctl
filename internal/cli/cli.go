@@ -46,6 +46,7 @@ const usage = `evalctl — manage and run the eval sets: trigger queries and out
   evalctl runs                     iterations per skill workspace, with pass rates
   evalctl report <run>             print an iteration's report.md, rendered (--raw for the source)
   evalctl profiles [cmd]           status/check/ensure/render/sync/scrub the eval profiles
+  evalctl theme [name]             the colour schemes, with each role's contrast on its background
 
 Run flags: --skill, --case, --iteration, --arms, --model, --budget, --resume, --force,
            --no-verify, --isolate=false, --dry-run, --list, --log full|tools|off
@@ -55,12 +56,19 @@ Trigger:   --query, --split, --runs, --threshold, --max-turns (same shared flags
 the same lines to activity.log beside stream.jsonl; tools drops the prose, off writes nothing.
 
 Global: --root DIR (default: nearest dir with the eval tree, or $EVALCTL_ROOT)
+         --theme NAME (auto, midnight, high-contrast, daylight; or $EVALCTL_THEME)
 Refs:   12 --lane trigger | t12 | trigger:12 | o:slide-builder:3 | slide-builder:3
 Every write to the sets is atomic and leaves a copy in .evalctl/backups/.
 `
 
 // Run dispatches a command line and returns the process exit code.
 func Run(args []string) int {
+	// Colour is process-wide, so the global --theme is taken out here, before any flag set sees
+	// it: one flag works on every command, and $EVALCTL_THEME is the way to make it stick.
+	name, args := takeTheme(args)
+	if err := resolveTheme(name); err != nil {
+		return fail(err)
+	}
 	if len(args) == 0 {
 		return runTUI(nil, store.LaneTrigger)
 	}
@@ -112,6 +120,8 @@ func Run(args []string) int {
 		return runReport(rest)
 	case "profiles", "profile":
 		return runProfiles(rest)
+	case "theme", "themes", "colour", "color":
+		return runTheme(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "evalctl: unknown command %q\n\n%s", cmd, usage)
 		return 2
@@ -197,18 +207,7 @@ func fail(err error) int {
 	return 2
 }
 
-var (
-	styleDim    = lipgloss.NewStyle().Faint(true)
-	styleHead   = lipgloss.NewStyle().Bold(true).Underline(true)
-	styleYes    = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	styleNo     = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	styleDupe   = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	styleChange = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	styleErr    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	styleWarn   = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	styleTitle  = lipgloss.NewStyle().Bold(true)
-	styleGroup  = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
-)
+// The CLI's style table lives in theme.go, built from the active palette.
 
 func labelStyled(label string) string {
 	switch label {

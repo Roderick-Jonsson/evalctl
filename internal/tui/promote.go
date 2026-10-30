@@ -76,9 +76,7 @@ type promoteState struct {
 
 type promoRow struct{ label, value string }
 
-// promoNote is colDupe without its fixed width: the table's column style would reflow a sentence
-// into four-character fragments inside the form's box.
-var promoNote = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+// promoNote (colDupe without its fixed width) is styled in theme.go.
 
 // openPromote starts the form from where the cursor is: the newest output iteration, the focused
 // case inside it if that case ran there, and the stage *after* the one that produced it.

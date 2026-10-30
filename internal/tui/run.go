@@ -885,7 +885,7 @@ func (m *Model) runsView() string {
 			line := fmt.Sprintf("%s%-16s %-16s %-8s %-6d %-6d %-14s %s", mark, workspace, info.Name,
 				info.Lane, info.Cases, info.Runs, pass, info.Started)
 			if i == list.cursor {
-				line = styleCur.Render(line)
+				line = selected(line)
 			}
 			b.WriteString(line + "\n")
 		}

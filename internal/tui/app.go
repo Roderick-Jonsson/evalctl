@@ -16,6 +16,7 @@ import (
 
 	"evalctl/internal/runner"
 	"evalctl/internal/store"
+	"evalctl/internal/theme"
 	"evalctl/internal/version"
 )
 
@@ -90,6 +91,9 @@ type Model struct {
 // list — the choice that comes before any lane — and lane only decides what the unscoped view
 // shows once you pick "all skills".
 func Run(s *store.Store, skill, lane string) int {
+	// The palette is process state (the style table was built at startup); honour it here too so
+	// a caller that resolved a theme after import — the CLI does — is drawn with it.
+	applyStyles(theme.Current())
 	m := newModel(s, lane)
 	if skill != "" {
 		m.enterSkill(skill)
@@ -759,37 +763,7 @@ func (m *Model) dropLaneColumns() {
 
 // ---------------------------------------------------------------- view
 
-var (
-	colSkill   = lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Width(20)
-	colID      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	colSlug    = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Width(24)
-	colYes     = lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Width(4)
-	colNo      = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Width(4)
-	colSplit   = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Width(11)
-	colDupe    = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Width(4)
-	styleOn    = lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true)
-	styleOff   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	styleCur   = lipgloss.NewStyle().Background(lipgloss.Color("237"))
-	box        = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("237"))
-	statusOk   = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	statusBad  = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	titleStyle = lipgloss.NewStyle().Bold(true)
-	dimStyle   = lipgloss.NewStyle().Faint(true)
-	// activityTool colours the tool-call lines of a live activity log.
-	activityTool = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	// Header states: focus, sort and group are shown by styling the column's own header cell,
-	// which keeps the header aligned with the rows below it.
-	headerFocus = lipgloss.NewStyle().Bold(true).Underline(true).Foreground(lipgloss.Color("15"))
-	headerSort  = lipgloss.NewStyle().Underline(true)
-	headerGroup = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true)
-	// The two lanes of the current scope, drawn in the header as a switch.
-	tabActive  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	tabIdle    = lipgloss.NewStyle().Faint(true)
-	styleGroup = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
-	// badgeWarn has no width on purpose: colDupe is a 4-cell column style, and wrapping a
-	// sentence in it folds the header one character per line.
-	badgeWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-)
+// The style table lives in theme.go: every name used below is a role in the active palette.
 
 func (m *Model) View() string {
 	if m.width == 0 {
@@ -861,7 +835,7 @@ func (m *Model) listView() string {
 		}
 		line := m.rowLine(it.row, m.rows[it.row])
 		if it.row == m.cursor {
-			line = styleCur.Render(line)
+			line = selected(line)
 		}
 		b.WriteString(line)
 		b.WriteString("\n")

@@ -384,6 +384,41 @@ In the TUI it is `t` on an output case: no form, since the row is entirely deriv
 `trigger-evals.json` at once and refuses while a run is going (the run is reading that file) or
 edits are unsaved (the write would carry them along).
 
+## Colour
+
+Views never name a colour, they name a role — `Text`, `Muted`, `Faint`, `Accent`, `Accent2`, `OK`,
+`Warn`, `Err`, `Border`, `Sel`, `CodeBG`/`CodeFG` — and `internal/theme` decides what each role is.
+Three palettes ship:
+
+| palette | for | held to |
+|---|---|---|
+| `midnight` | a dark terminal (the default) | body text ≥ 7:1, every other role ≥ 4.5:1, borders 1.4–3:1 |
+| `high-contrast` | a bright room, a projector, tired eyes | nothing below 8.8:1 |
+| `daylight` | a light terminal | the same floors, with the hues darkened instead of brightened |
+
+The palette is chosen by asking the terminal for its background colour (OSC 11) and falling back to
+dark; `--theme NAME` or `$EVALCTL_THEME` overrides it, and `evalctl theme` lists the palettes with
+each colour's measured contrast on its own background:
+
+```bash
+evalctl theme                     # the palettes, the roles, the contrast ratios
+evalctl theme high-contrast       # a sample screen drawn in one of them
+export EVALCTL_THEME=daylight     # make it stick
+```
+
+Two things this was written against. First, a terminal's own ANSI palette is not automatically
+readable: on a black background Apple Terminal's blue is `#0000B3` (1.7:1) and its bright blue
+`#0000FF` (2.4:1), which is what a view gets for asking for "12". Second, most terminals here are
+256-colour, not truecolor, so a hex value is approximated — `internal/theme` maps it to the
+perceptually nearest xterm entry in CIE Lab and holds the mapping to the palette's contrast promise,
+instead of taking the default converter's guess (which turns a near-white into a cyan one). Each
+palette colour is an exact xterm-256 entry, so what a 256-colour terminal draws is what the table
+above claims.
+
+The tests hold the palettes to their numbers (`internal/theme/theme_test.go`) and check that the
+three status colours stay apart under simulated protanopia and deuteranopia — colour is never the
+only cue, since `✓`/`✗`, bold and underline carry the same information.
+
 ## What a run writes
 
 ```
