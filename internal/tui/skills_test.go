@@ -137,3 +137,43 @@ func TestEditorWritesAssertions(t *testing.T) {
 		t.Fatalf("row assert count = %d, want 2", m.rows[0].Assert)
 	}
 }
+
+// TestScopeEntryNeverSplitsTheStripFromTheBody: the tab strip names a lane and the body draws one.
+// They drifted once — the aggregate row forced the cases tab while the lane stayed on trigger, so
+// the strip read "output cases" over a table of 32 trigger queries and tab changed the label and
+// nothing else. Every entry path, and every walk of the strip after it, has to leave the two
+// agreeing.
+func TestScopeEntryNeverSplitsTheStripFromTheBody(t *testing.T) {
+	for _, lane := range []string{store.LaneTrigger, store.LaneOutput} {
+		for _, skill := range append([]string{""}, testStore(t).KnownSkills()...) {
+			m := skillModel(t)
+			m.lane = lane
+			m.enterSkill(skill)
+			// A full walk of the strip: each tab is a lane or the results view, and neither may
+			// leave the model pointing at another lane than the one on screen.
+			for step := 0; step < 3; step++ {
+				checkTabMatchesBody(t, m, lane, skill)
+				m.cycleTab(1)
+			}
+		}
+	}
+}
+
+// checkTabMatchesBody is the invariant: on a lane tab, the lane the model edits IS the lane the tab
+// names, and every row drawn belongs to it.
+func checkTabMatchesBody(t *testing.T, m *Model, from, skill string) {
+	t.Helper()
+	if m.tab == tabResults {
+		return // results edits nothing; the lane it remembers is not on screen
+	}
+	if want := m.tab.lane(); m.lane != want {
+		t.Fatalf("lane %q, scope %q: the %s tab draws %q but the model edits %q",
+			from, skill, m.tab, want, m.lane)
+	}
+	for _, e := range m.rows {
+		if e.Lane != m.lane {
+			t.Fatalf("lane %q, scope %q: the %s tab draws a %q row",
+				from, skill, m.tab, e.Lane)
+		}
+	}
+}

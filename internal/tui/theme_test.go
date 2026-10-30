@@ -14,12 +14,15 @@ import (
 // pins the colour profile first: without a terminal, Lip Gloss renders plain text and every
 // assertion here would pass for free.
 func TestStylesFollowPalette(t *testing.T) {
-	was := theme.Current()
+	was, wasProfile := theme.Current(), lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.ANSI256)
 	defer func() {
+		// Profile first, table second: applyStyles caches the cursor band as a raw escape
+		// (selSeq), so rebuilding it under the test profile leaves colour behind in every later
+		// test's rows.
+		lipgloss.SetColorProfile(wasProfile)
 		theme.Set(was)
 		applyStyles(was)
-		lipgloss.SetColorProfile(termenv.Ascii)
 	}()
 
 	for _, p := range theme.Palettes() {
@@ -49,12 +52,15 @@ func TestStylesFollowPalette(t *testing.T) {
 // A cursor row is one band, not a band with holes: Lip Gloss resets at the end of every styled cell,
 // and the background has to be re-opened after each of those resets.
 func TestSelectedRepaintsAfterResets(t *testing.T) {
-	was := theme.Current()
+	was, wasProfile := theme.Current(), lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.ANSI256)
 	defer func() {
+		// Profile first, table second: applyStyles caches the cursor band as a raw escape
+		// (selSeq), so rebuilding it under the test profile leaves colour behind in every later
+		// test's rows.
+		lipgloss.SetColorProfile(wasProfile)
 		theme.Set(was)
 		applyStyles(was)
-		lipgloss.SetColorProfile(termenv.Ascii)
 	}()
 	p, _ := theme.Lookup("midnight")
 	theme.Set(p)

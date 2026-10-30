@@ -121,7 +121,7 @@ func (m *Model) clampSkillsScroll() {
 
 // skillsHeight is the room the rows get, under the same frame as a lane view: header (2), the
 // list's own head (1), then the hint and the status on the last two rows of the window.
-func (m *Model) skillsHeight() int { return max(1, m.height-5) }
+func (m *Model) skillsHeight() int { return gridBody(m.height) }
 
 func (m *Model) updateSkills(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	st := m.skills
@@ -255,15 +255,22 @@ func (m *Model) enterSkill(name string) {
 	m.search.SetValue("")
 	m.search.Placeholder = "search " + searchPlaceholder(name)
 	m.cursor, m.offset = 0, 0
-	// Entering a scope lands on its cases: that is the lane a skill is worked on for, and the tab
-	// you were in last time belongs to the last scope, not this one.
-	m.tab = tabCases
-	m.tabCursor, m.tabOffset = [3]int{}, [3]int{}
-	m.mode = screenList
-	m.returnTo = screenList
-	if name != "" {
+	// The tab strip and the body are ONE fact: the strip names a lane, so the body has to be that
+	// lane. Deriving the tab from the lane here (never the other way round) is what keeps them
+	// from drifting: they did once — the aggregate row forced the cases tab while the lane stayed
+	// on trigger, so the strip promised "output cases" over a table of 32 trigger queries and tab
+	// did nothing but relabel the strip.
+	//
+	// A named skill is worked on for its cases. The aggregate keeps the lane the caller asked for,
+	// because --lane is the only thing that says what an unscoped view shows.
+	if name != "" || m.lane == "" {
 		m.lane = store.LaneOutput
 	}
+	m.tab = tabOfLane(m.lane)
+	m.tabCursor, m.tabOffset = [3]int{}, [3]int{}
+	m.paneFocus, m.paneTop = false, 0
+	m.mode = screenList
+	m.returnTo = screenList
 	m.refresh()
 	// The results tab's count is part of the header, so the iterations behind it are read once on
 	// arrival rather than on every repaint.
@@ -283,7 +290,7 @@ func searchPlaceholder(skill string) string {
 
 // ---------------------------------------------------------------- view
 
-// colCases/colAsr/colNone are styled in theme.go.
+// colCases/colAsr are styled in theme.go.
 
 func (m *Model) skillsView() string {
 	if m.help {
@@ -292,9 +299,10 @@ func (m *Model) skillsView() string {
 	st := m.skills
 	rows := st.filtered()
 
-	lines := append(m.headerLines(), strings.Repeat(" ", rowGutter)+dimStyle.Render(m.skillHead()))
+	head := append(m.headerLines(), strings.Repeat(" ", rowGutter)+dimStyle.Render(m.skillHead()))
+	var body []string
 	if len(rows) == 0 {
-		lines = append(lines, "  "+dimStyle.Render("no skill matches"))
+		body = append(body, "  "+dimStyle.Render("no skill matches"))
 	}
 	end := min(len(rows), st.offset+m.skillsHeight())
 	for i := st.offset; i < end; i++ {
@@ -302,7 +310,7 @@ func (m *Model) skillsView() string {
 		if i == st.cursor {
 			line = selected(line)
 		}
-		lines = append(lines, line)
+		body = append(body, line)
 	}
 
 	// The detail block fills the rows the list does not. This screen is five rows of table in a
@@ -310,14 +318,10 @@ func (m *Model) skillsView() string {
 	// that is currently behind a number. It sits under the list, not beside it: the emptiness here
 	// is vertical, a right-hand pane would be a tall empty column against five short rows, and
 	// findings are prose, not a column of values.
-	if room := m.height - len(lines) - 2; room >= 4 {
-		lines = append(lines, m.skillsDetail(rows, room)...)
+	if room := m.skillsHeight() - len(body); room >= 4 {
+		body = append(body, m.skillsDetail(rows, room)...)
 	}
-	for len(lines) < m.height-2 {
-		lines = append(lines, "")
-	}
-	lines = append(lines, m.skillsHint(), m.skillsStatus())
-	return strings.Join(lines, "\n")
+	return fitView(head, body, []string{m.skillsHint(), m.skillsStatus()}, m.height)
 }
 
 // skillsDetail is the selected skill spelled out: the counts its one line compresses, then the
@@ -351,7 +355,7 @@ func (m *Model) skillsDetail(rows []skillRow, room int) []string {
 
 	if len(out) > room {
 		out = out[:room]
-		out[room-1] = dimStyle.Render("…")
+		out[room-1] = dimStyle.Render(glyphs.Ellipsis)
 	}
 	return out
 }
@@ -359,11 +363,12 @@ func (m *Model) skillsDetail(rows []skillRow, room int) []string {
 // detailRule is the section header over the block: a rule that carries the name it belongs to.
 // A rule with nothing on it is the one kind of border this tool does not draw.
 func detailRule(name string, w int) string {
-	label := "── " + name + " "
+	rule := strings.Repeat(glyphs.Rule, 2)
+	label := rule + " " + name + " "
 	if n := w - len([]rune(label)); n < 0 {
 		return dimStyle.Render(fitPlain(label, w))
 	} else {
-		return dimStyle.Render("── ") + titleStyle.Render(name) + dimStyle.Render(" "+strings.Repeat("─", n))
+		return dimStyle.Render(rule+" ") + titleStyle.Render(name) + dimStyle.Render(" "+strings.Repeat(glyphs.Rule, n))
 	}
 }
 
@@ -450,9 +455,9 @@ func (m *Model) skillLine(r skillRow, isCursor bool) string {
 	mark := "  "
 	switch {
 	case isCursor:
-		mark = cursorMark.Render("▸ ")
+		mark = cursorMark.Render(glyphs.Cursor)
 	case r.sum.Skill == m.skill && !r.all && m.skill != "":
-		mark = selMark.Render("▪ ")
+		mark = selMark.Render(glyphs.Selected)
 	}
 
 	graded := "-"
@@ -538,7 +543,7 @@ func (m *Model) skillsStatus() string {
 		status += "  " + badgeWarn.Render("unsaved — ctrl+s writes")
 	}
 	if m.runActive {
-		status += "  " + tabActive.Render("⟳ run in progress — R opens the table")
+		status += "  " + tabActive.Render(glyphs.Running+" run in progress — R opens the table")
 	}
 	return status
 }
@@ -552,14 +557,4 @@ func (m *Model) skillsPosition() string {
 		return "0 / 0"
 	}
 	return fmt.Sprintf("%d / %d", m.skills.cursor+1, n)
-}
-
-// truncateRunes cuts a cell on rune boundaries; the skill names here are directories, so they
-// are plain but never guaranteed to be short.
-func truncateRunes(s string, width int) string {
-	r := []rune(s)
-	if len(r) <= width {
-		return s
-	}
-	return string(r[:width-1]) + "…"
 }

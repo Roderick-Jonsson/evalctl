@@ -6,6 +6,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -110,6 +111,12 @@ type Model struct {
 
 	search    textinput.Model
 	searching bool
+	// paneFocus is where the keystrokes go: the table, or the detail pane beside it. There is one
+	// cursor and two places to point it at — the row, or the record that row holds — and the seam
+	// between them shows which. paneTop is how far into that record the pane is scrolled; it goes
+	// back to the top whenever the list moves under it.
+	paneFocus bool
+	paneTop   int
 
 	width, height int
 	mode          screen
@@ -132,7 +139,6 @@ type Model struct {
 	runEvents chan runner.Event
 	help      bool
 	helpTop   int // first key-map line on screen
-	quit      bool
 	quitArmed bool
 
 	issues []store.Issue
@@ -141,10 +147,17 @@ type Model struct {
 // Run starts the TUI and returns the process exit code. With no skill it opens on the skill
 // list — the choice that comes before any lane — and lane only decides what the unscoped view
 // shows once you pick "all skills".
-func Run(s *store.Store, skill, lane string) int {
-	// The palette is process state (the style table was built at startup); honour it here too so
-	// a caller that resolved a theme after import — the CLI does — is drawn with it.
+func Run(s *store.Store, skill, lane, glyphProfile string) int {
+	// The palette and the glyph profile are process state (the style table was built at startup);
+	// both are resolved here too so a caller that resolved them after import — the CLI does — is
+	// drawn with what it asked for.
 	applyStyles(theme.Current())
+	g, err := Glyphs(glyphProfile, os.Getenv("LANG"), os.Getenv("LC_CTYPE"), os.Getenv("LC_ALL"))
+	if err != nil {
+		fmt.Println("evalctl tui:", err)
+		return 2
+	}
+	setName(g)
 	m := newModel(s, lane)
 	if skill != "" {
 		m.enterSkill(skill)
@@ -296,6 +309,10 @@ func (m *Model) itemOf(row int) int {
 }
 
 func (m *Model) clampScroll() {
+	// The pane is a window on the CURSOR's row, so any move of the list — a key, a filter, a resize
+	// — puts it back at the top. A window left halfway down the next row's record would be reading
+	// one row and showing another.
+	m.paneTop = 0
 	h := m.listHeight()
 	if h <= 0 {
 		return
@@ -318,12 +335,10 @@ func (m *Model) clampScroll() {
 	}
 }
 
-// listHeight is the rows between the column head and the two footer lines. Every list screen is
-// drawn top-anchored and then padded out to the terminal, so what is on screen never decides where
-// the status line sits: header (2) + column head (1) + body + hint (1) + status (1) = the height.
-func (m *Model) listHeight() int {
-	return max(1, m.height-5)
-}
+// listHeight is the rows between the column head and the two footer lines. The arithmetic lives in
+// layout.go (gridBody), so a screen that adds a row to its head cannot quietly push the status line
+// off the bottom.
+func (m *Model) listHeight() int { return gridBody(m.height) }
 
 // The width the table asks for, in the order it asks for it: the columns it has, then a readable
 // measure of the text column, then — only while width is still left over after both — a pane that
@@ -335,10 +350,13 @@ const (
 	textMin = 80 // below this the text column stops being worth the width it holds
 	paneMin = 28
 	paneMax = 72
-	// paneSep is the divider cell. It is drawn only where a pane stands, so a border never appears
-	// that is not holding two things apart.
-	paneSep = " │ "
 )
+
+// paneSep is the divider cell. It is drawn only where a pane stands, so a border never appears
+// that is not holding two things apart. It is a variable because the glyph profile owns the seam
+// (see glyphs.go): the ASCII profile draws " | " in the same three cells, so every width the frame
+// computes is unchanged by the profile.
+var paneSep = " " + glyphs.Seam + " "
 
 // frame is one list screen's width budget.
 type frame struct {
@@ -418,8 +436,6 @@ func (m *Model) save() {
 	}
 	m.setStatus(msg, false)
 }
-
-func (m *Model) laneCount() int { return len(m.store.Rows(m.lane, store.Filter{})) }
 
 // ---------------------------------------------------------------- update
 
@@ -542,6 +558,21 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	clearStatusOnMove(m, msg)
+
+	// The keys that mean the same thing on every view of a scope come first: the way out, the way
+	// around, save, help, findings, profiles. What is left is the view's own verbs.
+	if model, cmd, handled := m.globalKey(msg); handled {
+		return model, cmd
+	}
+
+	// The pane has the keys: it is a component with its own verbs, and nothing typed while it holds
+	// them may edit a row behind it. Asked after the global keys (so q, ? and tab still work) and
+	// before the column digits (so there is one focus at a time).
+	if m.paneFocus {
+		return m.updatePane(msg)
+	}
+
 	// Number keys focus a column; the header lights up and o / g / / then act on that column. The
 	// results tab has no columns of rows to focus, so a digit there says so rather than doing
 	// nothing.
@@ -552,14 +583,6 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.focusColumn(n)
 		return m, nil
-	}
-
-	clearStatusOnMove(m, msg)
-
-	// The keys that mean the same thing on every view of a scope come first: the way out, the way
-	// around, save, help, findings, profiles. What is left is the view's own verbs.
-	if model, cmd, handled := m.globalKey(msg); handled {
-		return model, cmd
 	}
 
 	// The results tab is a view of the same scope with its own body and its own verbs; it shares the
@@ -708,7 +731,12 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.searching = true
 		m.search.Focus()
 		return m, textinput.Blink
-	case "e", "enter":
+	case "enter":
+		// enter opens the DETAIL, e edits the row: the pane is where a record is read, and it was
+		// behind the same key as the editor, which made it a second way to do something already
+		// bound rather than a place you could go.
+		return m, m.openPane()
+	case "e":
 		e, ok := m.focused()
 		if !ok {
 			return m, nil
@@ -796,6 +824,7 @@ const (
 	escToSkills escLevel = iota
 	escClearSelection
 	escClearColumn
+	escLeavePane
 )
 
 func (m *Model) escLevel() escLevel {
@@ -803,6 +832,8 @@ func (m *Model) escLevel() escLevel {
 		return escToSkills
 	}
 	switch {
+	case m.paneFocus:
+		return escLeavePane
 	case m.focusCol >= 0:
 		return escClearColumn
 	case len(m.chosen) > 0:
@@ -814,6 +845,8 @@ func (m *Model) escLevel() escLevel {
 // escLabel is what esc will do, in the words the footer shows.
 func (m *Model) escLabel() string {
 	switch m.escLevel() {
+	case escLeavePane:
+		return "table"
 	case escClearColumn:
 		return "clear column"
 	case escClearSelection:
@@ -825,6 +858,8 @@ func (m *Model) escLabel() string {
 // escUp does exactly one level of what escLabel said, never two.
 func (m *Model) escUp() (tea.Model, tea.Cmd) {
 	switch m.escLevel() {
+	case escLeavePane:
+		m.leavePane()
 	case escClearColumn:
 		m.focusCol = -1
 		m.setStatus("column focus cleared", false)
@@ -1019,19 +1054,20 @@ func (m *Model) listView() string {
 	if m.help {
 		return m.helpView()
 	}
-	lines := make([]string, 0, m.height)
-	lines = append(lines, m.headerLines()...)
+	head := m.headerLines()
+	var body []string
 	if m.tab == tabResults {
 		f := m.resultsFrame()
-		lines = append(lines, m.resultsHead(f))
-		lines = append(lines, m.resultsBody(f, m.listHeight())...)
+		head = append(head, m.resultsHead(f))
+		body = m.resultsBody(f, m.listHeight())
 	} else {
 		f := m.frame()
-		lines = append(lines, m.columnHead(f))
-		lines = append(lines, m.bodyLines(f, m.listHeight())...)
+		head = append(head, m.columnHead(f))
+		body = m.bodyLines(f, m.listHeight())
 	}
-	lines = append(lines, m.hintFooter(), m.statusFooter())
-	return strings.Join(lines, "\n")
+	// One frame for every tab: the head says what you are looking at, the body is whatever is left,
+	// and the key line and the status own the last two rows. See layout.go.
+	return fitView(head, body, []string{m.hintFooter(), m.statusFooter()}, m.height)
 }
 
 // openResultsScope puts the current scope's results on screen. From the front door that is every
@@ -1052,6 +1088,9 @@ func (m *Model) setTab(t viewTab) {
 	m.tabCursor[m.tab], m.tabOffset[m.tab] = m.cursor, m.offset
 	m.tab = t
 	m.focusCol = -1
+	// A tab is a new body: the pane the keys were in is not on screen any more.
+	m.paneFocus = false
+	m.paneTop = 0
 	m.status = ""
 	if lane := t.lane(); lane != "" {
 		if lane != m.lane {
@@ -1115,6 +1154,7 @@ func (m *Model) bodyLines(f frame, h int) []string {
 	}
 
 	pane := m.paneColumn(f, h)
+	seam, _ := m.seamStyles()
 	out := make([]string, 0, h)
 	for i := 0; i < h; i++ {
 		var line string
@@ -1125,31 +1165,23 @@ func (m *Model) bodyLines(f frame, h int) []string {
 			if i >= len(left) {
 				line = strings.Repeat(" ", f.table)
 			}
-			line += dimStyle.Render(paneSep) + pane[i]
+			line += seam.Render(paneSep) + pane[i]
 		}
 		out = append(out, line)
 	}
 	return out
 }
 
-// paneColumn is the cursor row, read properly: what the row is, then the text that the table has to
-// cut, then the two things the table has no column for at all — why the row exists, and what
-// validation says about it. It is h lines of exactly the pane's width, or nothing when there is no
-// pane. Scrolling never touches it: it follows the cursor, which is the thing you moved.
-func (m *Model) paneColumn(f frame, h int) []string {
-	out := make([]string, h)
-	if f.pane == 0 {
-		return out
-	}
-	e, ok := m.focused()
-	if !ok {
-		return out
-	}
-	w := f.pane
-	var lines []string
-	// The pane's title sits in the column head above (see columnHead), so the body opens with the
-	// rule under it — the same two-row header the table has: names, then a line, then values.
-	lines = append(lines, dimStyle.Render(strings.Repeat("─", w)))
+// paneDoc is the cursor row as a document at the pane's width: what the row is filed under, then the
+// record the table has to truncate, then the findings that belong to it. The rule under the title
+// opens it, because the title itself lives in the column-head row above — the same two-row header
+// the table has: names, then a line, then values.
+//
+// It is the same document v opens at the window's width (recordLines is the one generator), so
+// nothing here is a summary of something v would show. It is also what the pane scrolls: the window
+// is the pane's, the document is the row's, and they are the same lines.
+func (m *Model) paneDoc(e store.Entry, w int) []string {
+	lines := []string{dimStyle.Render(strings.Repeat(glyphs.Rule, w))}
 
 	// The facts the row is filed under, on one line: a label and a split, or a slug and its
 	// assertions. Colour is the table's own — amber for a dupe, because a near-twin is a warning.
@@ -1172,8 +1204,7 @@ func (m *Model) paneColumn(f frame, h int) []string {
 	}
 
 	// The record itself — text, expected output, assertions, files, the fixture dir, preserved
-	// keys — is the same document v opens at full width. The pane is that document read through a
-	// narrow window, so nothing here is a summary of something v would show.
+	// keys — is the same document v opens at full width.
 	rec := recordLines(m.store, e, w)
 	if len(rec) > 0 && rec[0] == "" {
 		rec = rec[1:]
@@ -1184,14 +1215,22 @@ func (m *Model) paneColumn(f frame, h int) []string {
 		lines = append(lines, "")
 		lines = append(lines, issueLines(issues, w, false, 3)...)
 	}
+	return lines
+}
 
-	// The pane is a window, not a document: what does not fit is named, with the key that opens
-	// the whole of it, rather than pushing the footer off the screen.
-	if len(lines) > h {
-		hidden := len(lines) - h + 1
-		lines = lines[:h]
-		lines[h-1] = dimStyle.Render(fmt.Sprintf("… %d more lines · v opens it whole", hidden))
+// paneColumn is the pane's window on that document: h lines of exactly the pane's width, or nothing
+// when there is no pane. It follows the CURSOR — scrolling the list scrolls the pane to the top of
+// the next row — and, when it has the keys, j/k scroll the document inside it.
+func (m *Model) paneColumn(f frame, h int) []string {
+	out := make([]string, h)
+	if f.pane == 0 {
+		return out
 	}
+	e, ok := m.focused()
+	if !ok {
+		return out
+	}
+	lines := paneWindow(m.paneDoc(e, f.pane), m.paneTop, h, "v opens it whole")
 	for i := range out {
 		if i < len(lines) {
 			out[i] = lines[i]
@@ -1257,7 +1296,7 @@ func issueLines(issues []store.Issue, w int, withWhere bool, limit int) []string
 // border that carries nothing costs the reader a scan line per section.
 func (m *Model) groupLine(it listItem) string {
 	label := fmt.Sprintf(" %s · %d ", it.label, it.count)
-	return dimStyle.Render("──") + styleGroup.Render(label)
+	return dimStyle.Render(strings.Repeat(glyphs.Rule, 2)) + styleGroup.Render(label)
 }
 
 // header is the frame the list is read in: three lines — identity, state, and the column head. It
@@ -1317,7 +1356,7 @@ func (m *Model) header() string {
 		line2 += "  " + badgeWarn.Render("unsaved")
 	}
 	if m.runActive {
-		line2 += "  " + tabActive.Render("⟳ run in progress")
+		line2 += "  " + tabActive.Render(glyphs.Running+" run in progress")
 	}
 	if fh := m.filterHint(); fh != "" {
 		line2 += "  " + fh
@@ -1349,7 +1388,7 @@ func (m *Model) tabStrip() string {
 		}
 		// A run in flight belongs to the results tab: the marker says which view has news coming.
 		if t == tabResults && m.runActive {
-			text += " ⟳"
+			text += " " + glyphs.Running
 		}
 		if t == m.tab {
 			parts = append(parts, tabActive.Render("["+text+"]"))
@@ -1412,9 +1451,9 @@ func (m *Model) filterHint() string {
 	if len(m.sortKeys) > 0 {
 		var keys []string
 		for _, k := range m.sortKeys {
-			arrow := "↑"
+			arrow := glyphs.SortUp
 			if k.Desc {
-				arrow = "↓"
+				arrow = glyphs.SortDown
 			}
 			keys = append(keys, k.Field+arrow)
 		}
@@ -1490,7 +1529,7 @@ func laneColumns(lane string) []column {
 				return strconv.Itoa(e.Assert)
 			}},
 			{name: "dupe", head: "DUP", width: 4, right: true, style: colDupe, cell: dupe},
-			{name: "text", head: "PROMPT", width: 0, style: colNone, cell: text},
+			{name: "text", head: "PROMPT", width: 0, style: colText, cell: text},
 		}
 	}
 	return []column{
@@ -1507,7 +1546,7 @@ func laneColumns(lane string) []column {
 		}},
 		{name: "split", head: "SPLIT", width: 11, style: colSplit, cell: func(e store.Entry) string { return e.Split }},
 		{name: "dupe", head: "DUP", width: 4, right: true, style: colDupe, cell: dupe},
-		{name: "text", head: "QUERY", width: 0, style: colNone, cell: text},
+		{name: "text", head: "QUERY", width: 0, style: colText, cell: text},
 	}
 }
 
@@ -1568,15 +1607,38 @@ func (m *Model) columnHead(f frame) string {
 		return b.String()
 	}
 	// The divider's own cell carries the pane's title, so the column that separates two things also
-	// says what the right-hand one is.
+	// says what the right-hand one is. When the pane has the keys the seam and the title go accent —
+	// one cue, in the one place that separates the two things the cursor can be in.
 	head := padCell(b.String(), f.table, false)
+	seam, title := m.seamStyles()
 	e, ok := m.focused()
 	if !ok {
-		return head + dimStyle.Render(paneSep) + padCell("", f.pane, false)
+		return head + seam.Render(paneSep) + padCell("", f.pane, false)
 	}
+	return head + seam.Render(paneSep) + title.Render(padCell(ellipsis(m.paneTitle(e, f), f.pane), f.pane, false))
+}
+
+// seamStyles is the divider and the pane's title in the colour of where the keys are: the accent
+// when the pane is focused, the faint role when the table is.
+func (m *Model) seamStyles() (seam, title lipgloss.Style) {
+	if m.paneFocus {
+		return paneSeam, paneSeam
+	}
+	return dimStyle, dimStyle
+}
+
+// paneTitle names the row the pane is showing, and — while the pane has the keys — where in the
+// record the window sits. A scrolled window that does not say it is scrolled reads as a record that
+// got shorter.
+func (m *Model) paneTitle(e store.Entry, f frame) string {
 	title := fmt.Sprintf("ROW %d · %s", e.ID, e.Skill)
-	return head + dimStyle.Render(paneSep) +
-		dimStyle.Render(padCell(ellipsis(title, f.pane), f.pane, false))
+	if !m.paneFocus || f.pane == 0 {
+		return title
+	}
+	h := m.listHeight()
+	total := len(m.paneDoc(e, f.pane))
+	from, to := paneShown(total, m.paneTop, h)
+	return fmt.Sprintf("%s · %d–%d/%d", title, from, to, total)
 }
 
 func (m *Model) sortedBy(name string) bool {
@@ -1595,16 +1657,19 @@ func (m *Model) rowLine(f frame, i int, e store.Entry) string {
 	mark := "  "
 	switch {
 	case i == m.cursor:
-		mark = cursorMark.Render("▸ ")
+		mark = cursorMark.Render(glyphs.Cursor)
 	case m.chosen[m.key(e)]:
-		mark = selMark.Render("▪ ")
+		mark = selMark.Render(glyphs.Selected)
 	}
 	cols := m.columns()
 	var b strings.Builder
 	b.WriteString(mark)
 	for _, c := range cols {
 		if c.width == 0 {
-			b.WriteString(ellipsis(c.cell(e), f.text))
+			// The flexible column is fitted to its measure and then coloured like any other cell:
+			// a raw string here is a cell that takes the terminal's default foreground, which is
+			// how the widest column on the screen came to be the palette's one blind spot.
+			b.WriteString(c.style.Render(ellipsis(c.cell(e), f.text)))
 			continue
 		}
 		b.WriteString(cellText(c, e))
@@ -1623,7 +1688,7 @@ func fitPath(s string, w int) string {
 	if w < 4 || len(r) <= w-1 {
 		return ellipsis(s, w)
 	}
-	return "…" + string(r[len(r)-(w-1):])
+	return glyphs.Ellipsis + string(r[len(r)-(w-1):])
 }
 
 // fitParts joins what fits: parts are ordered most-informative first, and the tail is dropped until
@@ -1648,7 +1713,7 @@ func ellipsis(s string, width int) string {
 	if len(r) > width-1 {
 		r = r[:width-1]
 	}
-	return string(r) + "…"
+	return string(r) + glyphs.Ellipsis
 }
 
 // hint is one binding in the footer: the key, what it does, and how droppable it is. A hint line
@@ -1719,6 +1784,7 @@ func (m *Model) tabHints() []hint {
 func (m *Model) laneHints() []hint {
 	return []hint{
 		{key: "space", act: "select", rank: 1, help: "select the row and move down — the trim gesture"},
+		{key: "enter", act: "detail", rank: 1, help: "the cursor row in the pane beside the table; the pane then takes the keys"},
 		{key: "e", act: "edit", rank: 2, help: "edit the row under the cursor"},
 		{key: "d", act: "delete", rank: 5, help: "delete the selection, or the row under the cursor — asks first"},
 		{key: "/", act: "search", rank: 4, help: "search this lane; with a column focused, only that column"},
@@ -1728,7 +1794,7 @@ func (m *Model) laneHints() []hint {
 		{key: "v", act: "whole", rank: 10, help: "the row in full at the width of the window"},
 		{key: "1–6", act: "column", rank: 9, help: "focus a column — o sorts by it, g groups by it, / searches it"},
 		{key: "c", act: "chain", rank: 11, help: "promote: a run's output becomes the next stage's fixture"},
-		{key: "t", act: "→trigger", rank: 11, help: "this case's prompt becomes a trigger query"},
+		{key: "t", act: glyphs.Arrow + "trigger", rank: 11, help: "this case's prompt becomes a trigger query"},
 		{key: "P", act: "profiles", rank: 13, help: "the four sandboxes: what exists and what is stale"},
 		{key: "ctrl+s", act: "save", rank: 0, help: "write both lanes atomically — previous bytes in .evalctl/backups/"},
 		{key: "?", act: "keys", rank: 0, help: "this key map"},
@@ -1745,6 +1811,10 @@ func (m *Model) hintFooter() string {
 	switch {
 	case m.searching:
 		return m.search.View() + dimStyle.Render("   enter apply · esc clear")
+	case m.paneFocus:
+		// The pane's verbs, from the pane's own table: the footer and ? cannot disagree about what
+		// a key does inside it.
+		return m.hintLine(m.paneKeys())
 	case m.focusedColumnName() != "":
 		// The focused-column line replaces the verb list, but esc still leaves this state, so it
 		// is named here too: a footer may shorten, never lie by omission.
@@ -1801,7 +1871,7 @@ func (m *Model) helpLines() []string {
 		titleStyle.Render("evalctl "+m.ver) + "  " + dimStyle.Render(m.store.Root),
 		"",
 		head("EVERYWHERE"),
-		row("tab ⇧tab", "walk the scope's views — cases · queries · results"),
+		row("tab "+glyphs.Shift+"tab", "walk the scope's views — cases · queries · results"),
 		row("esc", "one level up: "+m.escLabel()),
 		row("?", "this key map"),
 		row("ctrl+v", "the validation findings, for both lanes of this scope"),
@@ -1840,7 +1910,18 @@ func (m *Model) helpLines() []string {
 			row("o", "sort by the focused column: ascending → descending → file order"),
 			row("g", "group by the focused column — a section header with a count"),
 			row("/", "with a column focused, search only that column"),
+			"",
+			head("THE DETAIL PANE"),
+			row("enter", "the cursor row in the pane beside the table — the pane then takes the keys"),
 		)
+		// The pane's own verbs come from the pane's table: ? describes exactly what the footer
+		// offers while the pane is focused.
+		for _, h := range m.paneKeys() {
+			if h.key == "esc" {
+				continue // already described by EVERYWHERE, which names the live level
+			}
+			lines = append(lines, row(h.key, h.long()))
+		}
 	}
 	lines = append(lines,
 		"",
@@ -1867,10 +1948,7 @@ func (m *Model) helpLines() []string {
 
 func (m *Model) helpView() string {
 	lines := m.helpLines()
-	h := m.height - 1 // the last row is the scroll/close hint
-	if h < 3 {
-		h = 3
-	}
+	h := helpBody(m.height) // the last row is the scroll/close hint
 	if maxTop := len(lines) - h; m.helpTop > maxTop {
 		m.helpTop = max(0, maxTop)
 	}
@@ -1878,19 +1956,19 @@ func (m *Model) helpView() string {
 		m.helpTop = 0
 	}
 	end := min(len(lines), m.helpTop+h)
-	var b strings.Builder
-	for _, l := range lines[m.helpTop:end] {
-		b.WriteString(l + "\n")
-	}
 	pos := fmt.Sprintf("%d–%d / %d", m.helpTop+1, end, len(lines))
-	b.WriteString(dimStyle.Render("j k scroll · ? or esc closes") + "  " + dimStyle.Render(pos))
-	return b.String()
+	return fitView(nil, lines[m.helpTop:end],
+		[]string{dimStyle.Render("j k scroll · ? or esc closes") + "  " + dimStyle.Render(pos)}, m.height)
 }
+
+// helpBody is the key map's window: every row but the hint. It is a function of the height and of
+// nothing else, so the view and the scroll keys cannot disagree about how far a page is.
+func helpBody(h int) int { return max(1, h-1) }
 
 // scrollHelp moves the key map. g/G jump, j/k by a line, ctrl+d/ctrl+u by a screen — the same keys
 // the list uses, because help is a view of a long thing like any other.
 func (m *Model) scrollHelp(key string) {
-	h := max(3, m.height-1)
+	h := helpBody(m.height)
 	switch key {
 	case "j", "down":
 		m.helpTop += 1

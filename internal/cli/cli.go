@@ -635,11 +635,18 @@ func runTUI(args []string, lane string) int {
 	fs, c := newFS("tui")
 	laneFlag := fs.String("lane", lane, "lane to open: trigger or output")
 	skillFlag := fs.String("skill", "", "open scoped to this stage skill (default: the skill list)")
+	// A terminal without UTF-8 gets the frame's marks and rules in ASCII rather than a row of
+	// replacement boxes. auto follows the locale; $EVALCTL_GLYPHS is the default for callers that
+	// wrap the binary and cannot pass a flag.
+	glyphFlag := fs.String("glyphs", os.Getenv("EVALCTL_GLYPHS"), "glyph profile: auto, unicode or ascii")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if *laneFlag != store.LaneTrigger && *laneFlag != store.LaneOutput {
 		return fail(fmt.Errorf("--lane must be trigger or output"))
+	}
+	if _, err := tui.Glyphs(*glyphFlag, os.Getenv("LANG"), os.Getenv("LC_CTYPE"), os.Getenv("LC_ALL")); err != nil {
+		return fail(err)
 	}
 	root := c.root
 	if root == "" {
@@ -661,7 +668,7 @@ func runTUI(args []string, lane string) int {
 	if *skillFlag != "" && s.Skill(*skillFlag) == nil {
 		return fail(fmt.Errorf("unknown skill %q (known: %s)", *skillFlag, strings.Join(s.KnownSkills(), ", ")))
 	}
-	return tui.Run(s, *skillFlag, *laneFlag)
+	return tui.Run(s, *skillFlag, *laneFlag, *glyphFlag)
 }
 
 // runSkills is the CLI face of the TUI's front door: one row per stage skill, so the state of a

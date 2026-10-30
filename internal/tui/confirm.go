@@ -423,7 +423,10 @@ func (m *Model) updateViewer(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (v *viewerState) view(width, height int) string {
-	h := max(4, height-6)
+	// Four rows of chrome — a title and a gap above, a gap and the foot below — and the body gets the
+	// rest. Reserving six for the four this spends left even a full document two rows short of the
+	// bottom, so the foot floated mid-screen on the screen read longest.
+	h := max(1, height-4)
 	v.renderAt(width)
 	// A followed log grows under the reader: anchor on the newest line instead of a fixed offset.
 	start := v.top
@@ -437,12 +440,16 @@ func (v *viewerState) view(width, height int) string {
 		start = 0
 	}
 	end := min(len(v.lines), start+h)
-	body := strings.Join(v.lines[start:end], "\n")
+	// Rows, not a string: the body is the document's window, and any shortfall is padding that
+	// fitView owns.
+	body := make([]string, 0, h)
 	if len(v.lines) == 0 {
-		body = dimStyle.Render("(empty)")
+		body = append(body, dimStyle.Render("(empty)"))
 	}
+	body = append(body, v.lines[start:end]...)
 	foot := dimStyle.Render(fmt.Sprintf("  %d/%d · j k scroll · esc close", min(end, len(v.lines)), len(v.lines)))
-	return titleStyle.Render(v.title) + "\n\n" + body + "\n\n" + foot
+	// Same grid as every other screen: title, gap, body, gap, foot — exactly the window's height.
+	return fitView([]string{titleStyle.Render(v.title), ""}, body, []string{"", foot}, height)
 }
 
 // refresh re-reads a live activity log. The file is the source of truth: the pane mirrors it.

@@ -363,7 +363,7 @@ func (m *Model) launcherView() string {
 	for i, row := range m.options() {
 		mark := "  "
 		if i == l.cursor {
-			mark = cursorMark.Render("▸ ")
+			mark = cursorMark.Render(glyphs.Cursor)
 		}
 		label := fmt.Sprintf("%-16s", row.label)
 		value := row.value
@@ -719,13 +719,13 @@ func (m *Model) progressView() string {
 			switch arm.status {
 			case "done":
 				done++
-				line += styleOn.Render("✓") + " "
+				line += styleOn.Render(glyphs.Done) + " "
 			case "failed":
 				done++
 				failures++
-				line += statusBad.Render("✗") + " "
+				line += statusBad.Render(glyphs.Failed) + " "
 			case "running":
-				line += colDupe.Render("⟳") + " "
+				line += colDupe.Render(glyphs.Running) + " "
 			default:
 				line += dimStyle.Render("·") + " "
 			}
@@ -824,8 +824,12 @@ func (m *Model) loadRuns() {
 // The results tab is a table of iterations, not of rows: a different set of columns from the lanes,
 // and no flexible prose column, so it takes its own frame. Whatever width is left over goes to the
 // detail card — that is the only content the results tab has that a single row cannot show.
-const resultsPaneMax = 96
 
+// resultsFrame is the results table's width budget: the same order a lane asks in — the columns it
+// has, then the pane, which takes what is left. There is no flexible text column here to absorb
+// the surplus, and capping the pane instead left the frame 46 columns short at 220 and the divider
+// frozen at column 75 at every width: the same scope, laid out like a different program. The
+// table's own columns are the constraint; the pane is what fills the window.
 func (m *Model) resultsFrame() frame {
 	fixed := rowGutter
 	for _, c := range resultsColumns(m.runsList) {
@@ -837,7 +841,7 @@ func (m *Model) resultsFrame() frame {
 	}
 	sep := len([]rune(paneSep))
 	if pane := avail - fixed - sep; pane >= paneMin {
-		return frame{table: fixed, pane: min(pane, resultsPaneMax)}
+		return frame{table: fixed, pane: pane}
 	}
 	return frame{table: fixed}
 }
@@ -909,7 +913,7 @@ func (m *Model) resultsBody(f frame, h int) []string {
 		for i, info := range list.infos {
 			mark := "  "
 			if i == list.cursor {
-				mark = cursorMark.Render("▸ ")
+				mark = cursorMark.Render(glyphs.Cursor)
 			}
 			var b strings.Builder
 			b.WriteString(mark)
@@ -945,9 +949,13 @@ func (m *Model) resultsBody(f frame, h int) []string {
 	return out
 }
 
-// resultsPaneColumn is one iteration read properly: what it measured, how it scored, where it lives,
-// and what you can do with it. It is the same shape as a row's pane — the cursor's object, spelled
-// out — so the two tabs teach each other.
+// resultsPaneColumn is one iteration read properly: what it measured, how it scored, and where it
+// lives. It is the same shape as a row's pane — the cursor's object, spelled out — so the two tabs
+// teach each other, and they share the same window (paneWindow) and the same measure cap.
+//
+// It does NOT list the keys. The footer and ? already answer that from one table, and a third copy
+// inside the pane is a copy that drifts; it was also the block that got cut first on a short
+// terminal, so the pane spent its last rows repeating the line under it.
 func (m *Model) resultsPaneColumn(f frame, h int) []string {
 	out := make([]string, h)
 	list := m.runsList
@@ -955,11 +963,13 @@ func (m *Model) resultsPaneColumn(f frame, h int) []string {
 		return out
 	}
 	w := f.pane
+	// The facts are short and the paths are long: the measure is capped like the table's, so a pane
+	// that grew to 140 cells does not turn a path into one 130-character line to scan.
+	measure := min(w, textMax)
 	info := list.infos[list.cursor]
-	var lines []string
-	lines = append(lines, dimStyle.Render(strings.Repeat("─", w)))
+	doc := []string{dimStyle.Render(strings.Repeat(glyphs.Rule, w))}
 	row := func(k, v string) {
-		lines = append(lines, dimStyle.Render(padCell(k, 12, false))+colSkill.Render(ellipsis(v, w-12)))
+		doc = append(doc, dimStyle.Render(padCell(k, 12, false))+colSkill.Render(ellipsis(v, measure-12)))
 	}
 	row("lane", info.Lane)
 	row("cases", strconv.Itoa(info.Cases))
@@ -977,19 +987,13 @@ func (m *Model) resultsPaneColumn(f frame, h int) []string {
 		row("threshold", fmt.Sprintf("%.2f", info.Threshold))
 	}
 	row("started", shortTime(info.Started))
-	lines = append(lines, "", dimStyle.Render("PATH"))
-	for _, l := range wrapPlain(strings.TrimPrefix(info.Path, strings.TrimSuffix(m.store.Root, "/")+"/"), w) {
-		lines = append(lines, l)
+	doc = append(doc, "", dimStyle.Render("PATH"))
+	// The path is the last thing in the document, so a frame too short for it cuts the path — the
+	// facts you came for stay. The cut names the key that shows the run whole.
+	for _, l := range wrapPlain(strings.TrimPrefix(info.Path, strings.TrimSuffix(m.store.Root, "/")+"/"), measure) {
+		doc = append(doc, l)
 	}
-	lines = append(lines, "", dimStyle.Render("KEYS"))
-	lines = append(lines, "enter the report it wrote")
-	lines = append(lines, "c     promote its output into the next fixture")
-	lines = append(lines, "r     re-read results/ for runs finished elsewhere")
-
-	if len(lines) > h {
-		lines = lines[:h]
-		lines[h-1] = dimStyle.Render("…")
-	}
+	lines := paneWindow(doc, 0, h, "v opens the report")
 	for i := range out {
 		if i < len(lines) {
 			out[i] = lines[i]
@@ -1173,7 +1177,7 @@ func (m *Model) openProfiles() {
 		lines = append(lines, "  "+statusOk.Render("all profiles in their intended state"))
 	} else {
 		for _, p := range problems {
-			lines = append(lines, "  "+statusBad.Render("✗ ")+p)
+			lines = append(lines, "  "+statusBad.Render(glyphs.Failed+" ")+p)
 		}
 		lines = append(lines, "", "  "+dimStyle.Render("u runs ensure: creates what is missing, renders, syncs, scrubs"))
 	}

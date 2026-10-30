@@ -949,7 +949,7 @@ func (m *Model) promoteView() string {
 	for i, row := range p.rows() {
 		mark := "  "
 		if i == p.cursor {
-			mark = styleOn.Render("▸ ")
+			mark = styleOn.Render(glyphs.Cursor)
 		}
 		value := row.value
 		if p.editing && i == p.cursor {
@@ -1047,7 +1047,7 @@ func fitPlain(s string, width int) string {
 	}
 	r := []rune(s)
 	if len(r) > width-1 {
-		return string(r[:width-1]) + "…"
+		return string(r[:width-1]) + glyphs.Ellipsis
 	}
 	return s
 }

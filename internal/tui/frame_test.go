@@ -4,9 +4,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	"evalctl/internal/store"
+	"evalctl/internal/theme"
 )
 
 // TestFrameIsAnchoredToTheTerminal: the view is exactly as tall as the window and the status line
@@ -185,5 +188,131 @@ func TestPaneStopsAtTheFrame(t *testing.T) {
 	}
 	if !cut {
 		t.Fatal("the cut pane does not say it was cut, or where to read the rest")
+	}
+}
+
+// frameRows asserts the first contract of the frame: whatever is on screen, it is exactly as tall
+// as the window, so the hint line sits at height-2 and the status at height-1.
+func frameRows(t *testing.T, view string, h int, screen string) {
+	t.Helper()
+	if got := len(strings.Split(view, "\n")); got != h {
+		t.Errorf("%s: the view is %d rows on a %d-row terminal", screen, got, h)
+	}
+}
+
+// TestEveryScreenIsTheHeightOfTheWindow: the frame is the window on EVERY screen, not just the
+// list. Measured before this test, the document viewer drew 27 of 55 rows — the footer that says
+// how to scroll floated two thirds up the screen, on the one screen you read longest.
+func TestEveryScreenIsTheHeightOfTheWindow(t *testing.T) {
+	for _, w := range []int{80, 140, 220} {
+		for _, h := range []int{8, 12, 24, 30, 55} {
+			m := sized(newModel(testStore(t), store.LaneTrigger), w, h)
+			frameRows(t, m.View(), h, "lane")
+
+			m.help = true
+			frameRows(t, m.View(), h, "help")
+			m.help = false
+
+			m.setTab(tabResults)
+			frameRows(t, m.View(), h, "results")
+
+			m.openSkills()
+			frameRows(t, m.View(), h, "skills")
+		}
+	}
+}
+
+// TestViewerIsTheHeightOfTheWindow: the document viewer spends four rows of chrome (title, gap,
+// body, gap, foot) and used to reserve six, so even a full document stopped two rows short. A body
+// shorter than the frame is padding, never a shorter view.
+func TestViewerIsTheHeightOfTheWindow(t *testing.T) {
+	for _, w := range []int{80, 140, 220} {
+		// 5 is the smallest frame the four rows of chrome can honour; 8 was the old floor only
+		// because the body was reserved six rows and spent four.
+		for _, h := range []int{5, 8, 24, 55} {
+			m := sized(newModel(testStore(t), store.LaneOutput), w, h)
+			e, ok := m.focused()
+			if !ok {
+				t.Fatalf("%d×%d: no row to open", w, h)
+			}
+			m.viewer = newViewer(m.store, e, w, h)
+			m.mode = screenViewer
+			view := m.viewer.view(w, h)
+			frameRows(t, view, h, "viewer")
+			// The foot is the last row: that is the whole point of padding the body.
+			lines := strings.Split(view, "\n")
+			if !strings.Contains(lines[len(lines)-1], "esc close") {
+				t.Errorf("%d×%d: the last row is not the foot: %q", w, h, lines[len(lines)-1])
+			}
+		}
+	}
+}
+
+// TestResultsTabFillsTheWindow: the results table is all fixed columns and its pane used to stop at
+// 96 cells — 173 of 219 columns at 220, with the divider frozen at column 75 at every width, which
+// is the same scope laid out like a different program. What the table does not need, the pane takes.
+func TestResultsTabFillsTheWindow(t *testing.T) {
+	for _, w := range []int{130, 220} {
+		m := sized(newModel(testStore(t), store.LaneOutput), w, 30)
+		m.setTab(tabResults)
+		f := m.resultsFrame()
+		if f.pane == 0 {
+			t.Fatalf("%d cols: the results tab grew no pane: %+v", w, f)
+		}
+		if got := f.table + f.pane + len([]rune(paneSep)); got != w-1 {
+			t.Errorf("%d cols: table %d + pane %d = %d, the window is %d",
+				w, f.table, f.pane, got, w-1)
+		}
+		// The head row is the one line that is padded to the pane's right edge whatever the data
+		// is, so it is where a short frame shows up first.
+		head := strings.Split(m.View(), "\n")[2]
+		if got := ansi.StringWidth(head); got < w-3 {
+			t.Errorf("%d cols: the head row is %d cells: %q", w, got, head)
+		}
+	}
+}
+
+// TestTheProseColumnIsStyled: the flexible column was written raw, so it took the terminal's
+// default foreground — 2,733 of a 220-column lane screen's non-space cells, the widest column on
+// the screen, was the one thing the palette did not colour. A cell the tool does not style is a
+// cell it cannot promise a contrast for.
+func TestTheProseColumnIsStyled(t *testing.T) {
+	was := theme.Current()
+	wasProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	defer func() {
+		// The profile goes back BEFORE the style table is rebuilt: applyStyles caches the cursor's
+		// band as a raw escape (selSeq), and rebuilding it while the test profile is still on
+		// leaves a colour band that outlives the restore and repaints another test's rows.
+		lipgloss.SetColorProfile(wasProfile)
+		theme.Set(was)
+		applyStyles(was)
+	}()
+	p, _ := theme.Lookup("midnight")
+	theme.Set(p)
+	applyStyles(p)
+
+	m := sized(newModel(testStore(t), store.LaneTrigger), 140, 20)
+	e := m.rows[0]
+	// Row 1 is not the cursor: the band would repaint the line under it.
+	line := m.rowLine(m.frame(), 1, e)
+	want := e.Text
+	if len([]rune(want)) > 12 {
+		want = string([]rune(want)[:12])
+	}
+	at := strings.Index(line, want)
+	if at < 0 {
+		t.Fatalf("the row does not carry its query (%q): %q", want, line)
+	}
+	head := line[:at]
+	cut := strings.LastIndex(head, "\x1b[")
+	if cut < 0 {
+		t.Fatalf("the query is opened by no escape at all: %q", line)
+	}
+	// The opening escape the role itself renders, so the assertion is the palette's answer and not
+	// a copy of it.
+	opens := escapeOf(lipgloss.NewStyle().Foreground(p.Color(p.Text)))
+	if opened := head[cut:]; !strings.HasPrefix(opened, opens) {
+		t.Fatalf("the query is opened by %q, not by the text role %q", opened, opens)
 	}
 }

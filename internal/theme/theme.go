@@ -15,9 +15,10 @@
 // 1.7:1, its magenta-adjacent bright blue #0000FF is 2.4:1), and a status glyph you cannot see is
 // a status glyph that does not exist.
 //
-// Colour is also never the only cue: yes/no keep their ✓/✗ glyphs, headers keep their bold and
-// underline, group rows keep their heading text. That is what makes a palette survive a
-// colour-blind reader and a 16-colour terminal.
+// Colour is also never the only cue: a should-trigger row says the word "yes" or "no" (the label is
+// a fact about the row, not a verdict, so it carries no pass/fail glyph), headers keep their bold and
+// underline, group rows keep their heading text, and the cursor keeps its mark. That is what makes a
+// palette survive a colour-blind reader and a 16-colour terminal.
 package theme
 
 import (

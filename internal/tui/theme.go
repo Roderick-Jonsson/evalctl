@@ -23,16 +23,19 @@ var (
 	colNo    = lipgloss.NewStyle()
 	colSplit = lipgloss.NewStyle()
 	colDupe  = lipgloss.NewStyle()
+	// colText is the row's substance — the query or the prompt, the widest column on the screen.
+	// It is a style and not "no style" on purpose: left unstyled it took the terminal's default
+	// foreground, so the one column you actually read to decide what to cut was the only column
+	// the palette did not reach (measured: 2,733 of a 220-column lane screen's non-space cells).
+	colText = lipgloss.NewStyle()
 
-	styleOn  = lipgloss.NewStyle()
-	styleOff = lipgloss.NewStyle()
+	styleOn = lipgloss.NewStyle()
 	// styleCur is the row under the cursor: a background, so the row's own foregrounds survive.
 	styleCur = lipgloss.NewStyle()
 	// The gutter's two marks. Accent means "keystrokes go here", and it is the only thing on a
 	// row that carries it — green/amber/red stay reserved for state.
 	cursorMark = lipgloss.NewStyle()
 	selMark    = lipgloss.NewStyle()
-	box        = lipgloss.NewStyle()
 
 	statusOk   = lipgloss.NewStyle()
 	statusBad  = lipgloss.NewStyle()
@@ -52,6 +55,10 @@ var (
 	tabActive  = lipgloss.NewStyle()
 	tabIdle    = lipgloss.NewStyle()
 	styleGroup = lipgloss.NewStyle()
+	// paneSeam is the divider and the pane's title while the PANE has the keys. Accent means "the
+	// keystrokes go here", and there are exactly two places they can go — the table (cursor mark,
+	// focused column head) and the pane (this seam). Nothing else may take the accent.
+	paneSeam = lipgloss.NewStyle()
 	// badgeWarn has no width on purpose: colDupe is a 4-cell column style, and wrapping a
 	// sentence in it folds the header one character per line.
 	badgeWarn = lipgloss.NewStyle()
@@ -59,7 +66,6 @@ var (
 	// The skill-list screen's own columns.
 	colCases = lipgloss.NewStyle()
 	colAsr   = lipgloss.NewStyle()
-	colNone  = lipgloss.NewStyle()
 
 	// promoNote is colDupe without its fixed width: the table's column style would reflow a
 	// sentence into four-character fragments inside the form's box.
@@ -84,11 +90,12 @@ func applyStyles(p theme.Palette) {
 	colYes = lipgloss.NewStyle().Foreground(p.Color(p.Text))
 	colNo = lipgloss.NewStyle().Foreground(p.Color(p.Muted))
 	colSplit = lipgloss.NewStyle().Foreground(p.Color(p.Muted))
+	// The prose column carries the palette's body colour: it is the column the screen exists for.
+	colText = lipgloss.NewStyle().Foreground(p.Color(p.Text))
 	// A near-duplicate IS a warning — the one thing in this table that earns amber.
 	colDupe = lipgloss.NewStyle().Foreground(p.Color(p.Warn))
 
 	styleOn = lipgloss.NewStyle().Foreground(p.Color(p.OK))
-	styleOff = lipgloss.NewStyle().Foreground(p.Color(p.Muted))
 	styleCur = lipgloss.NewStyle().Background(p.Color(p.Sel))
 	selSeq = escapeOf(styleCur)
 	cursorMark = lipgloss.NewStyle().Foreground(p.Color(p.Accent)).Bold(true)
@@ -108,12 +115,14 @@ func applyStyles(p theme.Palette) {
 	headerGroup = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Text))
 	tabActive = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Accent))
 	tabIdle = lipgloss.NewStyle().Foreground(p.Color(p.Muted))
+	// The pane's seam takes the accent only while the pane has the keys: a frame that colours both
+	// halves of a split at once has not said where you are.
+	paneSeam = lipgloss.NewStyle().Foreground(p.Color(p.Accent))
 	styleGroup = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Text))
 	badgeWarn = lipgloss.NewStyle().Foreground(p.Color(p.Warn))
 
 	colCases = lipgloss.NewStyle().Foreground(p.Color(p.Text))
 	colAsr = lipgloss.NewStyle().Foreground(p.Color(p.OK))
-	colNone = lipgloss.NewStyle().Foreground(p.Color(p.Faint))
 
 	promoNote = lipgloss.NewStyle().Foreground(p.Color(p.Warn))
 }

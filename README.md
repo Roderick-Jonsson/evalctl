@@ -14,11 +14,17 @@ make build                    # stamped: commit, build time, dirty flag
 go build -o bin/evalctl .     # plain build: commit comes from the Go build info
 ./bin/evalctl                 # TUI, opens on the skill list
 ./bin/evalctl tui --skill slide-builder   # straight into one skill
+./bin/evalctl tui --glyphs ascii          # unicode marks and rules, or the ASCII fallback
 ./bin/evalctl version         # which build this is
 ```
 
 `--root` picks the tree (default: walk up for the eval tree, or `$EVALCTL_ROOT`). Running it from
 inside the repo just works.
+
+`--glyphs auto|unicode|ascii` (`$EVALCTL_GLYPHS` as the default) picks the marks the frame draws
+itself: the cursor, the seam between the table and its pane, the rules, the sort arrows, a run in
+flight. `auto` follows the locale. The ASCII profile draws the same frame in `> | - + x` for a
+terminal without UTF-8 — same widths, same columns, and a test that no frame mark escapes it.
 
 ## Version
 
@@ -87,8 +93,9 @@ line rather than pushing it off. Narrow terminals drop whole columns by importan
 then `FIXT`, then the should-trigger split) instead of clipping the row.
 
 `enter` opens a skill on its **cases** tab: the output cases are what a skill is worked on for, and
-its trigger queries and its results are the two tabs beside it. Nothing else is in the list; `esc`
-goes back.
+its trigger queries and its results are the two tabs beside it. `· all skills` opens the lane
+`--lane` names (`trigger` by default) — the unscoped view is the one where the lane, not a skill, is
+what you came to read. Nothing else is in the list; `esc` goes back.
 
 ### The tabs
 
@@ -115,7 +122,7 @@ never one keystroke away from meaning something else.
 |---|---|
 | `j k ↑ ↓` `enter` | skill list: move / open a skill (`· all skills` = every skill) |
 | `tab` `shift+tab` | walk the scope's tabs — cases → queries → results, and back |
-| `esc` | one level up. The footer names the level: `esc clear column`, `esc clear selection`, `esc skills` — and esc does exactly that one thing |
+| `esc` | one level up. The footer names the level: `esc table` (out of the pane), `esc clear column`, `esc clear selection`, `esc skills` — and esc does exactly that one thing |
 | `j k ↑ ↓` `home G` `ctrl+d ctrl+u` | in a tab: move / first / last / half page |
 | `space` | select row and advance — the trim gesture |
 | `a` / `A` | select all visible / clear selection |
@@ -125,7 +132,8 @@ never one keystroke away from meaning something else.
 | `u` | show only near-duplicate rows — the trim shortlist |
 | `1`–`6` | focus a column of this tab (`0` / `esc` drops it) — see columns below |
 | `o` `g` | with a column focused: sort by it (asc → desc → file order) · group by it. `g` groups and nothing else — `home` is the first row |
-| `e` `enter` | edit the focused row |
+| `enter` | the focused row in the **pane** beside the table — the pane then takes the keys: `j k` scroll it, `g G` its ends, `e` edit it, `v` the whole record, `esc` back to the table |
+| `e` | edit the focused row |
 | `n` | new row in this tab's lane |
 | `d` `x` | delete selection (or the focused row); confirmation screen, `f` toggles deleting fixture dirs too |
 | `v` | the focused row in full, at the width of the window — the pane shows it already when it fits |
@@ -173,19 +181,30 @@ ID SKILL            TRIG SPLIT      DUP QUERY                                   
                                                                                │ extend an existing PS.md, not
                                                                                │ build a new one
 ─────────────────────────────────────────────────────────────────────────────────────────────────────
-space select · e edit · / search · tab lane · ctrl+s save · ? keys · q quit             4 / 32
+space select · enter detail · e edit · / search · tab next tab · ctrl+s save · ? keys · q quit   4 / 32
 ```
 
 The pane follows the cursor and holds **the whole record**, not a summary of it: the text, the
 `expected_output`, the assertions numbered, the declared files, the fixture dir as it stands on
 disk, the preserved extra keys, the near-twin cluster — and anything validation says about that row,
 in the colour it said it. It is the same document `v` opens at the width of the window, from the
-same function, so the two cannot drift; `v` survives for the record that will not fit in the pane,
-and the pane says so and names the key when it cuts one. There is no breakpoint constant: the pane
-appears at the width where the table and the text measure stop needing the surplus, which is later
-for the six-column output lane than for the five-column trigger lane. Below that width nothing is
-hidden — the text column takes the whole width and the pane simply does not exist. Scroll keys never
-touch the pane; `j`/`k` move the row it describes.
+same function, so the two cannot drift.
+
+`enter` moves the keys **into** the pane, and then it is a place, not a caption: `j k` scroll the
+record, `g G` its ends, `e` edits the row, `enter`/`v` open the whole of it, `esc` gives the table
+back. The seam between the two — the divider and the pane's title — takes the accent while the pane
+has them and stays faint while the table does, so "where do my keystrokes go" is answered by the
+frame rather than remembered. The title carries the window: `ROW 4 · slide-builder · 4–12/32`. Where
+the frame is too narrow to buy a pane at all, `enter` says so and names the keys that do the same
+job. There is no breakpoint constant: the pane appears where the table and the text measure stop
+needing the surplus, which is later for the six-column output lane than for the five-column trigger
+lane; below that width nothing is hidden — the text column takes the whole width and the pane simply
+does not exist.
+
+The results tab has the same pane, showing what an iteration measured (`lane`, `cases`, `runs`,
+`judged`, `pass`, `model`, `threshold`, `started`) and where it lives. It does not list the keys: the
+key line and `?` already answer that from one table, and a third copy is a copy that drifts. When it
+cuts, it cuts the path — the facts stay — and names `v`, which opens the report.
 
 The skill list has the same frame and the same split, turned the other way: it is five rows of table
 in a window four times that tall, so the detail (the selected skill's counts and findings) is a block
