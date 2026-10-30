@@ -239,16 +239,49 @@ column.
 `R` in a skill's view runs that skill's lane: the selection, or every row of *that skill* — the
 list on screen is the filter, so the form says exactly what it will measure.
 
-Nothing in the set files is written until `ctrl+s`. Deleting a row leaves its fixture dir alone
-unless you toggle it in the confirmation screen, and every write first copies the old file to
-`.evalctl/backups/`. `esc` in a form is the one way to lose typing, so an edited form asks once
-before it goes (`esc again discards your edits`); an untouched one leaves at once. The status line
-reports what just happened and is cleared by the next move, so it is never a stale claim.
+### Editing a row
+
+`e` opens the row on a **paginated form**, cut by thought rather than by field count: for a case
+`id · skill · slug` (identity — where the collisions are), `prompt` (the ask), `expected` (the
+yardstick), `assertions · files` (the two lists); for a query `id · skill`, `label · split`, `query ·
+why`. The bar names the page and the count, and the rail under it names every page, with the number
+that jumps there and a `✓` on the pages that can already be left:
+
+```
+edit output #3 · slide-builder/evals/evals.json                                  page 2 of 4
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 1 id · skill · slug ✓    2 prompt    3 expected ✓    4 assertions · files ✓
+```
+
+A page that carries one box gets the whole body; a page with two shares it, and the short one — the
+staging list, or a query's `why` — keeps three lines, so the paragraph beside it keeps the rows.
+
+`alt+1`–`alt+4` jump between them. Backwards is free; forwards walks the pages it skips and stops on
+the first that cannot be left, saying what it needs — `page 1 of 4 will not let you past: slug must be
+lowercase a-z, 0-9 and hyphens`. A jump that silently does nothing teaches nothing. `enter` and
+`shift+tab` still walk the fields, and crossing a page with them moves the rail. A save that is
+refused (a slug another skill owns, an id a sibling has) leaves the form open **on the page you were
+on**, with every value intact.
+
+The last row under the form is the page's own facts, read off the draft on every keystroke: the id
+and the next one free, an id or slug that another row already owns, the assertion and file counts,
+the fixture dir as it stands on disk. That is where the collision the store would refuse at save time
+is said — on the page the number is typed, not at the end of the form. `?` types a question mark
+inside a form (the prompts in this set are questions), so the key map is `alt+h`, and the band's cap
+says so.
+
+Nothing in the set files is written until `ctrl+s`. Inside a form `ctrl+s` is that same key one step
+earlier: it applies the draft and, if it holds, writes it — a refused draft writes nothing. Deleting
+a row leaves its fixture dir alone unless you toggle it in the confirmation screen, and every write
+first copies the old file to `.evalctl/backups/`. `esc` in a form is the one way to lose typing, so
+an edited form asks once before it goes (`esc again discards your edits`); an untouched one leaves at
+once. The status line reports what just happened and is cleared by the next move, so it is never a
+stale claim.
 
 `ctrl+s` on a row whose **id** moved asks first, in the same `y` dialog a delete uses, and prints
 the result dirs and reports that still cite the old number; anything but `y` hands the form back
-with every typed field intact. Creating a row that takes an id history still cites asks the same
-question — a gap in the file is not a gap on disk.
+with every typed field intact and on the page it was on. Creating a row that takes an id history
+still cites asks the same question — a gap in the file is not a gap on disk.
 
 ### Column functions
 

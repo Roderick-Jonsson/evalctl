@@ -444,11 +444,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		// A form's multi-line boxes are sized when they are built, so a window that changes height
+		// has to lay the form out again — and the page comes back with it.
+		var cmd tea.Cmd
 		if m.editor != nil {
-			m.editor.resize(msg.Width, msg.Height)
+			cmd = m.editor.resize(msg.Width, msg.Height)
 		}
 		m.clampScroll()
-		return m, nil
+		return m, cmd
 	case tea.KeyMsg:
 		// A fast paste can arrive as one KeyMsg carrying several runes; treat each as its own
 		// keystroke so a dropped key never silently changes what a selection means.
@@ -1011,6 +1014,11 @@ func (m *Model) View() string {
 	if m.width == 0 {
 		return "loading…"
 	}
+	// The key map is an overlay: it can be opened from the list and from a form, and while it is up
+	// it owns the screen.
+	if m.help {
+		return m.helpView()
+	}
 	switch m.mode {
 	case screenSkills:
 		if m.skills != nil {
@@ -1018,7 +1026,7 @@ func (m *Model) View() string {
 		}
 	case screenEditor:
 		if m.editor != nil {
-			return m.editor.view(m.width)
+			return m.editor.view()
 		}
 	case screenConfirm:
 		if m.confirm != nil {
@@ -1426,7 +1434,11 @@ func (m *Model) tabStrip(room int) string {
 
 // tabChip is one view: padded by one cell on each side so the fill reads as a chip, filled only
 // when it is the view on screen.
-func (m *Model) tabChip(text string, active bool) string {
+func (m *Model) tabChip(text string, active bool) string { return chip(text, active) }
+
+// chip is a label in the chip register: the fill means "you are here", and it is the only fill a
+// bar spends on a row of things to choose between.
+func chip(text string, active bool) string {
 	if active {
 		return tabActive.Render(" " + text + " ")
 	}
@@ -1444,6 +1456,28 @@ func fitTo(s string, w int) string {
 		return s
 	}
 	return ansi.Truncate(s, w, glyphs.Ellipsis)
+}
+
+// endsLine is a head row's two ends: something on the left, a fixed fact parked at the window's
+// right edge. The two are laid out independently and joined by whatever gap is left, so the right
+// end does not drift with the left one — a position that moves is a position you have to re-find.
+func endsLine(left, right string, w int) string {
+	if w <= 0 {
+		return left + "  " + right
+	}
+	room := w - lipgloss.Width(right) - 1
+	if room < 1 {
+		return fitTo(left, w)
+	}
+	left = fitTo(left, room)
+	if right == "" {
+		return left
+	}
+	gap := w - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		gap = 1
+	}
+	return left + strings.Repeat(" ", gap) + right
 }
 
 // resultsCount is how many iterations the scope has, or -1 when the list has not been read for this
@@ -1785,7 +1819,11 @@ func (h hint) long() string {
 // hintLine renders the bindings that fit: the key in the bright register, what it does in the soft
 // one. Ranks 0 (save, keys, esc) are unconditional: whatever else goes, the operator can always find
 // out how to write and how to ask for help.
-func (m *Model) hintLine(hints []hint, width int) string {
+func (m *Model) hintLine(hints []hint, width int) string { return hintLine(hints, width) }
+
+// hintLine is the same table for a screen that is not the list: the editor draws its own band, and
+// that band is as wide as the editor, not as wide as the model.
+func hintLine(hints []hint, width int) string {
 	render := func(hs []hint) string {
 		parts := make([]string, 0, len(hs))
 		for _, h := range hs {
@@ -1824,9 +1862,10 @@ func helpCap() string { return helpChip.Render(" ? keys ") }
 // left, the help cap at the right edge. It is chrome for the screen and not for the table — it spans
 // pane and table alike — and it is the bottom edge of the frame rather than a line of prose that
 // stopped where the text did.
-func (m *Model) footBand(hint string) string {
-	w := max(1, m.width)
-	cap := helpCap()
+func (m *Model) footBand(hint string) string { return bandLine(hint, helpCap(), max(1, m.width)) }
+
+// bandLine is the band at an explicit width, for a screen that owns its own frame.
+func bandLine(hint, cap string, w int) string {
 	line := " " + hint
 	pad := w - lipgloss.Width(line) - lipgloss.Width(cap)
 	if pad < 1 {
@@ -1879,8 +1918,13 @@ func (m *Model) statusFooter() string {
 // footRow is the last row's two ends: the note on the left, the fixed facts on the right. What does
 // not fit is dropped from the note, because the right-hand facts are the ones with a fixed place.
 func (m *Model) footRow(left string, right []string) string {
+	return footRowAt(left, right, m.width)
+}
+
+// footRowAt is the same row at an explicit width, for a screen that owns its own frame.
+func footRowAt(left string, right []string, width int) string {
 	tail := strings.Join(right, footAct.Render("  ·  "))
-	room := m.width - lipgloss.Width(tail) - 1
+	room := width - lipgloss.Width(tail) - 1
 	if room < 8 {
 		room = 8
 	}
@@ -1890,7 +1934,7 @@ func (m *Model) footRow(left string, right []string) string {
 	if tail == "" {
 		return left
 	}
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(tail)
+	gap := width - lipgloss.Width(left) - lipgloss.Width(tail)
 	if gap < 1 {
 		gap = 1
 	}
@@ -2092,7 +2136,9 @@ func (m *Model) helpLines() []string {
 		row("enter", "next field · in a confirmation, yes"),
 		row("alt+enter", "a newline inside a multi-line field"),
 		row("shift+tab", "previous field"),
-		row("ctrl+s", "apply the edit (the editor) · write (the list)"),
+		row("alt+1 … 9", "jump between the editor's pages — a forward jump stops on an unfinished page"),
+		row("alt+h", "this key map from inside a form (? types a question mark there)"),
+		row("ctrl+s", "apply the draft and write it (the editor) · write (the list)"),
 		row("esc", "cancel — on an edited form, twice: the first press says what is at stake"),
 		row("a", "inside a run's report: its activity log"),
 		row("x", "in the run table: cancel the run"),

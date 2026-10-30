@@ -178,13 +178,17 @@ func (m *Model) updateIDConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y":
 		m.confirm = nil
 		m.mode = screenEditor
-		ed.applyNow(m)
+		return m, ed.applyNow(m)
 	case "esc", "enter", "n", "q":
 		m.confirm = nil
 		ed.errMsg = ""
-		ed.build() // a fresh form: the one that completed would apply again on the next key
+		ed.saveAfter = false
+		// A fresh form — the one that completed would apply again on the next key — and the page it
+		// was on, so answering "no" to a number does not also cost the operator their place.
+		cmd := ed.rebuildAt(ed.page())
 		m.mode = screenEditor
 		m.setStatus("id left where it was — fix the number, or esc to drop the edit", false)
+		return m, cmd
 	}
 	// Any other key is ignored, for the reason the delete dialog gives: a mistyped key must not
 	// answer a question about a number other things already point at.
@@ -227,8 +231,18 @@ func (c *confirmState) idView(width, height int) string {
 	}
 	b.WriteString("\n")
 	b.WriteString("  " + statusBad.Render("y") + " move it    " +
-		dimStyle.Render("enter / esc / n keep the id    (ctrl+s writes it; nothing is on disk yet)") + "\n")
+		dimStyle.Render("enter / esc / n keep the id    "+c.writeNote()) + "\n")
 	return b.String()
+}
+
+// writeNote is what y leaves behind on disk. ctrl+s is the reason this dialog can be open with the
+// answer already half given, so it says which of the two is about to happen instead of promising
+// "nothing on disk" either way.
+func (c *confirmState) writeNote() string {
+	if c.ed != nil && c.ed.saveAfter {
+		return "(ctrl+s: y applies the edit and writes it)"
+	}
+	return "(ctrl+s writes it; nothing is on disk yet)"
 }
 
 // ---------------------------------------------------------------- viewer

@@ -74,6 +74,9 @@ func key(s string) tea.KeyMsg {
 	case "down":
 		return tea.KeyMsg{Type: tea.KeyDown}
 	}
+	if strings.HasPrefix(s, "alt+") {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.TrimPrefix(s, "alt+")), Alt: true}
+	}
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 }
 
