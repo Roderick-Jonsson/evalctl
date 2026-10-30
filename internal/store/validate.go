@@ -219,6 +219,11 @@ func (s *Store) validateSkill(sk *Skill) []Issue {
 		if strings.TrimSpace(c.ExpectedOutput) == "" {
 			add(SeverityWarning, "expected_output is empty: grading has nothing to check against")
 		}
+		for i, a := range c.Assertions {
+			if strings.TrimSpace(a) == "" {
+				add(SeverityError, fmt.Sprintf("assertion %d is empty — an empty assertion can never be graded", i+1))
+			}
+		}
 		fixture := s.FixtureDir(sk.Name, c.Slug)
 		exists := s.FixtureExists(sk.Name, c.Slug)
 		if len(c.Files) > 0 && !exists {

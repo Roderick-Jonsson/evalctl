@@ -15,7 +15,9 @@ import (
 // (lane|skill|index) means a sort can reorder the list without changing what a selection means.
 var (
 	triggerColumnNames = []string{"id", "skill", "label", "split", "dupe", "text"}
-	outputColumnNames  = []string{"id", "skill", "slug", "dupe", "text"}
+	// "assert" is the number of assertions a case declares: the one column that answers "which
+	// cases are still ungraded shape" without opening each case.
+	outputColumnNames = []string{"id", "skill", "slug", "assert", "dupe", "text"}
 )
 
 // ColumnNames lists a lane's columns in display order.
@@ -52,6 +54,11 @@ func ColumnValue(e Entry, field string) string {
 		return e.Label
 	case "split":
 		return e.Split
+	case "assert":
+		if e.Assert == 0 {
+			return "-"
+		}
+		return strconv.Itoa(e.Assert)
 	case "dupe":
 		if e.Dupe == 0 {
 			return "-"
@@ -67,7 +74,7 @@ func ColumnValue(e Entry, field string) string {
 	return ""
 }
 
-func numericColumn(field string) bool { return field == "id" || field == "dupe" }
+func numericColumn(field string) bool { return field == "id" || field == "dupe" || field == "assert" }
 
 // numericValue turns a cell into the number a numeric column sorts and groups by; "-" (the
 // empty dupe cell) sorts before #1.
@@ -77,6 +84,8 @@ func numericValue(e Entry, field string) int {
 		return e.ID
 	case "dupe":
 		return e.Dupe
+	case "assert":
+		return e.Assert
 	}
 	return 0
 }

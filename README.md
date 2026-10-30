@@ -12,7 +12,8 @@ Built with Bubble Tea, Bubbles, Lip Gloss and Huh, and Glamour for the reports.
 cd evalctl
 make build                    # stamped: commit, build time, dirty flag
 go build -o bin/evalctl .     # plain build: commit comes from the Go build info
-./bin/evalctl                 # TUI, opens on the trigger lane
+./bin/evalctl                 # TUI, opens on the skill list
+./bin/evalctl tui --skill slide-builder   # straight into one skill
 ./bin/evalctl version         # which build this is
 ```
 
@@ -37,6 +38,9 @@ never look the same. `make check` runs gofmt and vet; `make test` the suite.
 
 ## Why it exists
 
+The set is worked on one stage skill at a time, so the tool starts there: the first screen is the
+four skills with what each one owns, and everything after it is scoped to the skill you picked.
+
 The sets grew faster than they got pruned, and the loop that measured them lived in two Python
 files that had to agree with the manager about slugs, splits and fixture dirs. So the rules live
 in one place (`internal/store` for the sets, `internal/runner` for the loop) and the CLI and the
@@ -49,14 +53,38 @@ checkable against what the old loop produced.
 
 ## TUI
 
+It opens on the skill list — one line per stage skill, the thing you actually work on:
+
+```
+   SKILL                     CASES     ASR   FIXTURE     TRIGGER  HEALTH
+   · all skills                 12    0/12    10·47f    32·17/15  2 warning(s)
+   av-production                 3     0/3     3·10f      10·5/5  clean
+   learning-path                 2     0/2     2·18f       1·1/0  1 warning(s)
+   slide-builder                 5     0/5     5·19f      11·6/5  1 warning(s)
+   source-research               2     0/2         —      10·5/5  clean
+```
+
+`CASES` is the cases the skill owns, `ASR` how many of them carry assertions, `FIXTURE` the dirs
+and files they stage, `TRIGGER` the rows that test its description (`total · should/should-not`),
+and `HEALTH` the validation findings that belong to this skill — its own cases and its own
+queries. The first row is `· all skills`, the unscoped two-lane view. Every number is counted from
+the tree in memory, so an unsaved edit shows up here before it is written.
+
+`enter` opens a skill: its output cases (on the case lane — the thing a skill is worked on for),
+with its trigger queries one `tab` away and both counts in the header. Nothing else is in the
+list; `esc` goes back.
+
 | key | action |
 |---|---|
-| `tab` | switch lane (trigger queries / output cases) |
-| `j k ↑ ↓` `g G` `ctrl+d ctrl+u` | move / top / bottom / half page |
+| `j k ↑ ↓` `enter` | skill list: move / open a skill (`· all skills` = every skill) |
+| `esc` | back to the skill list (after it has cleared a column focus, the help, or a selection) |
+| `tab` | switch lane inside the scope (output cases / trigger queries) |
+| `j k ↑ ↓` `g G` `ctrl+d ctrl+u` | in a lane: move / top / bottom / half page |
 | `space` | select row and advance — the trim gesture |
 | `a` / `A` `esc` | select all visible / clear selection |
-| `/` | search query, prompt, slug, why, skill (esc clears) |
-| `f` `F` | cycle skill filter forward / back |
+| `/` | search query, prompt, slug, why, assertion, skill (esc clears) |
+| `f` `F` | cycle skill filter forward / back (unscoped view only — inside a skill the scope is the
+skill and `esc` is how you change it) |
 | `s` `l` | cycle split / label filter (trigger lane) |
 | `u` | show only near-duplicate rows — the trim shortlist |
 | `1`–`6` | focus a column of this lane (`0` / `esc` drops it) — see columns below |
@@ -74,6 +102,16 @@ checkable against what the old loop produced.
 | `P` | **profiles**: check the four sandboxes, `u` runs `ensure` on what fails |
 | `?` | help · `q` quit (asks once if there are unsaved changes or a run is going) |
 
+The header carries the scope and both lanes of it, so the state is legible without a keystroke:
+
+```
+evalctl v0.6.0  ◆ av-production  [output cases 3]  trigger queries 10
+/Users/…/presentation-skill  3 of 3  clean
+```
+
+`R` in a skill's view runs that skill's lane: the selection, or every row of *that skill* — the
+list on screen is the filter, so the form says exactly what it will measure.
+
 Nothing in the set files is written until `ctrl+s`. Deleting a row leaves its fixture dir alone
 unless you toggle it in the confirmation screen, and every write first copies the old file to
 `.evalctl/backups/`.
@@ -85,8 +123,12 @@ lights up, the footer says what it can do); the lane decides which:
 
 ```
 trigger  id · skill · label · split · dupe · text
-output   id · skill · slug · dupe · text
+output   id · skill · slug · assert · dupe · text
 ```
+
+Scoped to one skill the `skill` column is dropped (the header already says it) and the remaining
+columns renumber with it — the number keys are read off the column list on screen, never a fixed
+map.
 
 | key | column function |
 |---|---|
@@ -169,13 +211,16 @@ the prose, `tools` keeps only the calls, `off` writes no log and emits nothing.
 Managing the sets:
 
 ```bash
-evalctl ls                                  # both lanes, aligned
+evalctl skills                              # the set by skill: cases, assertions, fixtures, trigger rows, health
+evalctl skills --json
+evalctl ls --skill slide-builder            # one skill's rows, both lanes
 evalctl ls --lane trigger --skill slide-builder --label no --split train
 evalctl ls --dupes                           # rows with a near-twin
 evalctl ls --sort skill,id:desc              # any column of the lane, id:desc mixes directions
 evalctl ls --group split                     # sections with a count each (sort defaults to it)
 evalctl ls --search dense --in slug          # search one column only
 evalctl show t12                            # refs: t12, trigger:12, o:slide-builder:3
+evalctl show o:slide-builder:3              # prompt, expected_output, assertions, files, fixture
 evalctl stats                               # counts per skill / label / split + dupe groups
 evalctl dupes --threshold 0.6                # candidate duplicates, grouped, with refs
 evalctl validate                            # what the runner would reject, plus fixture check
@@ -183,9 +228,13 @@ evalctl validate                            # what the runner would reject, plus
 evalctl add --lane trigger --skill source-research --label no --split train \
             --query - --why "near-miss: extraction only, no workspace"   # "-" reads stdin
 evalctl add --lane output --skill slide-builder --slug sb-4-x \
-            --prompt "..." --expected "..." --files "MC-x/pages/01.md,MC-x/pages/02.md"
+            --prompt "..." --expected "..." --files "MC-x/pages/01.md,MC-x/pages/02.md" \
+            --assertions "SL.md links every page
+the speaker script is prose, not bullets"
 evalctl edit t12 --split validation --label yes
 evalctl edit o:slide-builder:3 --slug sb-3-dense-item-renamed   # moves the fixture dir
+evalctl edit o:slide-builder:3 --assertions "one page per top level item
+each page cites its Data Points"                                # replaces the assertion list
 evalctl mv o:slide-builder:3 --to-skill av-production           # moves case + fixture
 evalctl promote --from 2/src-4-agentskills/with_skill --skill learning-path \
             --slug lp-4-agentskills --prompt "..." --expected "..."   # run output → next stage's fixture
@@ -366,6 +415,8 @@ Errors — the tree would be rejected or could not be staged:
   trim accident, so it is reported as an error rather than silently saved-and-forgotten
 - output `slug` matches `^[a-z0-9][a-z0-9-]*$` and is unique **across skills**
 - output `id` unique inside its skill; `prompt` non-empty
+- an assertion is a non-empty string (an empty one can never be graded, so it is an error, not a
+  blank that saves)
 - every entry in `files` exists inside `<skill>/evals/files/<slug>/` and cannot escape it
 
 Warnings — runs, but the measurement is unsound: empty `expected_output`, a fixture dir that
@@ -376,9 +427,15 @@ for, two identical query strings.
 
 - **Ids never shift on delete.** Results are keyed `q<id>-<skill>` and iteration reports quote
   ids, so a gap is honest. `renumber` exists, asks first, and says what it breaks.
-- **Unknown JSON keys survive.** The format grows (`assertions` is the documented next field);
-  keys this tool does not know are carried through a round trip untouched. Saving an unchanged
-  file is byte-identical — there is a test for that.
+- **Assertions are a first-class field, not a blob.** `assertions` is a list of strings on the
+  case (the agentskills.io grading unit), written only when the case has any: the guide adds them
+  after a first graded iteration, and `"assertions": []` in every case would claim the opposite.
+  `ASR` counts them, `v` lists them, `e` edits them one per line, and a search reads them — so
+  "which case checks the manifest?" is a search, not a grep. Grading them is still manual; the
+  runner records no verdict.
+- **Unknown JSON keys survive.** The format grows; keys this tool does not know are carried
+  through a round trip untouched. Saving an unchanged file is byte-identical — there is a test for
+  that.
 - **Fixture dirs are separate from cases.** Deleting a case does not delete the files it staged
   unless asked, because the fixture is the expensive part.
 - **Duplicate detection is word-overlap (Jaccard), not embeddings.** It catches "test the same
@@ -412,19 +469,25 @@ for, two identical query strings.
 evalctl/
   main.go
   internal/model/    JSON shapes, key order, unknown-key preservation
-  internal/store/    discovery, load/save (atomic + backups), fixtures, validation, dupes
+  internal/store/    discovery, load/save (atomic + backups), fixtures, validation, dupes, the
+                     per-skill summary both faces open on
   internal/runner/   the loop: cases, staging, arms, trigger lane, scoring, reports, results
   internal/profile/  the four profiles: contract render, env, skills sync, scrub, cwd pin, check
   internal/cli/      ls, show, add, edit, rm, mv, promote, dupes, stats, validate, renumber, run,
                      trigger, runs, report, profiles
-  internal/tui/      list, editor (huh), delete confirmation, viewer, run form, run table, results
+  internal/tui/      skill list, scoped list, editor (huh), delete confirmation, viewer, run form,
+                     run table, results
 ```
 
 ## Tests
 
 `go test ./...` covers byte-identical round trips, unknown-key preservation, fixture move on slug
 change, fixture survival on delete, the split-balance rule, dupe grouping, and the TUI's
-select → delete → save flow. The column functions add: sort keys with a stable tie-break, group
+select → delete → save flow. The skill-first port adds: assertion round trips (written only when
+present, a comma is content, an empty one is an error), the per-skill summary counts (including a
+trigger row whose skill is not in the tree), the list opening on the aggregate row, `enter`
+scoping both lanes to one skill, `esc` coming back to the list it left, the skill column dropping
+when scoped, and a new case taking its skill from the scope. The column functions add: sort keys with a stable tie-break, group
 order and counts (numeric columns numerically, an empty cell last), a search scoped to one
 column with a full-text fallback when the lane lacks it, and in the TUI that a number key, `o`,
 `g` and `/` move rows without losing the cursor or the selection. The runner adds: slug and

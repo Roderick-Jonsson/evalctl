@@ -82,16 +82,21 @@ func sized(m *Model, w, h int) *Model {
 func TestListViewRenders(t *testing.T) {
 	m := sized(newModel(testStore(t), store.LaneTrigger), 120, 30)
 	view := m.View()
-	for _, want := range []string{"evalctl", "trigger queries", "4/4", "TRIG", "SPLIT",
+	for _, want := range []string{"evalctl", "all skills", "trigger queries 4", "4 of 4", "TRIG", "SPLIT",
 		"research the operator pattern"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
 	}
-	// Switching lanes must show the other lane's vocabulary.
+	// The header draws both lanes of the scope, so the other lane is a tab you can see, not a key
+	// you have to know; switching to it must bring its columns with it.
+	if !strings.Contains(view, "output cases 2") {
+		t.Fatalf("header does not name the other lane:\n%s", view)
+	}
 	m.Update(key("tab"))
-	if !strings.Contains(m.View(), "output cases") {
-		t.Fatalf("tab did not switch lanes:\n%s", m.View())
+	after := m.View()
+	if !strings.Contains(after, "[output cases 2]") || !strings.Contains(after, "PROMPT") {
+		t.Fatalf("tab did not switch lanes:\n%s", after)
 	}
 }
 

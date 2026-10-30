@@ -25,6 +25,7 @@ type draft struct {
 	prompt string
 	expect string
 	files  string
+	assert string // one assertion per line — the grading list
 
 	origID    int
 	origSkill string
@@ -76,6 +77,7 @@ func (m *Model) openEditor(e store.Entry, isNew bool) tea.Cmd {
 		c := sk.Output.Evals[e.Index]
 		st.d = draft{id: strconv.Itoa(c.ID), skill: sk.Name, slug: c.Slug, prompt: c.Prompt,
 			expect: c.ExpectedOutput, files: strings.Join(c.Files, "\n"),
+			assert: strings.Join(c.Assertions, "\n"),
 			origID: c.ID, origSkill: sk.Name, origSlug: c.Slug}
 	}
 	st.build()
@@ -150,6 +152,10 @@ func (e *editorState) build() {
 					}),
 				huh.NewText().Title("expected_output").Value(&d.expect).Lines(5).
 					Description("what a correct run produces — the grader's yardstick"),
+			),
+			huh.NewGroup(
+				huh.NewText().Title("assertions").Value(&d.assert).Lines(5).
+					Description("one checkable statement per line — graded PASS/FAIL with evidence; leave empty until you have seen a run"),
 			),
 			huh.NewGroup(
 				huh.NewText().Title("files").Value(&d.files).Lines(3).
@@ -287,13 +293,15 @@ func (e *editorState) apply(m *Model) {
 	}
 
 	c := model.OutputCase{ID: id, Slug: strings.TrimSpace(e.d.slug), Prompt: strings.TrimSpace(e.d.prompt),
-		ExpectedOutput: strings.TrimSpace(e.d.expect), Files: splitLines(e.d.files)}
+		ExpectedOutput: strings.TrimSpace(e.d.expect), Files: splitLines(e.d.files),
+		Assertions: splitAssertions(e.d.assert)}
 	if !e.isNew {
 		sk := m.store.Skill(e.d.origSkill)
 		c = sk.Output.Evals[e.target.Index]
 		c.ID, c.Slug = id, strings.TrimSpace(e.d.slug)
 		c.Prompt, c.ExpectedOutput = strings.TrimSpace(e.d.prompt), strings.TrimSpace(e.d.expect)
 		c.Files = splitLines(e.d.files)
+		c.Assertions = splitAssertions(e.d.assert)
 	}
 	if e.isNew {
 		err = m.store.AddOutput(e.d.skill, c)
@@ -354,6 +362,18 @@ func (m *Model) updateEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editor.apply(m)
 	}
 	return m, cmd
+}
+
+// splitAssertions keeps an assertion on one line: unlike files, a comma is content here
+// ("the chart shows March, July and November"), so only line breaks separate entries.
+func splitAssertions(s string) []string {
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		if p := strings.TrimSpace(line); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func splitLines(s string) []string {

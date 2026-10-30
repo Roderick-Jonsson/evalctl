@@ -47,6 +47,19 @@ func splitList(raw string) []string {
 	return out
 }
 
+// splitAssertions reads a grading list: one assertion per line, or ';' when it came in on one
+// line. Commas are never a separator — an assertion that reads "March, July and November" is one
+// statement, and splitting it would silently grade half of it.
+func splitAssertions(raw string) []string {
+	var out []string
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == '\n' || r == ';' }) {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // ---------------------------------------------------------------- add
 
 func runAdd(args []string) int {
@@ -62,6 +75,7 @@ func runAdd(args []string) int {
 	prompt := fs.String("prompt", "", "output: the case prompt (- for stdin)")
 	expected := fs.String("expected", "", "output: expected_output (- for stdin)")
 	files := fs.String("files", "", "output: comma-separated fixture files, relative to the slug dir")
+	assertions := fs.String("assertions", "", "output: newline- or ;-separated assertions, the grading list")
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
 	}
@@ -99,7 +113,7 @@ func runAdd(args []string) int {
 			map[string]bool{store.LaneTrigger: true})
 	}
 
-	cse := model.OutputCase{ID: *id, Slug: *slug, Files: splitList(*files)}
+	cse := model.OutputCase{ID: *id, Slug: *slug, Files: splitList(*files), Assertions: splitAssertions(*assertions)}
 	if cse.ID == 0 {
 		cse.ID = c.s.NextCaseID(*skill)
 	}
@@ -139,6 +153,7 @@ func runEdit(args []string) int {
 	prompt := fs.String("prompt", "", "output: new prompt (- for stdin)")
 	expected := fs.String("expected", "", "output: new expected_output (- for stdin)")
 	files := fs.String("files", "", "output: new fixture file list, comma-separated ('' to clear)")
+	assertions := fs.String("assertions", "", "output: new assertion list, one per line or ';'-separated ('' to clear)")
 	dry := fs.Bool("dry-run", false, "show the change without writing")
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
@@ -223,6 +238,9 @@ func runEdit(args []string) int {
 	if set["files"] {
 		cse.Files = splitList(*files)
 	}
+	if set["assertions"] {
+		cse.Assertions = splitAssertions(*assertions)
+	}
 	if *dry {
 		printCaseDiff(before, cse)
 		return 0
@@ -282,6 +300,9 @@ func caseDiff(before, after model.OutputCase) string {
 	}
 	if strings.Join(before.Files, ",") != strings.Join(after.Files, ",") {
 		parts = append(parts, fmt.Sprintf("files %v -> %v", before.Files, after.Files))
+	}
+	if strings.Join(before.Assertions, "\n") != strings.Join(after.Assertions, "\n") {
+		parts = append(parts, fmt.Sprintf("assertions %d -> %d", len(before.Assertions), len(after.Assertions)))
 	}
 	if len(parts) == 0 {
 		return "no change"

@@ -226,6 +226,18 @@ func newViewer(s *store.Store, e store.Entry, width, height int) *viewerState {
 	v.title = fmt.Sprintf("%s case #%d · %s", sk.Name, c.ID, c.Slug)
 	add("prompt", c.Prompt)
 	add("expected_output", c.ExpectedOutput)
+	if len(c.Assertions) > 0 {
+		var b strings.Builder
+		for i, a := range c.Assertions {
+			b.WriteString(fmt.Sprintf("%d. %s", i+1, a))
+			if i < len(c.Assertions)-1 {
+				b.WriteString("\n")
+			}
+		}
+		add(fmt.Sprintf("assertions (%d)", len(c.Assertions)), b.String())
+	} else {
+		add("assertions", "(none yet — add them once a run has shown what good looks like)")
+	}
 	if len(c.Files) > 0 {
 		add("files", strings.Join(c.Files, "\n"))
 	} else {
@@ -280,7 +292,7 @@ func wrapText(s string, width int) []string {
 func (m *Model) updateViewer(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	v := m.viewer
 	if v == nil {
-		m.mode = screenList
+		m.mode = m.back()
 		return m, nil
 	}
 	h := max(4, m.height-6)
@@ -290,7 +302,7 @@ func (m *Model) updateViewer(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if v.kind == "activity" && m.runActive {
 			m.mode = screenRunProgress
 		} else {
-			m.mode = screenList
+			m.mode = m.back()
 		}
 		m.viewer = nil
 	case "down", "j":

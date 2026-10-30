@@ -22,16 +22,20 @@ type Filter struct {
 
 // Entry is the read-only view of one row, shared by the CLI and the TUI.
 type Entry struct {
-	Lane  string `json:"lane"`
-	Index int    `json:"index"` // index into the lane's slice
-	ID    int    `json:"id"`
-	Skill string `json:"skill"`
-	Slug  string `json:"slug,omitempty"`
-	Label string `json:"label,omitempty"` // "yes" / "no" (trigger), "" (output)
-	Split string `json:"split,omitempty"`
-	Text  string `json:"text"` // query / prompt
-	Why   string `json:"why,omitempty"`
-	Dupe  int    `json:"dupe,omitempty"` // 1-based near-duplicate cluster, 0 = unique
+	Lane   string `json:"lane"`
+	Index  int    `json:"index"` // index into the lane's slice
+	ID     int    `json:"id"`
+	Skill  string `json:"skill"`
+	Slug   string `json:"slug,omitempty"`
+	Label  string `json:"label,omitempty"` // "yes" / "no" (trigger), "" (output)
+	Split  string `json:"split,omitempty"`
+	Text   string `json:"text"` // query / prompt
+	Why    string `json:"why,omitempty"`
+	Dupe   int    `json:"dupe,omitempty"`   // 1-based near-duplicate cluster, 0 = unique
+	Assert int    `json:"assert,omitempty"` // output: how many assertions the case declares
+	// Assertions is the case's grading list, carried so a search can find a case by what it
+	// checks ("which case covers the manifest?") instead of by what it was asked.
+	Assertions []string `json:"assertions,omitempty"`
 }
 
 // Rows lists a lane's entries in file order, filtered.
@@ -56,7 +60,8 @@ func (s *Store) Rows(lane string, f Filter) []Entry {
 		for _, sk := range s.Skills {
 			for i, c := range sk.Output.Evals {
 				e := Entry{Lane: lane, Index: i, ID: c.ID, Skill: sk.Name, Slug: c.Slug,
-					Text: c.Prompt, Dupe: clusters[rowKey(lane, sk.Name, i)]}
+					Text: c.Prompt, Dupe: clusters[rowKey(lane, sk.Name, i)], Assert: len(c.Assertions),
+					Assertions: c.Assertions}
 				if f.matches(e) {
 					out = append(out, e)
 				}
@@ -89,7 +94,8 @@ func (s *Store) EntryAt(lane string, skill string, index int) (Entry, bool) {
 		}
 		c := sk.Output.Evals[index]
 		return Entry{Lane: lane, Index: index, ID: c.ID, Skill: sk.Name, Slug: c.Slug,
-			Text: c.Prompt, Dupe: s.DupeClusters(lane, DefaultDupeThreshold)[rowKey(lane, sk.Name, index)]}, true
+			Text: c.Prompt, Dupe: s.DupeClusters(lane, DefaultDupeThreshold)[rowKey(lane, sk.Name, index)],
+			Assert: len(c.Assertions), Assertions: c.Assertions}, true
 	}
 	return Entry{}, false
 }
@@ -113,7 +119,8 @@ func (f Filter) matches(e Entry) bool {
 		if f.In != "" && ColumnExists(e.Lane, f.In) {
 			hay = strings.ToLower(ColumnValue(e, f.In))
 		} else {
-			hay = strings.ToLower(strings.Join([]string{e.Text, e.Slug, e.Why, e.Skill, e.Split}, " "))
+			hay = strings.ToLower(strings.Join(append([]string{e.Text, e.Slug, e.Why, e.Skill, e.Split},
+				e.Assertions...), " "))
 		}
 		if !strings.Contains(hay, needle) {
 			return false

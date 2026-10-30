@@ -125,7 +125,7 @@ func laneOrder(lane string, keys []store.Sort, group string) store.Order {
 }
 
 func printLane(s *store.Store, lane string, rows []store.Entry, width int, order store.Order) {
-	textWidth := width - 50
+	textWidth := width - 54
 	if textWidth < 24 {
 		textWidth = 24
 	}
@@ -140,14 +140,19 @@ func printLane(s *store.Store, lane string, rows []store.Entry, width int, order
 		if s.FixtureExists(e.Skill, e.Slug) {
 			fix = fmt.Sprintf("%d file(s)", len(s.FixtureFiles(e.Skill, e.Slug)))
 		}
-		return []string{fmt.Sprintf("%d", e.ID), e.Skill, e.Slug, dupeCell(e.Dupe), oneLine(e.Text), fix}
+		asr := "-"
+		if e.Assert > 0 {
+			asr = fmt.Sprintf("%d", e.Assert)
+		}
+		return []string{fmt.Sprintf("%d", e.ID), e.Skill, e.Slug, asr, dupeCell(e.Dupe), oneLine(e.Text), fix}
 	}
 	if lane == store.LaneTrigger {
 		fmt.Println(styleTitle.Render(fmt.Sprintf("trigger queries · %d", len(rows))))
 		header, limits = []string{"ID", "SKILL", "TRIG", "SPLIT", "DUP", "QUERY"}, []int{4, 20, 0, 11, 4, textWidth}
 	} else {
 		fmt.Println(styleTitle.Render(fmt.Sprintf("output cases · %d", len(rows))))
-		header, limits = []string{"ID", "SKILL", "SLUG", "DUP", "PROMPT", "FIXTURE"}, []int{4, 20, 24, 4, textWidth, 9}
+		header, limits = []string{"ID", "SKILL", "SLUG", "ASR", "DUP", "PROMPT", "FIXTURE"},
+			[]int{4, 20, 24, 4, 4, textWidth, 9}
 	}
 	groups := store.GroupEntries(rows, order.Group)
 	out := make([]tableGroup, 0, len(groups))
@@ -258,6 +263,15 @@ func runShow(args []string) int {
 	fmt.Printf("  slug         %s\n", cse.Slug)
 	fmt.Printf("  prompt       %s\n", wrapIndent(cse.Prompt, 15))
 	fmt.Printf("\n  expected     %s\n", wrapIndent(cse.ExpectedOutput, 15))
+	if len(cse.Assertions) > 0 {
+		lines := make([]string, len(cse.Assertions))
+		for i, a := range cse.Assertions {
+			lines[i] = fmt.Sprintf("%d. %s", i+1, a)
+		}
+		fmt.Printf("\n  assertions   %s\n", strings.Join(lines, "\n               "))
+	} else {
+		fmt.Printf("\n  assertions   (none yet)\n")
+	}
 	if len(cse.Files) > 0 {
 		fmt.Printf("\n  files        %s\n", strings.Join(cse.Files, "\n               "))
 	} else {

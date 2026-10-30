@@ -121,12 +121,18 @@ func (f TriggerFile) MarshalJSON() ([]byte, error) {
 
 // OutputCase is one graded case of <skill>/evals/evals.json. `files` is always present (the
 // standard's pre-flight check wants the key) and always relative to the slug's fixture dir.
+//
+// `assertions` is the standard's grading unit: one verifiable statement per entry, graded PASS
+// or FAIL with evidence. The key is written only when the case has any, because a case that has
+// none yet reads better as the shape it actually is — the guide adds assertions after the first
+// graded iteration, and an empty array in every case would say the opposite.
 type OutputCase struct {
 	ID             int      `json:"id"`
 	Slug           string   `json:"slug"`
 	Prompt         string   `json:"prompt"`
 	ExpectedOutput string   `json:"expected_output"`
 	Files          []string `json:"files"`
+	Assertions     []string `json:"assertions,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
@@ -140,7 +146,7 @@ func (c *OutputCase) UnmarshalJSON(b []byte) error {
 	}
 	*c = OutputCase(a)
 	var err error
-	c.Extra, err = extras(b, "id", "slug", "prompt", "expected_output", "files")
+	c.Extra, err = extras(b, "id", "slug", "prompt", "expected_output", "files", "assertions")
 	return err
 }
 
@@ -163,6 +169,11 @@ func (c OutputCase) MarshalJSON() ([]byte, error) {
 		{"files", files},
 	} {
 		if err := field(&b, &first, f.name, f.val); err != nil {
+			return nil, err
+		}
+	}
+	if len(c.Assertions) > 0 {
+		if err := field(&b, &first, "assertions", c.Assertions); err != nil {
 			return nil, err
 		}
 	}

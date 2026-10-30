@@ -22,8 +22,9 @@ import (
 
 const usage = `evalctl — manage and run the eval sets: trigger queries and output cases.
 
-  evalctl                          interactive TUI (list, filter, multi-select, edit, run)
-  evalctl tui                      same, explicit
+  evalctl                          interactive TUI, opening on the skill list
+  evalctl tui [--skill S] [--lane L]  open a skill directly, or the unscoped lane view
+  evalctl skills                   the set by skill: cases, assertions, fixtures, trigger rows, health
   evalctl ls                       list rows (--lane, --skill, --label, --split, --search, --dupes)
                                    order: --sort skill,id:desc --group skill --in slug (search scope)
   evalctl show <ref>               one row in full (ref: t12, o:skill:3, or 12 --lane)
@@ -76,6 +77,8 @@ func Run(args []string) int {
 		return runVersion(rest)
 	case "tui":
 		return runTUI(rest, store.LaneTrigger)
+	case "skills", "skill":
+		return runSkills(rest)
 	case "ls", "list":
 		return runList(rest)
 	case "show":
@@ -490,6 +493,7 @@ func saveTouched(c *common, changes []string, touched map[string]bool) int {
 func runTUI(args []string, lane string) int {
 	fs, c := newFS("tui")
 	laneFlag := fs.String("lane", lane, "lane to open: trigger or output")
+	skillFlag := fs.String("skill", "", "open scoped to this stage skill (default: the skill list)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -513,5 +517,78 @@ func runTUI(args []string, lane string) int {
 		fmt.Fprintln(os.Stderr, "evalctl: the TUI needs an interactive terminal — use `evalctl ls`, `evalctl stats`, `evalctl dupes` or `evalctl validate` instead")
 		return 2
 	}
-	return tui.Run(s, *laneFlag)
+	if *skillFlag != "" && s.Skill(*skillFlag) == nil {
+		return fail(fmt.Errorf("unknown skill %q (known: %s)", *skillFlag, strings.Join(s.KnownSkills(), ", ")))
+	}
+	return tui.Run(s, *skillFlag, *laneFlag)
+}
+
+// runSkills is the CLI face of the TUI's front door: one row per stage skill, so the state of a
+// skill — its cases, how many carry assertions, its fixtures, its trigger rows, its findings —
+// is one command instead of a filter away in each lane.
+func runSkills(args []string) int {
+	fs, c := newFS("skills")
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	if err := c.parse(fs, args); err != nil {
+		return fail(err)
+	}
+	sums := c.s.Summaries()
+	if *asJSON {
+		if err := writeJSON(os.Stdout, sums); err != nil {
+			return fail(err)
+		}
+		return 0
+	}
+	if len(sums) == 0 {
+		fmt.Println(styleDim.Render("no stage skills in this tree"))
+		return 0
+	}
+	rows := make([][]string, 0, len(sums))
+	for _, sum := range sums {
+		asr := "-"
+		if sum.Cases > 0 {
+			asr = fmt.Sprintf("%d/%d", sum.Graded, sum.Cases)
+		}
+		fix := "-"
+		if sum.Fixtures > 0 {
+			fix = fmt.Sprintf("%d dirs · %d files", sum.Fixtures, sum.Files)
+		}
+		trig := "-"
+		if sum.Queries > 0 {
+			trig = fmt.Sprintf("%d · %d/%d", sum.Queries, sum.Should, sum.ShouldNot)
+		}
+		health := styleChange.Render(sum.Health())
+		switch {
+		case sum.Errors > 0:
+			health = styleErr.Render(sum.Health())
+		case sum.Warnings > 0:
+			health = styleWarn.Render(sum.Health())
+		}
+		name := sum.Skill
+		if !sum.OnDisk {
+			name += " (no evals.json)"
+		}
+		rows = append(rows, []string{name, fmt.Sprint(sum.Cases), asr, fix, trig, health})
+	}
+	table(os.Stdout, []string{"SKILL", "CASES", "ASR", "FIXTURE", "TRIGGER", "HEALTH"}, rows, nil)
+	fmt.Println(styleDim.Render(fmt.Sprintf(
+		"  %d skill(s) · assertions: %d across %d case(s) · `evalctl ls --skill S` for one skill's rows",
+		len(sums), totalAssertions(sums), totalGraded(sums))))
+	return 0
+}
+
+func totalAssertions(sums []store.SkillSummary) int {
+	n := 0
+	for _, s := range sums {
+		n += s.Assertions
+	}
+	return n
+}
+
+func totalGraded(sums []store.SkillSummary) int {
+	n := 0
+	for _, s := range sums {
+		n += s.Graded
+	}
+	return n
 }

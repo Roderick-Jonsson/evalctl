@@ -105,7 +105,15 @@ func (m *Model) openLauncher() {
 			}
 		}
 	}
+	if len(targets) == 0 && m.skill != "" {
+		// Nothing selected in a skill's view means that skill's whole lane: the list on screen is
+		// already the filter, and running every other stage from here would grade far more than
+		// the form said.
+		l.skills = []string{m.skill}
+	}
 	switch n := len(targets); {
+	case n == 0 && m.skill != "":
+		l.target = "every row of " + m.skill + " in this lane"
 	case n == 0:
 		l.target = "every row in this lane"
 	case n == 1:
@@ -770,12 +778,12 @@ func (m *Model) openRuns() {
 func (m *Model) updateRuns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	list := m.runsList
 	if list == nil {
-		m.mode = screenList
+		m.mode = m.back()
 		return m, nil
 	}
 	switch msg.String() {
 	case "esc", "q":
-		m.mode = screenList
+		m.mode = m.back()
 		return m, nil
 	case "r":
 		list.infos = runner.New(m.store).ListRuns()

@@ -22,7 +22,8 @@ import (
 type screen int
 
 const (
-	screenList screen = iota
+	screenSkills screen = iota // the front door: one line per stage skill
+	screenList
 	screenEditor
 	screenConfirm
 	screenViewer
@@ -35,6 +36,10 @@ const (
 type Model struct {
 	store *store.Store
 	lane  string
+	// skill scopes the list to one stage skill ("" = every skill). It is the unit the set is
+	// worked on, so it is a field of the model and not just a filter value: the header, the
+	// counts, the search placeholder and the way back all key off it.
+	skill string
 	ver   string // the build in hand, so the header never leaves you guessing
 
 	rows    []store.Entry
@@ -61,6 +66,10 @@ type Model struct {
 	status        string
 	statusErr     bool
 
+	skills *skillsState
+	// returnTo is where a browser screen goes back to: the skill list when that is where you
+	// opened it from, the scoped list otherwise.
+	returnTo  screen
 	editor    *editorState
 	confirm   *confirmState
 	viewer    *viewerState
@@ -77,9 +86,16 @@ type Model struct {
 	issues []store.Issue
 }
 
-// Run starts the TUI and returns the process exit code.
-func Run(s *store.Store, lane string) int {
+// Run starts the TUI and returns the process exit code. With no skill it opens on the skill
+// list — the choice that comes before any lane — and lane only decides what the unscoped view
+// shows once you pick "all skills".
+func Run(s *store.Store, skill, lane string) int {
 	m := newModel(s, lane)
+	if skill != "" {
+		m.enterSkill(skill)
+	} else {
+		m.openSkills()
+	}
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Println("evalctl tui:", err)
@@ -93,7 +109,10 @@ func newModel(s *store.Store, lane string) *Model {
 	ti.Placeholder = "search query / prompt / slug / why"
 	ti.CharLimit = 200
 	ti.Prompt = "/ "
-	m := &Model{store: s, lane: lane, ver: version.Resolve().Short(), chosen: map[string]bool{}, search: ti, focusCol: -1}
+	// screenSkills is the zero value, so a model built for a lane says so explicitly: nothing but
+	// openSkills puts a skill list on screen.
+	m := &Model{store: s, lane: lane, ver: version.Resolve().Short(), chosen: map[string]bool{},
+		search: ti, focusCol: -1, mode: screenList}
 	m.refresh()
 	m.issues = s.Validate()
 	return m
@@ -248,6 +267,15 @@ func (m *Model) listHeight() int {
 	return m.height - 8
 }
 
+// back is the screen a browser closes to. Everything that is not opened from the skill list
+// returns to the list, which is the default.
+func (m *Model) back() screen {
+	if m.returnTo == screenSkills {
+		return screenSkills
+	}
+	return screenList
+}
+
 func (m *Model) setStatus(msg string, isErr bool) {
 	m.status = msg
 	m.statusErr = isErr
@@ -255,8 +283,13 @@ func (m *Model) setStatus(msg string, isErr bool) {
 
 func (m *Model) revalidate() { m.issues = m.store.Validate() }
 
+// counts is the badge for what is on screen: scoped to a skill it counts only that skill's
+// findings, because "2 warnings" over another stage is noise in a view about this one.
 func (m *Model) counts() (errs, warns int) {
 	for _, i := range m.issues {
+		if m.skill != "" && i.Skill != m.skill {
+			continue
+		}
 		if i.Severity == store.SeverityError {
 			errs++
 		} else {
@@ -314,6 +347,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		}
 		switch m.mode {
+		case screenSkills:
+			return m.updateSkills(msg)
 		case screenEditor:
 			return m.updateEditor(msg)
 		case screenConfirm:
@@ -440,7 +475,9 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.chosen) > 0 {
 			m.chosen = map[string]bool{}
 			m.setStatus("selection cleared", false)
+			return m, nil
 		}
+		m.openSkills()
 		return m, nil
 	case "0":
 		if m.focusCol >= 0 {
@@ -535,9 +572,17 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refresh()
 		return m, nil
 	case "f":
+		if m.skill != "" {
+			m.setStatus("scoped to "+m.skill+" — esc goes back to the skill list", false)
+			return m, nil
+		}
 		m.cycleSkill(1)
 		return m, nil
 	case "F":
+		if m.skill != "" {
+			m.setStatus("scoped to "+m.skill+" — esc goes back to the skill list", false)
+			return m, nil
+		}
 		m.cycleSkill(-1)
 		return m, nil
 	case "s":
@@ -628,7 +673,7 @@ func columnDigit(s string) (int, bool) {
 // focusColumn moves the focus to column n (1-based); the same key again drops it. A focused
 // column is what o, g and / act on, so nothing else on the keyboard changes meaning.
 func (m *Model) focusColumn(n int) {
-	cols := laneColumns(m.lane)
+	cols := m.columns()
 	if n > len(cols) {
 		m.setStatus(fmt.Sprintf("this lane has %d columns", len(cols)), true)
 		return
@@ -643,7 +688,7 @@ func (m *Model) focusColumn(n int) {
 }
 
 func (m *Model) focusedColumnName() string {
-	cols := laneColumns(m.lane)
+	cols := m.columns()
 	if m.focusCol < 0 || m.focusCol >= len(cols) {
 		return ""
 	}
@@ -654,7 +699,7 @@ func (m *Model) focusedColumnName() string {
 func (m *Model) cycleSort() {
 	name := m.focusedColumnName()
 	if name == "" {
-		m.setStatus(fmt.Sprintf("focus a column first (1–%d), then o sorts by it", len(laneColumns(m.lane))), true)
+		m.setStatus(fmt.Sprintf("focus a column first (1–%d), then o sorts by it", len(m.columns())), true)
 		return
 	}
 	switch {
@@ -737,7 +782,10 @@ var (
 	headerFocus = lipgloss.NewStyle().Bold(true).Underline(true).Foreground(lipgloss.Color("15"))
 	headerSort  = lipgloss.NewStyle().Underline(true)
 	headerGroup = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true)
-	styleGroup  = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
+	// The two lanes of the current scope, drawn in the header as a switch.
+	tabActive  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	tabIdle    = lipgloss.NewStyle().Faint(true)
+	styleGroup = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
 	// badgeWarn has no width on purpose: colDupe is a 4-cell column style, and wrapping a
 	// sentence in it folds the header one character per line.
 	badgeWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
@@ -748,6 +796,10 @@ func (m *Model) View() string {
 		return "loading…"
 	}
 	switch m.mode {
+	case screenSkills:
+		if m.skills != nil {
+			return m.skillsView()
+		}
 	case screenEditor:
 		if m.editor != nil {
 			return m.editor.view(m.width)
@@ -827,7 +879,19 @@ func (m *Model) groupLine(it listItem) string {
 	return dimStyle.Render(lead) + styleGroup.Render(label) + dimStyle.Render(rule)
 }
 
+// header is the frame the list is read in: which build, which skill, and the two lanes that
+// skill owns with their counts — the switch you make is a tab, not a mode you have to discover.
 func (m *Model) header() string {
+	scope := dimStyle.Render("· all skills")
+	if m.skill != "" {
+		scope = titleStyle.Render("◆ " + m.skill)
+	}
+	line1 := strings.Join([]string{
+		titleStyle.Render("evalctl " + m.ver),
+		scope,
+		m.laneTabs(),
+	}, "  ")
+
 	errs, warns := m.counts()
 	badge := statusOk.Render("clean")
 	if errs > 0 {
@@ -835,29 +899,41 @@ func (m *Model) header() string {
 	} else if warns > 0 {
 		badge = badgeWarn.Render(fmt.Sprintf("! %d warning(s)", warns))
 	}
-	chips := []string{
-		titleStyle.Render("evalctl " + m.ver),
-		dimStyle.Render(m.store.Root),
-	}
-	laneLabel := "trigger queries"
-	if m.lane == store.LaneOutput {
-		laneLabel = "output cases"
-	}
-	shown := len(m.rows)
-	total := m.laneCount()
-	count := fmt.Sprintf("%s · %d/%d", titleStyle.Render(laneLabel), shown, total)
+	shown := fmt.Sprintf("%d of %d", len(m.rows), len(m.store.Rows(m.lane, store.Filter{Skill: m.skill})))
+	line2 := dimStyle.Render(m.store.Root) + "  " + shown + "  " + badge
 	if n := len(m.chosen); n > 0 {
-		count += " · " + styleOn.Render(fmt.Sprintf("%d selected", n)) + m.selectionBreakdown()
+		line2 += " · " + styleOn.Render(fmt.Sprintf("%d selected", n)) + m.selectionBreakdown()
 	}
 	if m.dirty {
-		count += " · " + badgeWarn.Render("unsaved")
+		line2 += " · " + badgeWarn.Render("unsaved")
 	}
 	if m.runActive {
-		count += " · " + badgeWarn.Render("⟳ run in progress")
+		line2 += " · " + badgeWarn.Render("⟳ run in progress")
 	}
-	line1 := strings.Join(chips, "  ")
-	line2 := count + "  " + badge + "  " + m.filterHint() + "  " + dimStyle.Render("tab lane")
+	if fh := m.filterHint(); fh != "" {
+		line2 += "  " + fh
+	}
 	return line1 + "\n" + line2
+}
+
+// laneTabs draws both lanes of the current scope; the active one is bracketed and bright, the
+// other still carries its count so the number of trigger rows behind it is never a surprise.
+func (m *Model) laneTabs() string {
+	var parts []string
+	for _, lane := range []string{store.LaneOutput, store.LaneTrigger} {
+		label := "trigger queries"
+		if lane == store.LaneOutput {
+			label = "output cases"
+		}
+		n := len(m.store.Rows(lane, store.Filter{Skill: m.skill}))
+		text := fmt.Sprintf("%s %d", label, n)
+		if lane == m.lane {
+			parts = append(parts, tabActive.Render("["+text+"]"))
+			continue
+		}
+		parts = append(parts, tabIdle.Render(" "+text+" "))
+	}
+	return strings.Join(parts, " ")
 }
 
 // selectionBreakdown names where the selection sits, so a trim across four skills is not a
@@ -884,7 +960,7 @@ func (m *Model) selectionBreakdown() string {
 
 func (m *Model) filterHint() string {
 	var parts []string
-	if m.filter.Skill != "" {
+	if m.filter.Skill != "" && m.skill == "" {
 		parts = append(parts, "skill="+m.filter.Skill)
 	}
 	if m.filter.Label != "" {
@@ -933,6 +1009,24 @@ type column struct {
 	cell  func(store.Entry) string
 }
 
+// columns is the table's column list for what is on screen. Scoped to one skill the SKILL column
+// would repeat the header on every row, so it is dropped — and the number keys renumber with it,
+// which is why they are read off this list rather than a constant.
+func (m *Model) columns() []column {
+	cols := laneColumns(m.lane)
+	if m.skill == "" {
+		return cols
+	}
+	out := make([]column, 0, len(cols))
+	for _, c := range cols {
+		if c.name == "skill" {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 func laneColumns(lane string) []column {
 	id := func(e store.Entry) string { return colID.Render(fmt.Sprintf("%-4d", e.ID)) }
 	skill := func(e store.Entry) string { return colSkill.Render(e.Skill) }
@@ -949,6 +1043,12 @@ func laneColumns(lane string) []column {
 			{name: "id", head: "ID", width: 4, cell: id},
 			{name: "skill", head: "SKILL", width: 20, cell: skill},
 			{name: "slug", head: "SLUG", width: 24, cell: func(e store.Entry) string { return colSlug.Render(e.Slug) }},
+			{name: "assert", head: "ASR", width: 4, cell: func(e store.Entry) string {
+				if e.Assert == 0 {
+					return colNone.Render("-   ")
+				}
+				return colAsr.Render(fmt.Sprintf("%-4d", e.Assert))
+			}},
 			{name: "dupe", head: "DUP", width: 4, cell: dupe},
 			{name: "text", head: "PROMPT", width: 0, cell: text},
 		}
@@ -982,7 +1082,7 @@ func headCell(label string, width int) string {
 func (m *Model) columnHead() string {
 	var b strings.Builder
 	b.WriteString("     ") // the cursor mark and the checkbox gutter, exactly as a row
-	cols := laneColumns(m.lane)
+	cols := m.columns()
 	for i, c := range cols {
 		style := dimStyle
 		switch {
@@ -1019,7 +1119,7 @@ func (m *Model) rowLine(i int, e store.Entry) string {
 	if m.chosen[m.key(e)] {
 		box = styleOn.Render("[x]")
 	}
-	cols := laneColumns(m.lane)
+	cols := m.columns()
 	fixed := 6 // mark, box, the space after the box
 	for _, c := range cols {
 		if c.width > 0 {
@@ -1068,11 +1168,15 @@ func (m *Model) footer() string {
 	} else if name := m.focusedColumnName(); name != "" {
 		hints = dimStyle.Render(fmt.Sprintf(
 			"col %s ▸ o sort · g group · / search this column · 1–%d another · 0 / esc clear",
-			name, len(laneColumns(m.lane))))
+			name, len(m.columns())))
 	} else if m.width < 150 {
-		hints = dimStyle.Render("space select · e edit · d delete · / search · 1–5 column · u dupes · R run · c chain · t →trigger · L results · ctrl+s save · ? help")
+		hints = dimStyle.Render("space select · e edit · d delete · / search · tab lane · v view · R run · c chain · t →trigger · L results · ctrl+s save · ? help · esc skills")
 	} else {
-		hints = dimStyle.Render("space select · e edit · n new · d delete · / search · 1–6 column (o sort · g group) · f skill · u dupes · s split · l label · v view · R run · c chain · t →trigger · L results · P profiles · ctrl+s save · ? help · q quit")
+		scope := "f skill"
+		if m.skill != "" {
+			scope = "esc skills"
+		}
+		hints = dimStyle.Render("space select · e edit · n new · d delete · / search · 1–6 column (o sort · g group) · tab lane · u dupes · s split · l label · v view · R run · c chain · t →trigger · L results · P profiles · ctrl+s save · ? help · q quit · " + scope)
 	}
 	status := m.status
 	if status == "" {
@@ -1096,18 +1200,27 @@ func (m *Model) helpView() string {
 	lines := []string{
 		titleStyle.Render("evalctl — keys"),
 		"",
-		"  tab          switch lane (trigger queries / output cases)",
-		"  j k ↑ ↓      move           g G  top / bottom      ctrl+d ctrl+u  half page",
+		titleStyle.Render("  the skill list (where it opens)"),
+		"  j k ↑ ↓      move           enter / →  open a skill",
+		"  /            filter the skill names      esc  clear the filter",
+		"  · all skills  the first row: every skill, both lanes, as before",
+		"  L / P        results browser / profiles, from here too",
+		"",
+		titleStyle.Render("  inside a skill"),
+		"  tab          its output cases ⇄ its trigger queries (the header carries both counts)",
+		"  esc          back to the skill list (after it has cleared a column focus or a selection)",
 		"  space        select row (and advance)      a  select all visible      A / esc  clear",
-		"  /            search text, slug, why, skill      esc clears it",
-		"  f / F        cycle skill filter forward / back",
-		"  s            cycle split (train / validation / any)      l  cycle label",
-		"  u            show only near-duplicate rows — the trim shortlist",
-		"  e enter      edit the focused row           n  new row in this lane",
+		"  e enter      edit the focused row           n  new row in this lane, skill prefilled",
+		"  v            full text: prompt, expected_output, files, assertions",
 		"  d x          delete selection (or the focused row); asks first",
-		"  v            full text of the focused row",
+		"  /            search prompt / slug / assertion      esc clears it",
+		"  u            show only near-duplicate rows — the trim shortlist",
+		"  s / l        cycle split / label (trigger lane)",
 		"  ctrl+s       write both lanes (atomic; backup in .evalctl/backups/)",
 		"",
+		dimStyle.Render("  everything else below works the same in a skill and in · all skills"),
+		"",
+		"  j k ↑ ↓      move           g G  top / bottom      ctrl+d ctrl+u  half page",
 		titleStyle.Render("  columns"),
 		"  1 … 6        focus a column of this lane (again, or 0 / esc, drops it)",
 		"  o            sort by the focused column: ascending → descending → file order",
@@ -1117,7 +1230,7 @@ func (m *Model) helpView() string {
 		dimStyle.Render("  selection, a delete or a run acts on the same rows in any order."),
 		"",
 		titleStyle.Render("  running the set"),
-		"  R            run what is selected (or the focused row, or the lane) — form, then enter",
+		"  R            run what is selected (or the whole lane of this skill) — form, then enter",
 		"  c            chain: promote a run's output into the next stage's fixture (output lane)",
 		"  t            a case's prompt becomes a trigger query — does that request pick the skill?",
 		"  L            results: every iteration under evals/results, enter opens its report.md rendered",
