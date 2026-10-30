@@ -234,7 +234,7 @@ func (s *Store) PromoteOutput(req PromoteRequest) (Promotion, error) {
 		return Promotion{}, fmt.Errorf("source run dir not found: %s", req.Source)
 	}
 
-	content, files, skipped, workspaces, err := readPromotion(src, stage.Denied(req.Skill))
+	content, files, skipped, workspaces, err := readPromotion(src, req.Skill)
 	if err != nil {
 		return Promotion{}, err
 	}
@@ -301,7 +301,7 @@ func PromotionPreview(src, skill string) (Promotion, error) {
 	if info, err := os.Stat(abs); err != nil || !info.IsDir() {
 		return Promotion{}, fmt.Errorf("source run dir not found: %s", src)
 	}
-	_, files, skipped, workspaces, err := readPromotion(abs, stage.Denied(skill))
+	_, files, skipped, workspaces, err := readPromotion(abs, skill)
 	if err != nil {
 		return Promotion{}, err
 	}
@@ -310,12 +310,9 @@ func PromotionPreview(src, skill string) (Promotion, error) {
 
 // readPromotion reads a run's arm dir into memory: only MC-*/ workspaces are carried (the arm
 // dir also holds the runner's own artifacts), and `_archive/` stays behind because a fixture is
-// a run's input, not its history.
-func readPromotion(src string, deny []string) (content map[string][]byte, files, skipped, workspaces []string, err error) {
-	denied := map[string]bool{}
-	for _, d := range deny {
-		denied[d] = true
-	}
+// a run's input, not its history. The target stage's own outputs (stage.Own) are skipped: they
+// are the stage's answers, and a fixture must hold only its inputs.
+func readPromotion(src, skill string) (content map[string][]byte, files, skipped, workspaces []string, err error) {
 	content = map[string][]byte{}
 	entries, err := os.ReadDir(src)
 	if err != nil {
@@ -336,7 +333,7 @@ func readPromotion(src string, deny []string) (content map[string][]byte, files,
 			}
 			name := rel(root, path)
 			key := filepath.ToSlash(filepath.Join(entry.Name(), name))
-			if denied[d.Name()] {
+			if stage.Own(skill, d.Name()) {
 				if d.IsDir() {
 					skipped = append(skipped, key+"/")
 					return fs.SkipDir

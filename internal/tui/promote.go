@@ -515,7 +515,7 @@ func promoPlaceholder(label string) string {
 	case "expected":
 		return "what a good run produces"
 	case "file":
-		return "path inside the workspace, e.g. PS.md or sources/"
+		return "path inside the workspace, e.g. PS-<topic>.md or sources/"
 	case "as":
 		return "name inside references/, e.g. PS-example.md"
 	}

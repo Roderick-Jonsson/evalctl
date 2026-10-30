@@ -192,7 +192,7 @@ evalctl promote --from 2/src-4-agentskills/with_skill --skill learning-path \
 evalctl promote --from 2/src-4-agentskills --skill learning-path --slug lp-4-x \
             --prompt "..." --dry-run                              # what would be staged, nothing written
 evalctl promote --to-references --from 3/lp-4-agentskills --dry-run  # the run's own output → references/
-evalctl promote --to-references --from 3/lp-4-agentskills --file LP.md --as LP-example.md
+evalctl promote --to-references --from 3/lp-4-agentskills --file LP-writing-agent-skills.md --as LP-example.md
 evalctl promote --to-references --from 3/lp-4-agentskills --as iteration-3/ --force  # replace what is there
 evalctl promote --to-trigger --from o:slide-builder:3             # that case's prompt as a trigger query
 evalctl promote --to-trigger --from slide-builder:3 --label no --skill learning-path \
@@ -256,10 +256,11 @@ opens on the newest output iteration with the focused case already picked and th
 the target, and it previews the copy — every file that would land in the fixture, and everything
 deliberately left behind. What lands in the new fixture is **only** the `MC-[topic]/` workspace:
 the arm dir's own artifacts (`stream.jsonl`, `grading.json`, …) and `_archive/` stay behind, and so
-does the target stage's own output — the table in `internal/stage` (`LP.md`/`PO-Rev*.md` for
-learning-path, `SL.md`/`pages/` for slide-builder, …) is what gets dropped, because a fixture must
-hold the case's inputs, never its answers. Everything else it produced — `PS.md`, `sources/` —
-rides along, so citations resolve.
+does the target stage's own output — the glob table in `internal/stage` (`LP-*.md`/`PO-Rev*-*.md`
+for learning-path, `SL-*.md`/`pages/` for slide-builder, …) is what gets dropped, because a fixture
+must hold the case's inputs, never its answers. The patterns, not fixed names, are what identify a
+stage's output: documents carry their workspace's topic slug (`PS-writing-agent-skills.md`).
+Everything else it produced — `PS-*.md`, `sources/` — rides along, so citations resolve.
 
 A promotion never overwrites a fixture dir and never reuses a slug: the ancestry is recorded in
 the case as `promoted_from` (`run`, `case`, `arm`, `fixture_sha256`), an unknown key the format
@@ -286,15 +287,15 @@ evalctl promote --to-references --from <run>/<case>[/<arm>] [--skill S] \
 ```
 
 It is the mirror image of the chain above. The chain drops the producing stage's own outputs
-because a fixture must hold inputs; this one carries exactly those (`stage.Outputs`: `PS.md` and
-`sources/` for source-research, `LP.md` and the `PO-Rev*.md` files for learning-path) into
+because a fixture must hold inputs; this one carries exactly those (`stage.Outputs`: `PS-*.md` and
+`sources/` for source-research, `LP-*.md` and the `PO-Rev*-*.md` files for learning-path) into
 `<skill>/references/` — where `source-research/references/PS.md` already sits for the same reason,
 with `SKILL.md` telling the agent to take its shape and never its content.
 
 - `--skill` defaults to the case's own skill. `--file` takes one workspace-relative path (a dir
   recurses), `--all` the whole `MC-*/` workspace minus the runner's artifacts, and `--workspace`
   picks one when an arm wrote several.
-- Each file lands named as it is in the workspace (`PS.md`, `sources/x.md`); `--as` renames a
+- Each file lands named as it is in the workspace (`PS-writing-agent-skills.md`, `sources/x.md`); `--as` renames a
   single file, or names a directory — which must end in `/` when several files go in.
 - Nothing is overwritten without `--force`; the replaced bytes go to `.evalctl/backups/`. Every
   promotion is recorded in `.evalctl/references.json` (path, run, case, arm, sha256, time), so an

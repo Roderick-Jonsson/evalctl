@@ -58,8 +58,8 @@ type Reference struct {
 // the hash of the bytes it landed as. The log is gitignored on purpose — the reference itself is
 // tracked, so git carries the human history and this carries the machine's.
 type ReferenceRecord struct {
-	Path       string    `json:"path"`   // learning-path/references/LP.md, root-relative
-	Source     string    `json:"source"` // MC-x/LP.md, workspace-relative
+	Path       string    `json:"path"`   // learning-path/references/LP-<topic>.md, root-relative
+	Source     string    `json:"source"` // MC-x/LP-<topic>.md, workspace-relative
 	Run        string    `json:"run"`
 	Case       string    `json:"case"`
 	Arm        string    `json:"arm"`
@@ -242,7 +242,9 @@ func selectReferences(ws string, req ReferenceRequest) (taken, skipped []string,
 	case len(defaults) == 0:
 		return nil, nil, fmt.Errorf("no stage output table for %q (internal/stage) — pass --file <path> or --all", req.Skill)
 	default:
-		for _, name := range defaults {
+		// The patterns are matched against what this workspace holds: the documents are
+		// <PREFIX>-<topic>.md, so the entry names, not the patterns, are what collectFiles takes.
+		for _, name := range stage.Present(ws, req.Skill) {
 			found, err := collectFiles(ws, name)
 			if err != nil {
 				continue // this stage did not write that artifact

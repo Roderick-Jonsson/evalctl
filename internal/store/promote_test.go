@@ -18,21 +18,21 @@ func promotionTree(t *testing.T) (*Store, string) {
     {
       "id": 1,
       "slug": "lp-1-outline",
-      "prompt": "build the path from the PS.md here",
-      "expected_output": "LP.md and the PO files",
-      "files": ["MC-x/PS.md"]
+      "prompt": "build the path from the PS-x.md here",
+      "expected_output": "LP-x.md and the PO files",
+      "files": ["MC-x/PS-x.md"]
     }
   ]
 }`)
-	mustWrite(t, filepath.Join(root, "learning-path", "evals", "files", "lp-1-outline", "MC-x", "PS.md"),
+	mustWrite(t, filepath.Join(root, "learning-path", "evals", "files", "lp-1-outline", "MC-x", "PS-x.md"),
 		"**Subject Matter:**\n\nhand made\n")
 
 	arm := filepath.Join(root, "evals", "results", "iteration-2", "src-4-agentskills", "with_skill")
-	mustWrite(t, filepath.Join(arm, "MC-writing-agent-skills", "PS.md"),
-		"**Subject Matter:**\n\nWriting Agent Skills\n")
+	mustWrite(t, filepath.Join(arm, "MC-writing-agent-skills", "PS-writing-agent-skills.md"),
+		"**Subject Matter:**\n\nWriting Agent Skills\n\n**Type:**\n\nPrimary Sources\n")
 	mustWrite(t, filepath.Join(arm, "MC-writing-agent-skills", "sources", "home.md"), "raw snapshot")
-	mustWrite(t, filepath.Join(arm, "MC-writing-agent-skills", "LP.md"), "the answer to the next case")
-	mustWrite(t, filepath.Join(arm, "MC-writing-agent-skills", "PO-RevA.md"), "the answer")
+	mustWrite(t, filepath.Join(arm, "MC-writing-agent-skills", "LP-writing-agent-skills.md"), "the answer to the next case")
+	mustWrite(t, filepath.Join(arm, "MC-writing-agent-skills", "PO-RevA-writing-agent-skills.md"), "the answer")
 	mustWrite(t, filepath.Join(arm, "stream.jsonl"), `{"type":"result"}`)
 	mustWrite(t, filepath.Join(arm, "grading.json"), `{}`)
 
@@ -47,18 +47,18 @@ func TestPromoteOutputCuratesTheFixture(t *testing.T) {
 	s, arm := promotionTree(t)
 	res, err := s.PromoteOutput(PromoteRequest{
 		Skill: "learning-path", Slug: "lp-2-promoted", Prompt: "the MC-writing-agent-skills workspace here",
-		Expected: "LP.md, PO-RevA.md, PO-RevB.md", Source: arm, Run: "iteration-2",
+		Expected: "LP-<topic>.md, PO-RevA-<topic>.md, PO-RevB-<topic>.md", Source: arm, Run: "iteration-2",
 		Case: "src-4-agentskills", Arm: "with_skill",
 	})
 	if err != nil {
 		t.Fatalf("promote: %v", err)
 	}
 
-	want := []string{"MC-writing-agent-skills/PS.md", "MC-writing-agent-skills/sources/home.md"}
+	want := []string{"MC-writing-agent-skills/PS-writing-agent-skills.md", "MC-writing-agent-skills/sources/home.md"}
 	if strings.Join(res.Files, ",") != strings.Join(want, ",") {
 		t.Errorf("staged %v, want %v", res.Files, want)
 	}
-	if got := strings.Join(res.Skipped, ","); got != "MC-writing-agent-skills/LP.md,MC-writing-agent-skills/PO-RevA.md" {
+	if got := strings.Join(res.Skipped, ","); got != "MC-writing-agent-skills/LP-writing-agent-skills.md,MC-writing-agent-skills/PO-RevA-writing-agent-skills.md" {
 		t.Errorf("left behind %q", got)
 	}
 	for _, name := range []string{"stream.jsonl", "grading.json"} {
@@ -66,7 +66,7 @@ func TestPromoteOutputCuratesTheFixture(t *testing.T) {
 			t.Errorf("runner artifact %s was copied into the fixture", name)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(res.FixtureDir, "MC-writing-agent-skills", "LP.md")); err == nil {
+	if _, err := os.Stat(filepath.Join(res.FixtureDir, "MC-writing-agent-skills", "LP-writing-agent-skills.md")); err == nil {
 		t.Error("the target stage's own output was carried forward")
 	}
 	if res.SHA256 == "" {
@@ -189,12 +189,12 @@ func TestFixtureSHA256TracksContent(t *testing.T) {
 	if sha, err := FixtureSHA256(filepath.Join(dir, "absent")); sha != "" || err != nil {
 		t.Errorf("absent fixture = %q, %v", sha, err)
 	}
-	mustWrite(t, filepath.Join(dir, "MC-x", "PS.md"), "one")
+	mustWrite(t, filepath.Join(dir, "MC-x", "PS-x.md"), "one")
 	first, err := FixtureSHA256(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustWrite(t, filepath.Join(dir, "MC-x", "PS.md"), "two")
+	mustWrite(t, filepath.Join(dir, "MC-x", "PS-x.md"), "two")
 	second, err := FixtureSHA256(dir)
 	if err != nil {
 		t.Fatal(err)

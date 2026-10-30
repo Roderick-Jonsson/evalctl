@@ -17,20 +17,20 @@ func referenceTree(t *testing.T) (*Store, string) {
 	mustWrite(t, filepath.Join(root, "source-research", "evals", "evals.json"), `{
   "skill_name": "source-research",
   "evals": [
-    {"id": 4, "slug": "src-4-agentskills", "prompt": "research it", "expected_output": "PS.md", "files": []}
+    {"id": 4, "slug": "src-4-agentskills", "prompt": "research it", "expected_output": "PS-written.md", "files": []}
   ]
 }`)
-	mustWrite(t, filepath.Join(root, "source-research", "references", "PS.md"), "the worked example\n")
+	mustWrite(t, filepath.Join(root, "source-research", "references", "PS-written.md"), "the worked example\n")
 	mustWrite(t, filepath.Join(root, "learning-path", "evals", "evals.json"), `{
   "skill_name": "learning-path",
   "evals": [
-    {"id": 1, "slug": "lp-1-outline", "prompt": "build it", "expected_output": "LP.md", "files": []}
+    {"id": 1, "slug": "lp-1-outline", "prompt": "build it", "expected_output": "LP-written.md", "files": []}
   ]
 }`)
 	arm := filepath.Join(root, "evals", "results", "iteration-3", "src-4-agentskills", "with_skill")
-	mustWrite(t, filepath.Join(arm, "MC-written", "PS.md"), "**Subject Matter:**\n\nWriting Agent Skills\n")
+	mustWrite(t, filepath.Join(arm, "MC-written", "PS-written.md"), "**Subject Matter:**\n\nWriting Agent Skills\n\n**Type:**\n\nPrimary Sources\n")
 	mustWrite(t, filepath.Join(arm, "MC-written", "sources", "home.md"), "raw snapshot")
-	mustWrite(t, filepath.Join(arm, "MC-written", "LP.md"), "the next stage's answer")
+	mustWrite(t, filepath.Join(arm, "MC-written", "LP-written.md"), "the next stage's answer")
 	mustWrite(t, filepath.Join(arm, "stream.jsonl"), `{"type":"result"}`)
 
 	s, err := Open(root)
@@ -52,23 +52,23 @@ func TestPromoteReferencesTakesTheStagesOwnOutputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("promote: %v", err)
 	}
-	if got := strings.Join(res.Files, ","); got != "PS.md,sources/home.md" {
-		t.Errorf("took %q, want PS.md and its sources", got)
+	if got := strings.Join(res.Files, ","); got != "PS-written.md,sources/home.md" {
+		t.Errorf("took %q, want PS-written.md and its sources", got)
 	}
-	if got := strings.Join(res.Targets, ","); got != "run-3/PS.md,run-3/sources/home.md" {
+	if got := strings.Join(res.Targets, ","); got != "run-3/PS-written.md,run-3/sources/home.md" {
 		t.Errorf("targets %q", got)
 	}
-	if got := strings.Join(res.Skipped, ","); got != "LP.md" {
+	if got := strings.Join(res.Skipped, ","); got != "LP-written.md" {
 		t.Errorf("left behind %q, want only the next stage's artifact", got)
 	}
-	for _, name := range []string{"run-3/PS.md", "run-3/sources/home.md"} {
+	for _, name := range []string{"run-3/PS-written.md", "run-3/sources/home.md"} {
 		if _, err := os.Stat(filepath.Join(s.ReferencesDir("source-research"), filepath.FromSlash(name))); err != nil {
 			t.Errorf("reference %s not written: %v", name, err)
 		}
 	}
 	// The hand-written example and the runner's own artifacts are untouched.
-	if b, err := os.ReadFile(filepath.Join(s.ReferencesDir("source-research"), "PS.md")); err != nil || string(b) != "the worked example\n" {
-		t.Errorf("the existing PS.md changed: %q %v", b, err)
+	if b, err := os.ReadFile(filepath.Join(s.ReferencesDir("source-research"), "PS-written.md")); err != nil || string(b) != "the worked example\n" {
+		t.Errorf("the existing PS-written.md changed: %q %v", b, err)
 	}
 	if _, err := os.Stat(filepath.Join(s.ReferencesDir("source-research"), "stream.jsonl")); err == nil {
 		t.Error("the runner's artifact was copied into the skill")
@@ -88,7 +88,7 @@ func TestPromoteReferencesLogsWhereItCameFrom(t *testing.T) {
 		t.Fatalf("log = %+v, want one record per file", log)
 	}
 	first := log[0]
-	if first.Path != "source-research/references/run-3/PS.md" || first.Source != "PS.md" ||
+	if first.Path != "source-research/references/run-3/PS-written.md" || first.Source != "PS-written.md" ||
 		first.Run != "iteration-3" || first.Case != "src-4-agentskills" || first.Arm != "with_skill" {
 		t.Errorf("record = %+v", first)
 	}
@@ -123,11 +123,11 @@ func readReferenceLog(t *testing.T, s *Store) []ReferenceRecord {
 func TestPromoteReferencesNeverReplacesWithoutForce(t *testing.T) {
 	s, arm := referenceTree(t)
 	req := refReq(arm)
-	req.File, req.As = []string{"PS.md"}, "PS.md"
+	req.File, req.As = []string{"PS-written.md"}, "PS-written.md"
 	if _, err := s.PromoteReferences(req); err == nil || !strings.Contains(err.Error(), "already in references/") {
 		t.Fatalf("err = %v, want a refusal over the hand-written example", err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(s.ReferencesDir("source-research"), "PS.md")); string(b) != "the worked example\n" {
+	if b, _ := os.ReadFile(filepath.Join(s.ReferencesDir("source-research"), "PS-written.md")); string(b) != "the worked example\n" {
 		t.Error("a refused promotion still overwrote the reference")
 	}
 
@@ -135,10 +135,10 @@ func TestPromoteReferencesNeverReplacesWithoutForce(t *testing.T) {
 	if _, err := s.PromoteReferences(req); err != nil {
 		t.Fatalf("--force: %v", err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(s.ReferencesDir("source-research"), "PS.md")); strings.Contains(string(b), "worked example") {
+	if b, _ := os.ReadFile(filepath.Join(s.ReferencesDir("source-research"), "PS-written.md")); strings.Contains(string(b), "worked example") {
 		t.Error("--force did not replace the bytes")
 	}
-	backups, _ := filepath.Glob(filepath.Join(s.Root, ".evalctl", "backups", "*references_PS.md"))
+	backups, _ := filepath.Glob(filepath.Join(s.Root, ".evalctl", "backups", "*references_PS-written.md"))
 	if len(backups) != 1 {
 		t.Fatalf("backups = %v, want the replaced bytes kept", backups)
 	}
@@ -172,7 +172,7 @@ func TestPromoteReferencesAllTakesTheWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(res.Files, ","); got != "LP.md,PS.md,sources/home.md" {
+	if got := strings.Join(res.Files, ","); got != "LP-written.md,PS-written.md,sources/home.md" {
 		t.Errorf("took %q, want the workspace minus its runner artifacts", got)
 	}
 	if len(res.Skipped) != 0 {
@@ -190,7 +190,7 @@ func TestPromoteReferencesFileNarrowsToAPath(t *testing.T) {
 	if got := strings.Join(res.Targets, ","); got != "raw/sources/home.md" {
 		t.Errorf("targets %q, want the workspace-relative path kept under --as", got)
 	}
-	if got := strings.Join(res.Skipped, ","); got != "LP.md,PS.md" {
+	if got := strings.Join(res.Skipped, ","); got != "LP-written.md,PS-written.md" {
 		t.Errorf("left behind %q", got)
 	}
 }
@@ -200,7 +200,7 @@ func TestPromoteReferencesFileNarrowsToAPath(t *testing.T) {
 func TestPromoteReferencesRefusesToOverwriteAnExample(t *testing.T) {
 	s, arm := referenceTree(t)
 	_, err := s.PromoteReferences(ReferenceRequest{Skill: "source-research", Source: arm, All: true})
-	if err == nil || !strings.Contains(err.Error(), "already in references/: PS.md") {
+	if err == nil || !strings.Contains(err.Error(), "already in references/: PS-written.md") {
 		t.Fatalf("err = %v, want the collision named", err)
 	}
 }
@@ -208,7 +208,7 @@ func TestPromoteReferencesRefusesToOverwriteAnExample(t *testing.T) {
 func TestPromoteReferencesRefusesASetUnderOneName(t *testing.T) {
 	s, arm := referenceTree(t)
 	if _, err := s.PromoteReferences(ReferenceRequest{Skill: "source-research", Source: arm,
-		File: []string{"PS.md", "sources/"}, As: "PS-run.md"}); err == nil {
+		File: []string{"PS-written.md", "sources/"}, As: "PS-run.md"}); err == nil {
 		t.Fatal("a file name for two files was accepted")
 	}
 }
@@ -217,7 +217,7 @@ func TestPromoteReferencesRefusesToEscapeReferences(t *testing.T) {
 	s, arm := referenceTree(t)
 	for _, as := range []string{"../PS.md", "/etc/PS.md", "a/../../PS.md"} {
 		if _, err := s.PromoteReferences(ReferenceRequest{Skill: "source-research", Source: arm,
-			File: []string{"PS.md"}, As: as}); err == nil {
+			File: []string{"PS-written.md"}, As: as}); err == nil {
 			t.Errorf("--as %q was accepted", as)
 		}
 	}
@@ -229,14 +229,14 @@ func TestPromoteReferencesNamesWhatItCouldNotFind(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "it has:") {
 		t.Fatalf("err = %v, want the workspace listing", err)
 	}
-	if !strings.Contains(err.Error(), "PS.md") {
+	if !strings.Contains(err.Error(), "PS-written.md") {
 		t.Errorf("err %q does not name what is there", err)
 	}
 }
 
 func TestPromoteReferencesNeedsOneWorkspace(t *testing.T) {
 	s, arm := referenceTree(t)
-	mustWrite(t, filepath.Join(arm, "MC-second", "PS.md"), "another masterclass")
+	mustWrite(t, filepath.Join(arm, "MC-second", "PS-second.md"), "another masterclass")
 	_, err := s.PromoteReferences(refReq(arm))
 	if err == nil || !strings.Contains(err.Error(), "--workspace") {
 		t.Fatalf("err = %v, want an ambiguity refusal", err)
@@ -257,14 +257,14 @@ func TestPromoteReferencesNeedsOneWorkspace(t *testing.T) {
 func TestReferencePreviewReportsCollisions(t *testing.T) {
 	s, arm := referenceTree(t)
 	res, err := s.ReferencePreview(ReferenceRequest{Skill: "source-research", Source: arm,
-		File: []string{"PS.md"}, As: "PS.md"})
+		File: []string{"PS-written.md"}, As: "PS-written.md"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(res.Overwrote, ",") != "PS.md" {
+	if strings.Join(res.Overwrote, ",") != "PS-written.md" {
 		t.Errorf("collisions = %v", res.Overwrote)
 	}
-	if b, _ := os.ReadFile(filepath.Join(s.ReferencesDir("source-research"), "PS.md")); string(b) != "the worked example\n" {
+	if b, _ := os.ReadFile(filepath.Join(s.ReferencesDir("source-research"), "PS-written.md")); string(b) != "the worked example\n" {
 		t.Error("the preview wrote to the reference")
 	}
 	if _, err := os.Stat(s.ReferenceLogPath()); err == nil {

@@ -22,8 +22,8 @@ carrying the provenance is appended. <run> is 2 or iteration-2, <arm> defaults t
                             [--file <path>]... [--as <name|dir/>] [--all]
                             [--workspace MC-x] [--force] [--dry-run]
 
-Turn a run's own stage output into a worked example in the skill's references/: PS.md + sources/
-for source-research, LP.md + PO-Rev*.md for learning-path, and so on. That is the file an agent
+Turn a run's own stage output into a worked example in the skill's references/: PS-<topic>.md + sources/
+for source-research, LP-<topic>.md + the PO-Rev*-<topic>.md files for learning-path, and so on. That is the file an agent
 reads to learn the shape of a run — promote it, adapt it by hand, and the next run sees it.
 --skill defaults to the case's own skill; --file narrows to one path, --all takes the workspace;
 --as renames (or names a dir for several files). An existing reference is never replaced without
@@ -37,7 +37,7 @@ case it came from. <case-ref> is o:source-research:3, source-research:3 or a bar
 defaults to the case's own skill; pass a sibling with --label no to make a real negative.`
 
 // refFiles collects --file, repeatable and comma-separated: a promotion usually takes one
-// artifact but a stage's output can be a set (LP.md and its two PO revisions).
+// artifact but a stage's output can be a set (LP-<topic>.md and its two PO revisions).
 type refFiles []string
 
 func (r *refFiles) String() string { return strings.Join(*r, ",") }

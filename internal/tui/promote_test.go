@@ -27,21 +27,21 @@ func promoteTree(t *testing.T) *store.Store {
 	write(filepath.Join(root, "learning-path", "evals", "evals.json"), `{
   "skill_name": "learning-path",
   "evals": [
-    {"id": 1, "slug": "lp-1-outline", "prompt": "build the path", "expected_output": "LP.md", "files": []}
+    {"id": 1, "slug": "lp-1-outline", "prompt": "build the path", "expected_output": "LP-written.md", "files": []}
   ]
 }`)
 	write(filepath.Join(root, "source-research", "evals", "evals.json"), `{
   "skill_name": "source-research",
   "evals": [
-    {"id": 4, "slug": "src-4-agentskills", "prompt": "research it", "expected_output": "PS.md", "files": []}
+    {"id": 4, "slug": "src-4-agentskills", "prompt": "research it", "expected_output": "PS-written.md", "files": []}
   ]
 }`)
 	arm := filepath.Join(root, "evals", "results", "iteration-2", "src-4-agentskills", "with_skill")
-	write(filepath.Join(arm, "MC-written", "PS.md"), "**Subject Matter:**\n\nWriting Agent Skills\n")
+	write(filepath.Join(arm, "MC-written", "PS-written.md"), "**Subject Matter:**\n\nWriting Agent Skills\n\n**Type:**\n\nPrimary Sources\n")
 	write(filepath.Join(arm, "MC-written", "sources", "home.md"), "raw")
-	write(filepath.Join(arm, "MC-written", "LP.md"), "the answer")
+	write(filepath.Join(arm, "MC-written", "LP-written.md"), "the answer")
 	write(filepath.Join(arm, "stream.jsonl"), `{"type":"result"}`)
-	write(filepath.Join(root, "evals", "results", "iteration-2", "src-4-agentskills", "without_skill", "MC-written", "PS.md"), "bare")
+	write(filepath.Join(root, "evals", "results", "iteration-2", "src-4-agentskills", "without_skill", "MC-written", "PS-written.md"), "bare")
 
 	s, err := store.Open(root)
 	if err != nil {
@@ -94,10 +94,10 @@ func TestPromoteFormOpensFromTheOutputLane(t *testing.T) {
 	if p.id != 2 || p.slug != "lp-2-agentskills" {
 		t.Errorf("new case = #%d %q, want #2 lp-2-agentskills", p.id, p.slug)
 	}
-	if strings.Join(p.preview.Files, ",") != "MC-written/PS.md,MC-written/sources/home.md" {
+	if strings.Join(p.preview.Files, ",") != "MC-written/PS-written.md,MC-written/sources/home.md" {
 		t.Errorf("preview files = %v", p.preview.Files)
 	}
-	if strings.Join(p.preview.Skipped, ",") != "MC-written/LP.md" {
+	if strings.Join(p.preview.Skipped, ",") != "MC-written/LP-written.md" {
 		t.Errorf("preview kept %v", p.preview.Skipped)
 	}
 	view := m.View()
@@ -123,13 +123,13 @@ func TestPromoteFromTheFormWritesTheFixtureAndTheCase(t *testing.T) {
 		t.Fatalf("status = %q", m.status)
 	}
 	fixture := s.FixtureDir("learning-path", "lp-2-agentskills")
-	if _, err := os.Stat(filepath.Join(fixture, "MC-written", "PS.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(fixture, "MC-written", "PS-written.md")); err != nil {
 		t.Fatalf("fixture not written: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(fixture, "MC-written", "sources", "home.md")); err != nil {
 		t.Error("sources did not ride along")
 	}
-	if _, err := os.Stat(filepath.Join(fixture, "MC-written", "LP.md")); err == nil {
+	if _, err := os.Stat(filepath.Join(fixture, "MC-written", "LP-written.md")); err == nil {
 		t.Error("the target stage's own output was carried forward")
 	}
 	if _, err := os.Stat(filepath.Join(fixture, "stream.jsonl")); err == nil {
@@ -218,7 +218,7 @@ func TestPromoteFormEditsSlugAndCyclesTheTarget(t *testing.T) {
 	if m.promote.slug != "lp-2-hand-picked" {
 		t.Errorf("an edited slug was overwritten: %q", m.promote.slug)
 	}
-	if strings.Join(m.promote.preview.Skipped, ",") != "MC-written/PS.md,MC-written/sources/" {
+	if strings.Join(m.promote.preview.Skipped, ",") != "MC-written/PS-written.md,MC-written/sources/" {
 		t.Errorf("source-research promotion kept %v", m.promote.preview.Skipped)
 	}
 }
@@ -287,7 +287,7 @@ func TestPromoteFormWritesTheReference(t *testing.T) {
 	m.Update(key("c"))
 	focusLabel(t, m, "destination")
 	m.Update(key("right"))
-	if got := strings.Join(m.promote.reference.Files, ","); got != "PS.md,sources/home.md" {
+	if got := strings.Join(m.promote.reference.Files, ","); got != "PS-written.md,sources/home.md" {
 		t.Fatalf("preview took %q", got)
 	}
 	focusLabel(t, m, "enter to promote")
@@ -300,7 +300,7 @@ func TestPromoteFormWritesTheReference(t *testing.T) {
 		t.Fatalf("status = %q", m.status)
 	}
 	dir := s.ReferencesDir("source-research")
-	for _, name := range []string{"PS.md", "sources/home.md"} {
+	for _, name := range []string{"PS-written.md", "sources/home.md"} {
 		b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(name)))
 		if err != nil {
 			t.Fatalf("reference %s not written: %v", name, err)
@@ -309,7 +309,7 @@ func TestPromoteFormWritesTheReference(t *testing.T) {
 			t.Errorf("%s holds %q", name, b)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, "LP.md")); err == nil {
+	if _, err := os.Stat(filepath.Join(dir, "LP-written.md")); err == nil {
 		t.Error("the next stage's artifact was shipped as a reference")
 	}
 	if _, err := os.Stat(s.ReferenceLogPath()); err != nil {
@@ -323,7 +323,7 @@ func TestPromoteFormRefusesAReferenceAlreadyThere(t *testing.T) {
 	if err := os.MkdirAll(s.ReferencesDir("source-research"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(s.ReferencesDir("source-research"), "PS.md"), []byte("hand written\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(s.ReferencesDir("source-research"), "PS-written.md"), []byte("hand written\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	m := sized(newModel(s, store.LaneOutput), 140, 40)
@@ -332,7 +332,7 @@ func TestPromoteFormRefusesAReferenceAlreadyThere(t *testing.T) {
 	focusLabel(t, m, "destination")
 	m.Update(key("right"))
 
-	if strings.Join(m.promote.reference.Overwrote, ",") != "PS.md" {
+	if strings.Join(m.promote.reference.Overwrote, ",") != "PS-written.md" {
 		t.Fatalf("collisions = %v", m.promote.reference.Overwrote)
 	}
 	if view := m.View(); !strings.Contains(view, "already in references/") {
@@ -343,7 +343,7 @@ func TestPromoteFormRefusesAReferenceAlreadyThere(t *testing.T) {
 	if !strings.Contains(m.status, "already in references/") {
 		t.Errorf("status = %q, want the refusal", m.status)
 	}
-	if b, _ := os.ReadFile(filepath.Join(s.ReferencesDir("source-research"), "PS.md")); string(b) != "hand written\n" {
+	if b, _ := os.ReadFile(filepath.Join(s.ReferencesDir("source-research"), "PS-written.md")); string(b) != "hand written\n" {
 		t.Error("the hand-written reference was overwritten")
 	}
 }
