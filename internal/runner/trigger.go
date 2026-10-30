@@ -62,12 +62,12 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 
 	iteration := o.Iteration
 	if iteration == 0 {
-		iteration = r.NextIteration("trigger")
+		iteration = r.NextIteration(r.TriggerWorkspace(), "trigger")
 	}
-	iterDir := r.IterDir("trigger", iteration)
+	iterDir := r.TriggerIterDir(iteration)
 	if fileExists(iterDir) && !o.DryRun && !o.Resume && !o.Force {
-		return fmt.Errorf("evals/results/trigger-%d already exists — rerun with --resume, "+
-			"--force, or pick another --iteration", iteration)
+		return fmt.Errorf("%s already exists — rerun with --resume, --force, or pick another --iteration",
+			r.relative(iterDir))
 	}
 
 	start := fmt.Sprintf("trigger eval %d · %d quer(y/ies) × %d run(s) · threshold %v · profile %s · evalctl %s",
@@ -195,7 +195,7 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 		return err
 	}
 	triggerFileSHA := ""
-	if b, err := os.ReadFile(filepath.Join(r.Root, "evals", "trigger-evals.json")); err == nil {
+	if b, err := os.ReadFile(r.Store.TriggerPath); err == nil {
 		triggerFileSHA = sha256Hex(b)
 	}
 	descriptions := map[string]struct {
@@ -232,8 +232,9 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 		return err
 	}
 
-	msg := fmt.Sprintf("overall %s · train %s · validation %s · wrote evals/results/trigger-%d/report.md",
-		pctText(score.Overall), pctText(score.Splits["train"]), pctText(score.Splits["validation"]), iteration)
+	msg := fmt.Sprintf("overall %s · train %s · validation %s · wrote %s/report.md",
+		pctText(score.Overall), pctText(score.Splits["train"]), pctText(score.Splits["validation"]),
+		r.relative(iterDir))
 	r.emit(Event{Kind: EventScored, Lane: LaneTrigger, Case: fmt.Sprintf("trigger-%d", iteration), Message: msg})
 	r.emit(Event{Kind: EventDone, Lane: LaneTrigger, Case: fmt.Sprintf("trigger-%d", iteration), Message: msg})
 	return nil

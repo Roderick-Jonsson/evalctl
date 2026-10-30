@@ -1,5 +1,5 @@
 // Package store reads and writes the two eval lanes on disk. It never runs anything: it is the
-// only place that touches <root>/evals/trigger-evals.json and <root>/<skill>/evals/evals.json.
+// only place that touches <root>/trigger/trigger-evals.json and <root>/<skill>/evals/evals.json.
 package store
 
 import (
@@ -47,14 +47,17 @@ func Open(dir string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{Root: root, TriggerPath: filepath.Join(root, "evals", TriggerFileName)}
+	s := &Store{Root: root, TriggerPath: filepath.Join(root, "trigger", TriggerFileName)}
 
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, err
 	}
 	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || e.Name() == "evals" {
+		// evals/ is a skill's own case dir, trigger/ the trigger set, *-workspace/ a skill's run
+		// output: none of them is a stage skill.
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || e.Name() == "evals" ||
+			e.Name() == "trigger" || strings.HasSuffix(e.Name(), "-workspace") {
 			continue
 		}
 		path := filepath.Join(root, e.Name(), "evals", "evals.json")
@@ -87,9 +90,9 @@ func Open(dir string) (*Store, error) {
 	return s, nil
 }
 
-// FindRoot walks up from start to the project root: the dir holding the eval tree (an
-// evals/trigger-evals.json, or an evals/ dir), or failing that the dir holding stage
-// skills with their own evals/evals.json.
+// FindRoot walks up from start to the project root: the dir holding trigger/trigger-evals.json, or
+// failing that the dir holding stage skills with their own evals/evals.json. A tree still using the
+// old evals/trigger-evals.json is found too, so a half-migrated tree opens instead of vanishing.
 func FindRoot(start string) (string, error) {
 	abs, err := filepath.Abs(start)
 	if err != nil {
@@ -100,15 +103,17 @@ func FindRoot(start string) (string, error) {
 	}
 	dir := abs
 	for {
-		if isFile(filepath.Join(dir, "evals", TriggerFileName)) || hasSkillDirs(dir) {
+		if isFile(filepath.Join(dir, "trigger", TriggerFileName)) ||
+			isFile(filepath.Join(dir, "evals", TriggerFileName)) || hasSkillDirs(dir) {
 			return dir, nil
 		}
-		if filepath.Base(dir) == "evals" && isFile(filepath.Join(dir, TriggerFileName)) {
+		base := filepath.Base(dir)
+		if (base == "trigger" || base == "evals") && isFile(filepath.Join(dir, TriggerFileName)) {
 			return filepath.Dir(dir), nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", fmt.Errorf("no eval tree found at or above %s (expected evals/%s or <skill>/evals/evals.json)", abs, TriggerFileName)
+			return "", fmt.Errorf("no eval tree found at or above %s (expected trigger/%s or <skill>/evals/evals.json)", abs, TriggerFileName)
 		}
 		dir = parent
 	}

@@ -12,7 +12,7 @@ import (
 	"sort"
 )
 
-// TriggerQuery is one row of evals/trigger-evals.json: the query, the skill under test, the
+// TriggerQuery is one row of trigger/trigger-evals.json: the query, the skill under test, the
 // label, the split, and the human-readable reason the row exists.
 type TriggerQuery struct {
 	ID            int    `json:"id"`

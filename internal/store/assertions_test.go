@@ -13,7 +13,7 @@ import (
 func TestAssertionsRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	at := func(p string) string { return filepath.Join(root, p) }
-	mustWrite(t, at("evals/trigger-evals.json"), `{"queries":[{"id":1,"skill":"alpha","should_trigger":true,"split":"train","query":"research it"}]}`)
+	mustWrite(t, at("trigger/trigger-evals.json"), `{"queries":[{"id":1,"skill":"alpha","should_trigger":true,"split":"train","query":"research it"}]}`)
 	mustWrite(t, at("alpha/evals/evals.json"), `{
   "skill_name": "alpha",
   "evals": [
@@ -62,7 +62,7 @@ func TestAssertionsRoundTrip(t *testing.T) {
 func TestEmptyAssertionIsRejected(t *testing.T) {
 	root := t.TempDir()
 	at := func(p string) string { return filepath.Join(root, p) }
-	mustWrite(t, at("evals/trigger-evals.json"), `{"queries":[{"id":1,"skill":"alpha","should_trigger":true,"split":"train","query":"research it"}]}`)
+	mustWrite(t, at("trigger/trigger-evals.json"), `{"queries":[{"id":1,"skill":"alpha","should_trigger":true,"split":"train","query":"research it"}]}`)
 	mustWrite(t, at("alpha/evals/evals.json"), `{
   "skill_name": "alpha",
   "evals": [{"id": 1, "slug": "a-1", "prompt": "p", "expected_output": "e", "files": [],
@@ -88,7 +88,7 @@ func TestEmptyAssertionIsRejected(t *testing.T) {
 func TestSummariesCountPerSkill(t *testing.T) {
 	root := t.TempDir()
 	at := func(p string) string { return filepath.Join(root, p) }
-	mustWrite(t, at("evals/trigger-evals.json"), `{"queries":[
+	mustWrite(t, at("trigger/trigger-evals.json"), `{"queries":[
       {"id":1,"skill":"alpha","should_trigger":true,"split":"train","query":"a1"},
       {"id":2,"skill":"alpha","should_trigger":false,"split":"validation","query":"a2"},
       {"id":3,"skill":"beta","should_trigger":true,"split":"train","query":"b1"}]}`)
@@ -120,7 +120,7 @@ func TestSummariesCountPerSkill(t *testing.T) {
 func TestSummariesIncludeOrphanTriggerSkills(t *testing.T) {
 	root := t.TempDir()
 	at := func(p string) string { return filepath.Join(root, p) }
-	mustWrite(t, at("evals/trigger-evals.json"), `{"queries":[
+	mustWrite(t, at("trigger/trigger-evals.json"), `{"queries":[
       {"id":1,"skill":"alpha","should_trigger":true,"split":"train","query":"a1"},
       {"id":2,"skill":"gone","should_trigger":false,"split":"train","query":"g1"}]}`)
 	mustWrite(t, at("alpha/evals/evals.json"), `{"skill_name":"alpha","evals":[]}`)

@@ -759,7 +759,7 @@ func (m *Model) openReportFor(ref string) {
 		m.setStatus("no report.md yet — the iteration may not have finished", true)
 		return
 	}
-	m.viewer = newMarkdownViewer(info.Name+" · report.md", text, m.width)
+	m.viewer = newMarkdownViewer(info.Ref()+" · report.md", text, m.width)
 	m.mode = screenViewer
 }
 
@@ -810,10 +810,10 @@ func (m *Model) updateRuns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			info := list.infos[list.cursor]
 			text, err := runner.ReadReport(runner.New(m.store).ReportPath(info))
 			if err != nil {
-				m.setStatus(info.Name+" has no report.md yet", true)
+				m.setStatus(info.Ref()+" has no report.md yet", true)
 				return m, nil
 			}
-			m.viewer = newMarkdownViewer(info.Name+" · report.md", text, m.width)
+			m.viewer = newMarkdownViewer(info.Ref()+" · report.md", text, m.width)
 			m.mode = screenViewer
 		}
 		return m, nil
@@ -837,7 +837,7 @@ func (m *Model) openRunActivity(info runner.RunInfo) {
 	}
 	sort.Strings(files)
 	if len(files) == 0 {
-		m.setStatus(info.Name+" has no activity.log — run it again with activity on", true)
+		m.setStatus(info.Ref()+" has no activity.log — run it again with activity on", true)
 		return
 	}
 	lines := []string{}
@@ -852,7 +852,7 @@ func (m *Model) openRunActivity(info runner.RunInfo) {
 		}
 	}
 	m.viewer = &viewerState{kind: "run-activity",
-		title: fmt.Sprintf("%s · activity · %d arms", info.Name, len(files)), lines: lines}
+		title: fmt.Sprintf("%s · activity · %d arms", info.Ref(), len(files)), lines: lines}
 	m.mode = screenViewer
 }
 
@@ -863,12 +863,12 @@ func (m *Model) runsView() string {
 	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(fmt.Sprintf("results · %d iteration(s)", len(list.infos))) + "\n")
-	b.WriteString(dimStyle.Render("  evals/results — enter opens the report, r reloads") + "\n\n")
+	b.WriteString(dimStyle.Render("  one workspace per skill — enter opens the report, r reloads") + "\n\n")
 	if len(list.infos) == 0 {
 		b.WriteString(dimStyle.Render("  nothing yet — R starts a run") + "\n")
 	} else {
-		b.WriteString(dimStyle.Render(fmt.Sprintf("     %-16s %-8s %-6s %-6s %-14s %s",
-			"RUN", "LANE", "CASES", "RUNS", "PASS", "STARTED")) + "\n")
+		b.WriteString(dimStyle.Render(fmt.Sprintf("     %-16s %-16s %-8s %-6s %-6s %-14s %s",
+			"WORKSPACE", "RUN", "LANE", "CASES", "RUNS", "PASS", "STARTED")) + "\n")
 		for i, info := range list.infos {
 			mark := "  "
 			if i == list.cursor {
@@ -878,8 +878,12 @@ func (m *Model) runsView() string {
 			if info.PassRate != nil {
 				pass = fmt.Sprintf("%.0f%% (%d/%d)", *info.PassRate*100, info.Passed, info.Judged)
 			}
-			line := fmt.Sprintf("%s%-16s %-8s %-6d %-6d %-14s %s", mark, info.Name, info.Lane,
-				info.Cases, info.Runs, pass, info.Started)
+			workspace := info.Skill
+			if workspace == "" {
+				workspace = "—"
+			}
+			line := fmt.Sprintf("%s%-16s %-16s %-8s %-6d %-6d %-14s %s", mark, workspace, info.Name,
+				info.Lane, info.Cases, info.Runs, pass, info.Started)
 			if i == list.cursor {
 				line = styleCur.Render(line)
 			}

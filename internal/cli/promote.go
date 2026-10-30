@@ -16,7 +16,8 @@ const promoteUsage = `usage: evalctl promote --from <run>/<case>[/<arm>] --skill
 
 Turn a finished run's output into the next stage's fixture: the MC-[topic]/ workspace is copied
 into <skill>/evals/files/<new-slug>/, the target stage's own outputs are left behind, and a case
-carrying the provenance is appended. <run> is 2 or iteration-2, <arm> defaults to with_skill.
+carrying the provenance is appended. <run> is 2, iteration-2 or source-research@2 (the skill's
+workspace the run lives in), <arm> defaults to with_skill.
 
        evalctl promote --to-references --from <run>/<case>[/<arm>] [--skill S]
                             [--file <path>]... [--as <name|dir/>] [--all]
@@ -101,7 +102,7 @@ func runPromote(args []string) int {
 		return fail(fmt.Errorf("--skill and --slug are required (or --to-trigger / --to-references)\n\n%s", promoteUsage))
 	}
 	cse := store.PromoteRequest{Skill: *skill, Slug: *slug, ID: *id, Source: src.Dir,
-		Run: src.Run, Case: src.Case, Arm: src.Arm, DryRun: *dryRun}
+		SourceSkill: src.Skill, Run: src.Run, Case: src.Case, Arm: src.Arm, DryRun: *dryRun}
 	if cse.Prompt, err = value(*prompt); err != nil {
 		return fail(err)
 	}
@@ -128,7 +129,7 @@ func runPromote(args []string) int {
 	}
 
 	changes := []string{fmt.Sprintf("promoted %s/%s/%s into %s case #%d (%s)",
-		res.Run, res.Case, res.Arm, res.Skill, res.ID, res.Slug)}
+		store.RefOf(res.SourceSkill, res.Run), res.Case, res.Arm, res.Skill, res.ID, res.Slug)}
 	changes = append(changes, fmt.Sprintf("  staged %d file(s) from %s", len(res.Files), res.Source))
 	if len(res.Skipped) > 0 {
 		changes = append(changes, "  left behind (the target stage writes these): "+strings.Join(res.Skipped, ", "))
@@ -216,7 +217,7 @@ func promoteReferences(c *common, src promoSource, req referenceRequest) int {
 	defer unlock()
 
 	res, err := c.s.PromoteReferences(store.ReferenceRequest{
-		Skill: req.Skill, Source: src.Dir, Run: src.Run, Case: src.Case, Arm: src.Arm,
+		Skill: req.Skill, Source: src.Dir, SourceSkill: src.Skill, Run: src.Run, Case: src.Case, Arm: src.Arm,
 		Workspace: req.Workspace, File: req.File, All: req.All, As: req.As,
 		Force: req.Force, DryRun: req.DryRun})
 	if err != nil {
@@ -313,18 +314,23 @@ func printQueryPromotion(res store.QueryPromotion) {
 
 // promoSource is a resolved --from: one arm dir of one case of one iteration.
 type promoSource struct {
-	Dir  string
-	Run  string // iteration-2
-	Case string // src-4-agentskills
-	Arm  string // with_skill
+	Dir   string
+	Skill string // source-research — the workspace the run lives in
+	Run   string // iteration-2
+	Case  string // src-4-agentskills
+	Arm   string // with_skill
 }
 
-// resolvePromotionSource accepts <run>/<case-slug>[/<arm>], where run is 2 or iteration-2 and the
-// arm defaults to with_skill — the arm whose artifact is worth grading.
+// Ref names the source run unambiguously: source-research@iteration-2.
+func (p promoSource) Ref() string { return store.RefOf(p.Skill, p.Run) }
+
+// resolvePromotionSource accepts <run>/<case-slug>[/<arm>], where run is 2, iteration-2 or
+// source-research@2 — the skill prefix is required once two workspaces both hold that number — and
+// the arm defaults to with_skill, the arm whose artifact is worth grading.
 func resolvePromotionSource(s *store.Store, ref string) (promoSource, error) {
 	parts := strings.Split(strings.Trim(strings.TrimSpace(ref), "/"), "/")
 	if len(parts) < 2 || len(parts) > 3 {
-		return promoSource{}, fmt.Errorf("bad --from %q: want <run>/<case-slug>[/<arm>], e.g. 2/src-4-agentskills/with_skill", ref)
+		return promoSource{}, fmt.Errorf("bad --from %q: want <run>/<case-slug>[/<arm>], e.g. source-research@2/src-4-agentskills/with_skill", ref)
 	}
 	info, err := runner.New(s).ResolveRun(parts[0], store.LaneOutput)
 	if err != nil {
@@ -338,12 +344,12 @@ func resolvePromotionSource(s *store.Store, ref string) (promoSource, error) {
 	dir := filepath.Join(caseDir, arm)
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		if arms := armDirs(caseDir); len(arms) > 0 {
-			return promoSource{}, fmt.Errorf("%s/%s has no arm %q (on disk: %s)", info.Name, parts[1], arm,
+			return promoSource{}, fmt.Errorf("%s/%s has no arm %q (on disk: %s)", info.Ref(), parts[1], arm,
 				strings.Join(arms, ", "))
 		}
-		return promoSource{}, fmt.Errorf("%s holds no %q case — check the case slug (evalctl runs)", info.Name, parts[1])
+		return promoSource{}, fmt.Errorf("%s holds no %q case — check the case slug (evalctl runs)", info.Ref(), parts[1])
 	}
-	return promoSource{Dir: dir, Run: info.Name, Case: parts[1], Arm: arm}, nil
+	return promoSource{Dir: dir, Skill: info.Skill, Run: info.Name, Case: parts[1], Arm: arm}, nil
 }
 
 func armDirs(caseDir string) []string {
@@ -365,7 +371,7 @@ func armDirs(caseDir string) []string {
 // deliberately left behind.
 func printPromotion(res store.Promotion) {
 	fmt.Println(styleTitle.Render(fmt.Sprintf("would promote %s/%s/%s → %s case #%d (%s)",
-		res.Run, res.Case, res.Arm, res.Skill, res.ID, res.Slug)))
+		store.RefOf(res.SourceSkill, res.Run), res.Case, res.Arm, res.Skill, res.ID, res.Slug)))
 	fmt.Printf("  from         %s\n", res.Source)
 	fmt.Printf("  workspaces   %s\n", strings.Join(res.Workspaces, ", "))
 	fmt.Printf("  fixture      %s\n", res.FixtureDir)

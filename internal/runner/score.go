@@ -22,17 +22,21 @@ type CollectedRun struct {
 	Arms           map[string]ArmResult `json:"arms"`
 }
 
-// CollectRuns reads every finished case directory of an iteration back from disk.
+// CollectRuns reads every finished case directory of an iteration back from disk. With skill
+// set, only that skill's cases are collected — an iteration lives in one skill's workspace.
 //
-// Aggregating from disk (not from this invocation) lets a `--skill one` run accumulate into the
-// same iteration without clobbering the earlier cases.
-func (r *Runner) CollectRuns(iterDir string) ([]CollectedRun, error) {
+// Aggregating from disk (not from this invocation) lets a `--case 1,3 --resume` run accumulate
+// into the same iteration without clobbering the earlier cases.
+func (r *Runner) CollectRuns(iterDir, skill string) ([]CollectedRun, error) {
 	all, err := LoadCases(r.Store, r.Store.SkillNames(), nil)
 	if err != nil {
 		return nil, err
 	}
 	known := map[string]Case{}
 	for _, c := range all {
+		if skill != "" && c.Skill != skill {
+			continue
+		}
 		known[c.Slug] = c
 	}
 	entries, err := os.ReadDir(iterDir)
@@ -157,9 +161,9 @@ func mean(values []int64) int64 {
 }
 
 // Report renders report.md — the thing a human actually reads after an iteration.
-func Report(runs []CollectedRun, bench Benchmark, iteration int) string {
+func Report(runs []CollectedRun, bench Benchmark, skill string, iteration int) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Eval iteration %d\n\n", iteration)
+	fmt.Fprintf(&b, "# %s · eval iteration %d\n\n", skill, iteration)
 	fmt.Fprintf(&b, "Generated %s · %d case(s) · arms: with_skill / without_skill · evalctl %s\n\n",
 		bench.Generated, len(runs), version.Resolve())
 	b.WriteString("No assertions exist yet, so there is no pass rate. Read the expected output next to what " +

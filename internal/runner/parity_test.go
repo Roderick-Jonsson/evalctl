@@ -12,14 +12,14 @@ import (
 // TestRescoreMatchesStoredTriggerScores is the parity oracle: it re-scores an iteration that the
 // Python runner wrote, from the same per-run trigger.json records, and compares every verdict.
 //
-// It is opt-in on purpose — `evals/results/` is gitignored, so a machine without a finished
+// It is opt-in on purpose — the `*-workspace/` dirs are gitignored, so a machine without a finished
 // iteration must skip rather than fail. Run it once after the port:
 //
 //	EVALCTL_PARITY_ROOT=/path/to/project go test ./internal/runner -run Parity -v
 func TestRescoreMatchesStoredTriggerScores(t *testing.T) {
 	root := os.Getenv("EVALCTL_PARITY_ROOT")
 	if root == "" {
-		t.Skip("set EVALCTL_PARITY_ROOT to a tree holding evals/results to compare with the Python-written scores")
+		t.Skip("set EVALCTL_PARITY_ROOT to a tree holding its trigger-workspace/ to compare with the Python-written scores")
 	}
 	s, err := store.Open(root)
 	if err != nil {
@@ -98,7 +98,7 @@ func TestRescoreMatchesStoredTriggerScores(t *testing.T) {
 			info.Name, got.Overall.Judged, got.Overall.Rows, got.Overall.Passed)
 	}
 	if checked == 0 {
-		t.Skip("no trigger iterations under evals/results")
+		t.Skip("no trigger iterations under trigger-workspace/")
 	}
 }
 

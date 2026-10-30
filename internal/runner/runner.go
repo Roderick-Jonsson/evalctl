@@ -6,11 +6,15 @@
 //	output (default)  every case in <skill>/evals/evals.json runs twice — with the skill and
 //	                  without it — in two dedicated profiles (eval-vcc-with / eval-vcc-without)
 //	                  into fresh run roots, then timing, mechanical checks and a report are
-//	                  written next to the runs.
-//	trigger           every query in evals/trigger-evals.json runs N times against
+//	                  written into the skill's own workspace (<skill>-workspace/iteration-N/).
+//	trigger           every query in trigger/trigger-evals.json runs N times against
 //	                  eval-vcc-trigger (all four skills installed) in an empty run root, and the
 //	                  lane scores whether the right skill's SKILL.md got loaded — the
-//	                  agentskills.io description-optimization loop.
+//	                  agentskills.io description-optimization loop, into trigger-workspace/.
+//
+// One workspace per skill, the layout agentskills.io's "Evaluating skill output quality" lays out:
+// the cases live in <skill>/evals/ and the results sit beside the skill directory, so two stages'
+// iterations can never be confused for one another.
 //
 // The skill reaches the with-skill arm the way it reaches a real user: installed in the profile
 // and loaded by the agent on its own. The baseline arm holds zero skills, so the delta isolates
@@ -183,12 +187,22 @@ func (r *Runner) message(format string, args ...any) {
 	r.emit(Event{Kind: EventMessage, Message: fmt.Sprintf(format, args...)})
 }
 
-// ResultsDir is <root>/evals/results — the only place a run writes its output.
-func (r *Runner) ResultsDir() string { return filepath.Join(r.Root, "evals", "results") }
+// WorkspaceDir is <root>/<skill>-workspace — the workspace folder the guide puts beside the skill
+// directory. It holds that skill's iterations and nothing else.
+func (r *Runner) WorkspaceDir(skill string) string {
+	return filepath.Join(r.Root, skill+"-workspace")
+}
 
-// NextIteration is max(existing)+1 for one lane's directory prefix.
-func (r *Runner) NextIteration(prefix string) int {
-	entries, err := os.ReadDir(r.ResultsDir())
+// TriggerWorkspace is <root>/trigger-workspace. The trigger lane measures the bundle (which of
+// four skills answers a request), so its results belong to no single skill's workspace.
+func (r *Runner) TriggerWorkspace() string {
+	return filepath.Join(r.Root, "trigger-workspace")
+}
+
+// NextIteration is max(existing)+1 for one workspace's run dirs, so each workspace numbers its own
+// iterations from 1.
+func (r *Runner) NextIteration(workspace, prefix string) int {
+	entries, err := os.ReadDir(workspace)
 	if err != nil {
 		return 1
 	}
@@ -205,9 +219,14 @@ func (r *Runner) NextIteration(prefix string) int {
 	return best + 1
 }
 
-// IterDir is the directory one iteration writes into.
-func (r *Runner) IterDir(prefix string, iteration int) string {
-	return filepath.Join(r.ResultsDir(), fmt.Sprintf("%s-%d", prefix, iteration))
+// IterDir is the directory one output iteration writes into, inside a skill's workspace.
+func (r *Runner) IterDir(workspace string, iteration int) string {
+	return filepath.Join(workspace, fmt.Sprintf("iteration-%d", iteration))
+}
+
+// TriggerIterDir is the directory one trigger iteration writes into.
+func (r *Runner) TriggerIterDir(iteration int) string {
+	return filepath.Join(r.TriggerWorkspace(), fmt.Sprintf("trigger-%d", iteration))
 }
 
 // ResolveSkills turns "all" (or an empty list) into every stage skill that has a case file.
@@ -229,6 +248,7 @@ func (r *Runner) ResolveSkills(requested []string) ([]string, error) {
 // RunInfo is one finished (or in-progress) iteration, as the browser sees it.
 type RunInfo struct {
 	Name      string    `json:"name"`
+	Skill     string    `json:"skill,omitempty"` // the workspace owner; empty for the trigger lane
 	Lane      string    `json:"lane"`
 	Iteration int       `json:"iteration"`
 	Path      string    `json:"path"`
@@ -242,6 +262,15 @@ type RunInfo struct {
 	PassRate  *float64  `json:"pass_rate"`
 	HasReport bool      `json:"has_report"`
 	Updated   time.Time `json:"-"`
+}
+
+// Ref is how a run is named in prose and on a command line: "source-research@iteration-2", so a
+// number that exists in two workspaces still identifies one run.
+func (i RunInfo) Ref() string {
+	if i.Skill == "" {
+		return i.Name
+	}
+	return i.Skill + "@" + i.Name
 }
 
 type metaFile struct {
@@ -267,33 +296,34 @@ type triggerScoreFile struct {
 	} `json:"score"`
 }
 
-// ListRuns reads evals/results/ back, newest iteration last.
+// ListRuns reads every workspace back: each skill's own iterations from <skill>-workspace/, then
+// the trigger lane's from trigger-workspace/. Skills come in pipeline order and each workspace's
+// iterations ascending, so one skill's history stays contiguous.
 func (r *Runner) ListRuns() []RunInfo {
-	entries, err := os.ReadDir(r.ResultsDir())
+	var out []RunInfo
+	for _, skill := range r.Profiles.Skills {
+		out = append(out, r.listRunsIn(r.WorkspaceDir(skill), "iteration", LaneOutput, skill)...)
+	}
+	return append(out, r.listRunsIn(r.TriggerWorkspace(), "trigger", LaneTrigger, "")...)
+}
+
+// listRunsIn reads one workspace's finished (or in-progress) run dirs.
+func (r *Runner) listRunsIn(workspace, prefix, lane, skill string) []RunInfo {
+	entries, err := os.ReadDir(workspace)
 	if err != nil {
 		return nil
 	}
 	var out []RunInfo
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), prefix+"-") {
 			continue
 		}
-		name := e.Name()
-		lane, rest := "", ""
-		switch {
-		case strings.HasPrefix(name, "iteration-"):
-			lane, rest = LaneOutput, strings.TrimPrefix(name, "iteration-")
-		case strings.HasPrefix(name, "trigger-"):
-			lane, rest = LaneTrigger, strings.TrimPrefix(name, "trigger-")
-		default:
-			continue
-		}
-		iteration, err := strconv.Atoi(rest)
+		iteration, err := strconv.Atoi(strings.TrimPrefix(e.Name(), prefix+"-"))
 		if err != nil {
 			continue
 		}
-		path := filepath.Join(r.ResultsDir(), name)
-		info := RunInfo{Name: name, Lane: lane, Iteration: iteration, Path: path}
+		path := filepath.Join(workspace, e.Name())
+		info := RunInfo{Name: e.Name(), Skill: skill, Lane: lane, Iteration: iteration, Path: path}
 		if st, err := os.Stat(path); err == nil {
 			info.Updated = st.ModTime()
 		}
@@ -344,21 +374,24 @@ func (r *Runner) ListRuns() []RunInfo {
 		}
 		out = append(out, info)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Lane != out[j].Lane {
-			return out[i].Lane < out[j].Lane
-		}
-		return out[i].Iteration < out[j].Iteration
-	})
+	sort.Slice(out, func(i, j int) bool { return out[i].Iteration < out[j].Iteration })
 	return out
 }
 
 // ReportPath is an iteration's report.md.
 func (r *Runner) ReportPath(info RunInfo) string { return filepath.Join(info.Path, "report.md") }
 
-// ResolveRun accepts an iteration ref: "3", "iteration-3", "trigger-2", or "3 --lane trigger".
+// ResolveRun accepts an iteration ref: "3", "iteration-3", "source-research@3",
+// "source-research@iteration-3", or "trigger-2".
+//
+// A bare number is refused once it exists in more than one workspace: each skill numbers its own
+// iterations from 1, so guessing a workspace would open someone else's report.
 func (r *Runner) ResolveRun(ref, lane string) (RunInfo, error) {
 	raw := strings.TrimSpace(ref)
+	skill := ""
+	if at := strings.LastIndex(raw, "@"); at > 0 {
+		skill, raw = strings.TrimSpace(raw[:at]), strings.TrimSpace(raw[at+1:])
+	}
 	prefix := "iteration"
 	if lane == LaneTrigger {
 		prefix = "trigger"
@@ -371,14 +404,33 @@ func (r *Runner) ResolveRun(ref, lane string) (RunInfo, error) {
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil {
-		return RunInfo{}, fmt.Errorf("bad iteration ref %q (want 3, iteration-3 or trigger-2)", ref)
+		return RunInfo{}, fmt.Errorf("bad iteration ref %q (want 3, source-research@3 or trigger-2)", ref)
 	}
+	var found []RunInfo
 	for _, info := range r.ListRuns() {
-		if info.Iteration == n && (info.Lane == LaneOutput) == (prefix == "iteration") {
-			return info, nil
+		if info.Iteration != n || (info.Lane == LaneOutput) != (prefix == "iteration") {
+			continue
 		}
+		if skill != "" && info.Skill != skill {
+			continue
+		}
+		found = append(found, info)
 	}
-	return RunInfo{}, fmt.Errorf("no %s-%d under evals/results", prefix, n)
+	switch len(found) {
+	case 1:
+		return found[0], nil
+	case 0:
+		if skill != "" {
+			return RunInfo{}, fmt.Errorf("no %s-%d under %s-workspace", prefix, n, skill)
+		}
+		return RunInfo{}, fmt.Errorf("no %s-%d in any workspace", prefix, n)
+	}
+	refs := make([]string, 0, len(found))
+	for _, info := range found {
+		refs = append(refs, info.Ref())
+	}
+	return RunInfo{}, fmt.Errorf("%s-%d exists in %d workspaces (%s) — say which: <skill>@%d",
+		prefix, n, len(found), strings.Join(refs, ", "), n)
 }
 
 func fileExists(path string) bool {

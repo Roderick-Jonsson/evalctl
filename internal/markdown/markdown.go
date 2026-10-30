@@ -1,4 +1,4 @@
-// Package markdown renders evalctl's markdown — the reports under evals/results and any note a
+// Package markdown renders evalctl's markdown — the reports under a workspace and any note a
 // run left behind — through glamour, so a terminal shows headings, tables and emphasis instead
 // of raw asterisks. It is deterministic: the same text at the same width always renders the
 // same bytes, and nothing here reads the environment (GLAMOUR_STYLE is deliberately ignored).

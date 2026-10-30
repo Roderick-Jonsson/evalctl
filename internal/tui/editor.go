@@ -183,7 +183,7 @@ func (e *editorState) build() {
 
 func (e *editorState) fileNote() string {
 	if e.lane == store.LaneTrigger {
-		return "evals/trigger-evals.json"
+		return "trigger/trigger-evals.json"
 	}
 	return e.d.skill + "/evals/evals.json"
 }

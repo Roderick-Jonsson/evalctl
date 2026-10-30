@@ -3,7 +3,7 @@
 The whole eval toolchain for this repo in one Go binary: it manages the two eval lanes, runs
 them, and browses the results. No Python at runtime.
 
-- **trigger lane** — `evals/trigger-evals.json` (does the right skill load?)
+- **trigger lane** — `trigger/trigger-evals.json` (does the right skill load?)
 - **output lane** — `<skill>/evals/evals.json` plus the fixture dirs `<skill>/evals/files/<slug>/`
 
 Built with Bubble Tea, Bubbles, Lip Gloss and Huh, and Glamour for the reports.
@@ -27,7 +27,7 @@ store rules, the profiles or the case format change, because an iteration measur
 harness is not comparable with the last one. It is also the first thing in the artifact:
 
 - the TUI header carries `v0.5.0` (a `+` means the binary came from a dirty tree);
-- `evals/results/iteration-N/meta.json` and `trigger-N/meta.json` record `provenance.tool`
+- `<skill>-workspace/iteration-N/meta.json` and `trigger-workspace/trigger-N/meta.json` record `provenance.tool`
   (version, commit, dirty, `built_at`);
 - both `report.md` files name the build that generated them, and a run's start line prints it.
 
@@ -98,7 +98,7 @@ skill and `esc` is how you change it) |
 | `R` | **run** what is selected (or the whole lane) — form, then `enter` |
 | `c` | **chain / reference**: promote a run's output into the next stage's fixture, or into the skill's own `references/` — form, then `enter` (output lane) |
 | `t` | **to trigger**: the focused case's prompt becomes a trigger query — written at once (output lane) |
-| `L` | **results**: every iteration under `evals/results`, `enter` opens its `report.md` rendered (markdown, re-wrapped to the window), `a` its activity logs |
+| `L` | **results**: every iteration, one workspace per skill, `enter` opens its `report.md` rendered (markdown, re-wrapped to the window), `a` its activity logs |
 | `P` | **profiles**: check the four sandboxes, `u` runs `ensure` on what fails |
 | `?` | help · `q` quit (asks once if there are unsaved changes or a run is going) |
 
@@ -361,7 +361,7 @@ In the TUI it is the same form: `c`, then `destination` (`←`/`→`) from *next
 
 A case's prompt is a request a real user typed, so it is also a fair question for the other lane:
 *saying this, does the right skill load?* `promote --to-trigger` lifts the text into
-`evals/trigger-evals.json` unchanged:
+`trigger/trigger-evals.json` unchanged:
 
 ```bash
 evalctl promote --to-trigger --from <case-ref> [--skill S] [--split train|validation] \
@@ -387,17 +387,18 @@ edits are unsaved (the write would carry them along).
 ## What a run writes
 
 ```
-evals/results/iteration-N/meta.json                 contract + SOUL + skill-tree + fixture hashes
-evals/results/iteration-N/<slug>/prompt.txt
-evals/results/iteration-N/<slug>/<arm>/             the run root, fixture staged
+<skill>-workspace/iteration-N/meta.json                 contract + SOUL + skill-tree + fixture hashes
+<skill>-workspace/iteration-N/<slug>/prompt.txt
+<skill>-workspace/iteration-N/<slug>/<arm>/             the arm dir
+  outputs/                                          the run root: fixture staged, then what it wrote
   stream.jsonl activity.log timing.json changes.json grading.json stderr.txt
-evals/results/iteration-N/benchmark.json report.md feedback.json
+<skill>-workspace/iteration-N/benchmark.json report.md feedback.json
 
-evals/results/trigger-N/meta.json                   query-file hash + every description verbatim
-evals/results/trigger-N/q01-<skill>/query.txt
-evals/results/trigger-N/q01-<skill>/run-1/stream.jsonl activity.log trigger.json stderr.txt
-evals/results/trigger-N/trigger.json                per-run records + the score
-evals/results/trigger-N/report.md
+trigger-workspace/trigger-N/meta.json                   query-file hash + every description verbatim
+trigger-workspace/trigger-N/q01-<skill>/query.txt
+trigger-workspace/trigger-N/q01-<skill>/run-1/stream.jsonl activity.log trigger.json stderr.txt
+trigger-workspace/trigger-N/trigger.json                per-run records + the score
+trigger-workspace/trigger-N/report.md
 ```
 
 `grading.json` carries the mechanical checks (containment, root guard, the skills the run actually
@@ -441,7 +442,7 @@ for, two identical query strings.
 - **Duplicate detection is word-overlap (Jaccard), not embeddings.** It catches "test the same
   intent twice with different words" on sets of this size, offline, with no model.
 - **Isolation is the default.** Each arm runs in a fresh temp root (`<tmp>/work`), then the result
-  is copied into `evals/results/...`. Inside the repo the baseline arm can see the project and the
+  is copied into its arm dir's `outputs/`. Inside the repo the baseline arm can see the project and the
   other arm's output, and then reasons about being in an ablation. `--isolate=false` exists for
   debugging only.
 - **The arms run sequentially, and a run holds `.evalctl/run.lock`.** An arm writes `skills/` and
@@ -509,6 +510,6 @@ it skips when that tree has no results.
 Every write to the sets copies the previous file to `.evalctl/backups/<timestamp>--<flattened path>`
 (200 per file, oldest pruned); a reference replaced with `--force` is backed up the same way. To
 undo a trim, copy the backup back over the file. Runs are never backed up — they are their own
-evidence, and `evals/results/` is gitignored. `.evalctl/references.json` is the one other file the
+evidence, and the `*-workspace/` dirs are gitignored. `.evalctl/references.json` is the one other file the
 tool keeps there: which run each promoted reference came from, and the hash of the bytes it
 landed as.

@@ -26,7 +26,7 @@ func writeFile(t *testing.T, path, body string) {
 func newTree(t *testing.T) (*store.Store, string) {
 	t.Helper()
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "evals", "trigger-evals.json"), `{
+	writeFile(t, filepath.Join(root, "trigger", "trigger-evals.json"), `{
   "runs": 3,
   "threshold": 0.5,
   "queries": [
@@ -97,7 +97,7 @@ func TestLoadCasesRefusesBadSlug(t *testing.T) {
 
 func TestTriggerSplitNeedsBothLabels(t *testing.T) {
 	_, root := newTree(t)
-	writeFile(t, filepath.Join(root, "evals", "trigger-evals.json"), `{
+	writeFile(t, filepath.Join(root, "trigger", "trigger-evals.json"), `{
   "queries": [
     {"id": 1, "skill": "slide-builder", "should_trigger": true, "split": "train", "query": "a"},
     {"id": 2, "skill": "slide-builder", "should_trigger": true, "split": "train", "query": "b"},
@@ -289,8 +289,8 @@ func TestBenchmarkAndReportCarryTheDelta(t *testing.T) {
 	if bench.Delta == nil || bench.Delta.DurationMS != -30_000 || bench.Delta.TotalTokens != 10_000 {
 		t.Fatalf("delta = %+v", bench.Delta)
 	}
-	report := Report(runs, bench, 4)
-	for _, want := range []string{"# Eval iteration 4", "Delta (with − without): -30.0s, +10,000 tokens",
+	report := Report(runs, bench, "slide-builder", 4)
+	for _, want := range []string{"# slide-builder · eval iteration 4", "Delta (with − without): -30.0s, +10,000 tokens",
 		"containment: ok", "skills loaded: slide-builder", "sb-1-slides"} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q:\n%s", want, report)
@@ -328,9 +328,9 @@ func TestFrontmatterDescriptionFoldsBlockScalar(t *testing.T) {
 }
 
 // TestDryRunPlansWithoutWriting is the guard the whole port needs: planning a lane must produce
-// the exact hermes command and must not create evals/results/.
+// the exact hermes command and must not create a workspace.
 func TestDryRunPlansWithoutWriting(t *testing.T) {
-	s, root := newTree(t)
+	s, _ := newTree(t)
 	r := New(s)
 	var plan []string
 	r.Emit = func(e Event) {
@@ -351,8 +351,10 @@ func TestDryRunPlansWithoutWriting(t *testing.T) {
 			t.Fatalf("plan line is not the real command: %q", line)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(root, "evals", "results")); !os.IsNotExist(err) {
-		t.Fatalf("a dry run wrote evals/results: %v", err)
+	for _, dir := range []string{r.WorkspaceDir("slide-builder"), r.TriggerWorkspace()} {
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("a dry run wrote %s: %v", dir, err)
+		}
 	}
 
 	plan = nil
@@ -369,24 +371,31 @@ func TestDryRunPlansWithoutWriting(t *testing.T) {
 			t.Fatalf("trigger plan line is wrong: %q", line)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(root, "evals", "results")); !os.IsNotExist(err) {
-		t.Fatalf("a dry trigger run wrote evals/results: %v", err)
+	for _, dir := range []string{r.WorkspaceDir("slide-builder"), r.TriggerWorkspace()} {
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("a dry trigger run wrote %s: %v", dir, err)
+		}
 	}
 }
 
 func TestNextIterationAndListRuns(t *testing.T) {
 	s, root := newTree(t)
 	r := New(s)
-	if got := r.NextIteration("iteration"); got != 1 {
-		t.Fatalf("empty tree should start at 1, got %d", got)
+	ws := r.WorkspaceDir("slide-builder")
+	if got := r.NextIteration(ws, "iteration"); got != 1 {
+		t.Fatalf("an empty workspace starts at 1, got %d", got)
 	}
-	writeFile(t, filepath.Join(root, "evals", "results", "iteration-2", "meta.json"),
-		`{"iteration":2,"model":"m","cases":["sb-1-slides"]}`)
-	writeFile(t, filepath.Join(root, "evals", "results", "iteration-2", "report.md"), "# x")
-	writeFile(t, filepath.Join(root, "evals", "results", "trigger-1", "trigger.json"),
+	writeFile(t, filepath.Join(root, "slide-builder-workspace", "iteration-2", "meta.json"),
+		`{"iteration":2,"skill":"slide-builder","model":"m","cases":["sb-1-slides"]}`)
+	writeFile(t, filepath.Join(root, "slide-builder-workspace", "iteration-2", "report.md"), "# x")
+	writeFile(t, filepath.Join(root, "trigger-workspace", "trigger-1", "trigger.json"),
 		`{"score":{"threshold":0.5,"runs":3,"overall":{"judged":4,"passed":3,"rate":0.75}}}`)
-	if got := r.NextIteration("iteration"); got != 3 {
+	if got := r.NextIteration(ws, "iteration"); got != 3 {
 		t.Fatalf("next iteration should be 3, got %d", got)
+	}
+	// Every workspace numbers its own iterations: a sibling skill is still at 1.
+	if got := r.NextIteration(r.WorkspaceDir("source-research"), "iteration"); got != 1 {
+		t.Fatalf("a sibling workspace should be unaffected, got %d", got)
 	}
 	infos := r.ListRuns()
 	if len(infos) != 2 {
@@ -401,12 +410,26 @@ func TestNextIterationAndListRuns(t *testing.T) {
 	if trigger == nil || trigger.PassRate == nil || *trigger.PassRate != 0.75 {
 		t.Fatalf("trigger run info = %+v", trigger)
 	}
+	if infos[0].Ref() != "slide-builder@iteration-2" {
+		t.Fatalf("output run ref = %q, want slide-builder@iteration-2", infos[0].Ref())
+	}
 	info, err := r.ResolveRun("trigger-1", "")
 	if err != nil || info.Lane != LaneTrigger {
 		t.Fatalf("resolve: %v %+v", err, info)
 	}
+	if info, err := r.ResolveRun("slide-builder@2", ""); err != nil || info.Skill != "slide-builder" {
+		t.Fatalf("resolve skill@2: %v %+v", err, info)
+	}
 	if _, err := r.ResolveRun("9", ""); err == nil {
 		t.Fatal("expected a miss for iteration-9")
+	}
+	// The same number now exists twice: a bare number must not guess a workspace.
+	writeFile(t, filepath.Join(root, "source-research-workspace", "iteration-2", "report.md"), "# x")
+	if _, err := r.ResolveRun("2", ""); err == nil || !strings.Contains(err.Error(), "say which") {
+		t.Fatalf("an ambiguous bare number must be refused, got %v", err)
+	}
+	if _, err := r.ResolveRun("source-research@2", ""); err != nil {
+		t.Fatalf("source-research@2 should resolve: %v", err)
 	}
 }
 
@@ -430,5 +453,49 @@ func TestJSONShapeOfTimingStaysStable(t *testing.T) {
 		if !strings.Contains(string(b), key) {
 			t.Fatalf("timing.json lost %s: %s", key, b)
 		}
+	}
+}
+
+// TestArmWritesTheProducedTreeIntoOutputs pins the layout the agentskills.io guide uses: the
+// harness's own evidence stays at the arm dir, and everything the run produced lands in outputs/.
+// A fake hermes stands in for the agent, so nothing is launched but the code path is the real one.
+func TestArmWritesTheProducedTreeIntoOutputs(t *testing.T) {
+	s, root := newTree(t)
+	bin := filepath.Join(t.TempDir(), "fake-hermes")
+	script := "#!/bin/sh\nmkdir -p MC-fake\nprintf 'made\\n' > MC-fake/OUT.md\n" +
+		"printf '{\"type\":\"result\",\"text\":\"done\",\"duration_ms\":5,\"tokens\":{\"total\":10}}\\n'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERMES_BIN", bin)
+
+	r := New(s)
+	cases, err := LoadCases(s, []string{"slide-builder"}, nil)
+	if err != nil || len(cases) == 0 {
+		t.Fatalf("cases: %v %v", cases, err)
+	}
+	c := cases[0]
+	for _, name := range c.Files {
+		writeFile(t, filepath.Join(s.FixtureDir(c.Skill, c.Slug), filepath.FromSlash(name)), "seed\n")
+	}
+	armDir := filepath.Join(root, "slide-builder-workspace", "iteration-1", c.Slug, ArmWith)
+	res, err := r.RunArm(context.Background(), c, ArmWith, armDir, Options{
+		Lane: LaneOutput, Isolate: true, NoVerify: true, Budget: DefaultBudget})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"stream.jsonl", "timing.json", "changes.json", "grading.json"} {
+		if !fileExists(filepath.Join(armDir, name)) {
+			t.Fatalf("%s is missing from the arm dir", name)
+		}
+	}
+	if !fileExists(filepath.Join(armDir, "outputs", "MC-fake", "OUT.md")) {
+		t.Fatalf("the produced tree is not under outputs/: changes = %+v", res.Changes)
+	}
+	if got := store.WorkspaceDirs(armDir); len(got) != 1 || got[0] != "MC-fake" {
+		t.Fatalf("workspace dirs = %v, want [MC-fake] under outputs/", got)
+	}
+	if !res.Checks.Containment.OK {
+		t.Fatalf("containment = %+v", res.Checks.Containment)
 	}
 }

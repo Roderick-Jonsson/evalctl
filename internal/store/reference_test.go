@@ -27,7 +27,7 @@ func referenceTree(t *testing.T) (*Store, string) {
     {"id": 1, "slug": "lp-1-outline", "prompt": "build it", "expected_output": "LP-written.md", "files": []}
   ]
 }`)
-	arm := filepath.Join(root, "evals", "results", "iteration-3", "src-4-agentskills", "with_skill")
+	arm := filepath.Join(root, "source-research-workspace", "iteration-3", "src-4-agentskills", "with_skill", "outputs")
 	mustWrite(t, filepath.Join(arm, "MC-written", "PS-written.md"), "**Subject Matter:**\n\nWriting Agent Skills\n\n**Type:**\n\nPrimary Sources\n")
 	mustWrite(t, filepath.Join(arm, "MC-written", "sources", "home.md"), "raw snapshot")
 	mustWrite(t, filepath.Join(arm, "MC-written", "LP-written.md"), "the next stage's answer")

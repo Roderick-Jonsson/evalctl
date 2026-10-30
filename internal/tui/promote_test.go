@@ -36,12 +36,12 @@ func promoteTree(t *testing.T) *store.Store {
     {"id": 4, "slug": "src-4-agentskills", "prompt": "research it", "expected_output": "PS-written.md", "files": []}
   ]
 }`)
-	arm := filepath.Join(root, "evals", "results", "iteration-2", "src-4-agentskills", "with_skill")
+	arm := filepath.Join(root, "source-research-workspace", "iteration-2", "src-4-agentskills", "with_skill", "outputs")
 	write(filepath.Join(arm, "MC-written", "PS-written.md"), "**Subject Matter:**\n\nWriting Agent Skills\n\n**Type:**\n\nPrimary Sources\n")
 	write(filepath.Join(arm, "MC-written", "sources", "home.md"), "raw")
 	write(filepath.Join(arm, "MC-written", "LP-written.md"), "the answer")
 	write(filepath.Join(arm, "stream.jsonl"), `{"type":"result"}`)
-	write(filepath.Join(root, "evals", "results", "iteration-2", "src-4-agentskills", "without_skill", "MC-written", "PS-written.md"), "bare")
+	write(filepath.Join(root, "source-research-workspace", "iteration-2", "src-4-agentskills", "without_skill", "outputs", "MC-written", "PS-written.md"), "bare")
 
 	s, err := store.Open(root)
 	if err != nil {
@@ -119,7 +119,7 @@ func TestPromoteFromTheFormWritesTheFixtureAndTheCase(t *testing.T) {
 	if m.mode != screenList || m.promote != nil {
 		t.Fatal("a finished promotion should return to the list")
 	}
-	if !strings.Contains(m.status, "promoted iteration-2/src-4-agentskills/with_skill") {
+	if !strings.Contains(m.status, "promoted source-research@iteration-2/src-4-agentskills/with_skill") {
 		t.Fatalf("status = %q", m.status)
 	}
 	fixture := s.FixtureDir("learning-path", "lp-2-agentskills")
@@ -235,7 +235,7 @@ func TestPromoteNeedsTheOutputLaneAndAFinishedRun(t *testing.T) {
 
 	empty := sized(newModel(testStore(t), store.LaneOutput), 140, 30)
 	empty.Update(key("c"))
-	if empty.mode == screenPromote || !strings.Contains(empty.status, "evals/results") {
+	if empty.mode == screenPromote || !strings.Contains(empty.status, "*-workspace") {
 		t.Fatalf("mode = %v status = %q — an empty results dir must be reported", empty.mode, empty.status)
 	}
 }

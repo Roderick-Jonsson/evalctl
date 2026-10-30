@@ -77,7 +77,7 @@ func (s *Store) Validate() []Issue {
 func (s *Store) validateTrigger() []Issue {
 	if !s.TriggerOK {
 		return []Issue{{SeverityError, LaneTrigger, "", 0, "",
-			"evals/trigger-evals.json is missing — the trigger lane cannot be managed"}}
+			"trigger/trigger-evals.json is missing — the trigger lane cannot be managed"}}
 	}
 	var issues []Issue
 	qs := s.Trigger.Queries

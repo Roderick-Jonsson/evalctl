@@ -252,17 +252,21 @@ func runRuns(args []string) int {
 		if info.Runs > 0 {
 			runsCell = fmt.Sprintf("%d", info.Runs)
 		}
-		rows = append(rows, []string{info.Name, info.Lane, fmt.Sprintf("%d", info.Cases), runsCell,
+		workspace := info.Skill
+		if workspace == "" {
+			workspace = "—"
+		}
+		rows = append(rows, []string{workspace, info.Name, info.Lane, fmt.Sprintf("%d", info.Cases), runsCell,
 			pass, info.Started, report})
 	}
 	if len(rows) == 0 {
-		fmt.Println(styleDim.Render("no iterations under evals/results — `evalctl run --dry-run` plans one"))
+		fmt.Println(styleDim.Render("no iterations under any *-workspace — `evalctl run --dry-run` plans one"))
 		return 0
 	}
-	table(os.Stdout, []string{"RUN", "LANE", "CASES", "RUNS", "PASS RATE", "STARTED", "REPORT"}, rows,
-		[]int{0, 0, 0, 0, 0, 0, 0})
+	table(os.Stdout, []string{"WORKSPACE", "RUN", "LANE", "CASES", "RUNS", "PASS RATE", "STARTED", "REPORT"}, rows,
+		[]int{0, 0, 0, 0, 0, 0, 0, 0})
 	fmt.Println()
-	fmt.Println(styleDim.Render("open one with: evalctl report <run>"))
+	fmt.Println(styleDim.Render("open one with: evalctl report <skill>@<run>   (a bare number works while it is unique)"))
 	return 0
 }
 
@@ -276,7 +280,7 @@ func runReport(args []string) int {
 	}
 	refs := fs.Args()
 	if len(refs) != 1 {
-		return fail(fmt.Errorf("usage: evalctl report <run>   (3, iteration-3, trigger-2)"))
+		return fail(fmt.Errorf("usage: evalctl report <run>   (3, source-research@3, trigger-2)"))
 	}
 	r := runner.New(c.s)
 	info, err := r.ResolveRun(refs[0], *lane)

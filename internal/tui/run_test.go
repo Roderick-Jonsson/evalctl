@@ -28,7 +28,7 @@ func writeFile(t *testing.T, path, body string) {
 func testModel(t *testing.T) *Model {
 	t.Helper()
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "evals", "trigger-evals.json"), `{
+	writeFile(t, filepath.Join(root, "trigger", "trigger-evals.json"), `{
   "queries": [
     {"id": 1, "skill": "slide-builder", "should_trigger": true, "split": "train", "query": "build slides"},
     {"id": 2, "skill": "slide-builder", "should_trigger": false, "split": "train", "query": "research this"},
@@ -132,11 +132,11 @@ func TestProgressTableMirrorsTheEvents(t *testing.T) {
 func TestResultsBrowserReadsReportIntoTheViewer(t *testing.T) {
 	m := testModel(t)
 	root := m.store.Root
-	writeFile(t, filepath.Join(root, "evals", "results", "trigger-2", "meta.json"),
+	writeFile(t, filepath.Join(root, "trigger-workspace", "trigger-2", "meta.json"),
 		`{"iteration":2,"lane":"trigger","queries":["q01-slide-builder"]}`)
-	writeFile(t, filepath.Join(root, "evals", "results", "trigger-2", "trigger.json"),
+	writeFile(t, filepath.Join(root, "trigger-workspace", "trigger-2", "trigger.json"),
 		`{"score":{"threshold":0.5,"runs":3,"overall":{"judged":1,"passed":1,"rate":1}}}`)
-	writeFile(t, filepath.Join(root, "evals", "results", "trigger-2", "report.md"), "# Trigger eval 2\n\n**Pass rate 100%**\n")
+	writeFile(t, filepath.Join(root, "trigger-workspace", "trigger-2", "report.md"), "# Trigger eval 2\n\n**Pass rate 100%**\n")
 
 	m.openRuns()
 	if len(m.runsList.infos) != 1 || m.runsList.infos[0].Name != "trigger-2" {
@@ -379,9 +379,9 @@ func TestReportViewerRendersMarkdownAndReflows(t *testing.T) {
 	report := "# Trigger eval 4\n\n## By skill\n\n| Skill | Rate |\n|---|---|\n| " +
 		"slide-builder | 100% |\n\n### notes\n\n**Every query** landed on the right side of the threshold, " +
 		"which is what makes this iteration comparable with the last one.\n"
-	writeFile(t, filepath.Join(root, "evals", "results", "trigger-4", "meta.json"),
+	writeFile(t, filepath.Join(root, "trigger-workspace", "trigger-4", "meta.json"),
 		`{"iteration":4,"lane":"trigger","queries":["q01-slide-builder"]}`)
-	writeFile(t, filepath.Join(root, "evals", "results", "trigger-4", "report.md"), report)
+	writeFile(t, filepath.Join(root, "trigger-workspace", "trigger-4", "report.md"), report)
 
 	m.openRuns()
 	m.updateRuns(key("enter"))

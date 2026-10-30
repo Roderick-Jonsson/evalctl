@@ -22,7 +22,7 @@ func testStore(t *testing.T) *store.Store {
 			t.Fatal(err)
 		}
 	}
-	write(filepath.Join(root, "evals", "trigger-evals.json"), `{
+	write(filepath.Join(root, "trigger", "trigger-evals.json"), `{
   "runs": 3,
   "queries": [
     {"id": 1, "skill": "alpha", "should_trigger": true, "split": "train", "why": "clear",

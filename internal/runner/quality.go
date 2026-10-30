@@ -15,6 +15,11 @@ import (
 
 // RunQuality is the output lane: every selected case through every selected arm, then the
 // benchmark and the report.
+//
+// One workspace per skill. A run that selects several stages writes one iteration into each
+// skill's own workspace (<skill>-workspace/iteration-N/), which is why the iteration numbers are
+// per skill: iteration 3 of learning-path and iteration 3 of slide-builder are different runs, and
+// neither can be mistaken for the other.
 func (r *Runner) RunQuality(ctx context.Context, o Options) error {
 	if err := o.Normalize(); err != nil {
 		return err
@@ -23,8 +28,7 @@ func (r *Runner) RunQuality(ctx context.Context, o Options) error {
 	if err != nil {
 		return err
 	}
-	only := idSet(o.CaseIDs)
-	cases, err := LoadCases(r.Store, skills, only)
+	cases, err := LoadCases(r.Store, skills, idSet(o.CaseIDs))
 	if err != nil {
 		return err
 	}
@@ -39,48 +43,22 @@ func (r *Runner) RunQuality(ctx context.Context, o Options) error {
 			}
 			r.message("%s  ·  %s case %d  ·  stages %s", c.Slug, c.Skill, c.ID, staged)
 			if c.Promoted != nil {
-				r.message("  promoted from %s/%s/%s", c.Promoted.Run, c.Promoted.Case, c.Promoted.Arm)
+				r.message("  promoted from %s", promotionRef(c.Promoted.Skill, c.Promoted.Run,
+					c.Promoted.Case, c.Promoted.Arm))
 			}
 			r.message("  %s", oneLine(c.Prompt))
 		}
 		return nil
 	}
 
-	iteration := o.Iteration
-	if iteration == 0 {
-		iteration = r.NextIteration("iteration")
-	}
-	iterDir := r.IterDir("iteration", iteration)
-	if fileExists(iterDir) && !o.DryRun && !o.Resume && !o.Force {
-		return fmt.Errorf("evals/results/iteration-%d already exists — rerun with --resume, "+
-			"--force, or pick another --iteration", iteration)
-	}
-	if !o.Resume {
-		for _, c := range cases {
-			caseDir := filepath.Join(iterDir, c.Slug)
-			if o.Force {
-				_ = os.RemoveAll(caseDir)
-			}
-		}
-	}
-
-	profiles := map[string]bool{}
-	for _, arm := range o.Arms {
-		profiles[ArmProfiles[arm]] = true
-	}
-	profileList := keysOf(profiles)
-
-	start := fmt.Sprintf("iteration %d · %d case(s) × %d arm(s) · profiles %s · evalctl %s",
-		iteration, len(cases), len(o.Arms), strings.Join(profileList, ", "), version.Resolve().Short())
-	if o.DryRun {
-		start += " · DRY RUN"
-	}
-	r.emit(Event{Kind: EventStart, Lane: LaneOutput, Message: start})
-
 	if !o.DryRun {
 		// Both arms run the same contract; the with arm holds exactly the skill under test, the
 		// baseline holds none, and neither keeps memory from a previous case.
-		for _, name := range profileList {
+		profiles := map[string]bool{}
+		for _, arm := range o.Arms {
+			profiles[ArmProfiles[arm]] = true
+		}
+		for _, name := range keysOf(profiles) {
 			if line, err := r.Profiles.WriteEnv(name, false); err != nil {
 				return err
 			} else if line != "" {
@@ -98,6 +76,46 @@ func (r *Runner) RunQuality(ctx context.Context, o Options) error {
 			}
 		}
 	}
+
+	for _, group := range groupBySkill(cases, skills) {
+		if err := r.runSkillIteration(ctx, group, o); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// runSkillIteration writes one skill's cases into that skill's next iteration.
+func (r *Runner) runSkillIteration(ctx context.Context, cases []Case, o Options) error {
+	skill := cases[0].Skill
+	workspace := r.WorkspaceDir(skill)
+	iteration := o.Iteration
+	if iteration == 0 {
+		iteration = r.NextIteration(workspace, "iteration")
+	}
+	iterDir := r.IterDir(workspace, iteration)
+	if fileExists(iterDir) && !o.DryRun && !o.Resume && !o.Force {
+		return fmt.Errorf("%s already exists — rerun with --resume, --force, or pick another --iteration",
+			r.relative(iterDir))
+	}
+	if !o.Resume {
+		for _, c := range cases {
+			if o.Force {
+				_ = os.RemoveAll(filepath.Join(iterDir, c.Slug))
+			}
+		}
+	}
+
+	profiles := map[string]bool{}
+	for _, arm := range o.Arms {
+		profiles[ArmProfiles[arm]] = true
+	}
+	start := fmt.Sprintf("%s iteration %d · %d case(s) × %d arm(s) · profiles %s · evalctl %s",
+		skill, iteration, len(cases), len(o.Arms), strings.Join(keysOf(profiles), ", "), version.Resolve().Short())
+	if o.DryRun {
+		start += " · DRY RUN"
+	}
+	r.emit(Event{Kind: EventStart, Lane: LaneOutput, Case: skill, Message: start})
 
 	treeSHA := map[string]string{}
 	startedAt := timestamp()
@@ -126,7 +144,7 @@ func (r *Runner) RunQuality(ctx context.Context, o Options) error {
 		for _, arm := range o.Arms {
 			armDir := filepath.Join(caseDir, arm)
 			if o.DryRun {
-				runRoot := armDir
+				runRoot := filepath.Join(armDir, "outputs")
 				if o.Isolate {
 					runRoot = "<tmp>/work"
 				}
@@ -147,7 +165,7 @@ func (r *Runner) RunQuality(ctx context.Context, o Options) error {
 		return nil
 	}
 
-	collected, err := r.CollectRuns(iterDir)
+	collected, err := r.CollectRuns(iterDir, skill)
 	if err != nil {
 		return err
 	}
@@ -155,7 +173,7 @@ func (r *Runner) RunQuality(ctx context.Context, o Options) error {
 	if err := writeJSONFile(filepath.Join(iterDir, "benchmark.json"), bench); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(iterDir, "report.md"), []byte(Report(collected, bench, iteration)), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(iterDir, "report.md"), []byte(Report(collected, bench, skill, iteration)), 0o644); err != nil {
 		return err
 	}
 
@@ -175,8 +193,8 @@ func (r *Runner) RunQuality(ctx context.Context, o Options) error {
 	if err != nil {
 		return err
 	}
-	meta := metaQuality{Iteration: iteration, Started: startedAt, Model: orDefault(o.Model, "default"),
-		Arms: o.Arms, BudgetS: int(o.Budget.Seconds()), Cases: []string{}}
+	meta := metaQuality{Iteration: iteration, Skill: skill, Started: startedAt,
+		Model: orDefault(o.Model, "default"), Arms: o.Arms, BudgetS: int(o.Budget.Seconds()), Cases: []string{}}
 	for _, run := range collected {
 		meta.Cases = append(meta.Cases, run.Slug)
 	}
@@ -211,12 +229,53 @@ func (r *Runner) RunQuality(ctx context.Context, o Options) error {
 			}
 		}
 	}
-	msg := fmt.Sprintf("wrote evals/results/iteration-%d/report.md and benchmark.json", iteration)
+	msg := fmt.Sprintf("wrote %s/report.md and benchmark.json", r.relative(iterDir))
 	if failures > 0 {
 		msg += fmt.Sprintf(" — %d run(s) did not exit 0, check stderr.txt in those arm directories", failures)
 	}
-	r.emit(Event{Kind: EventDone, Lane: LaneOutput, Case: fmt.Sprintf("iteration-%d", iteration), Message: msg})
+	r.emit(Event{Kind: EventDone, Lane: LaneOutput, Case: fmt.Sprintf("%s@iteration-%d", skill, iteration), Message: msg})
 	return nil
+}
+
+// groupBySkill splits the selected cases into one group per stage, in pipeline order, so each
+// group can be written into that skill's own workspace.
+func groupBySkill(cases []Case, skills []string) [][]Case {
+	by := map[string][]Case{}
+	for _, c := range cases {
+		by[c.Skill] = append(by[c.Skill], c)
+	}
+	var out [][]Case
+	for _, skill := range skills {
+		if group := by[skill]; len(group) > 0 {
+			out = append(out, group)
+		}
+	}
+	// A case whose skill is not in the resolved list would otherwise vanish from the run; keep it
+	// rather than silently dropping work.
+	for skill, group := range by {
+		if !contains(skills, skill) {
+			out = append(out, group)
+		}
+	}
+	return out
+}
+
+// promotionRef names a run the way a reader addresses it: source-research@iteration-2/case/arm.
+func promotionRef(skill, run, cse, arm string) string {
+	name := run
+	if skill != "" {
+		name = skill + "@" + run
+	}
+	return fmt.Sprintf("%s/%s/%s", name, cse, arm)
+}
+
+// relative is a path as a reader addresses it: root-relative and slash-separated when it is inside
+// the tree, absolute otherwise.
+func (r *Runner) relative(path string) string {
+	if rel, err := filepath.Rel(r.Root, path); err == nil && !strings.HasPrefix(rel, "..") {
+		return filepath.ToSlash(rel)
+	}
+	return path
 }
 
 type metaProfile struct {
@@ -227,6 +286,7 @@ type metaProfile struct {
 
 type metaQuality struct {
 	Iteration  int      `json:"iteration"`
+	Skill      string   `json:"skill"`
 	Started    string   `json:"started"`
 	Model      string   `json:"model"`
 	Arms       []string `json:"arms"`

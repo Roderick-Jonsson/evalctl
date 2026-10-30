@@ -17,13 +17,18 @@ import (
 	"evalctl/internal/store"
 )
 
-// promoRun is one output iteration as the form sees it: the run's name, where it sits, and the
-// case dirs that actually finished. Only what is on disk can be promoted.
+// promoRun is one output iteration as the form sees it: which skill's workspace it belongs to, the
+// run's name, where it sits, and the case dirs that actually finished. Only what is on disk can be
+// promoted.
 type promoRun struct {
+	skill string
 	name  string
 	path  string
 	cases []string
 }
+
+// ref names the run unambiguously in a message: source-research@iteration-2.
+func (r promoRun) ref() string { return store.RefOf(r.skill, r.name) }
 
 // Where a promotion lands: the next stage's fixture (the chain), or this skill's own references/
 // (a worked example the agent reads to learn the shape of a run).
@@ -88,7 +93,7 @@ func (m *Model) openPromote() {
 	}
 	p := &promoteState{runs: promoRuns(m.store), skills: m.store.SkillNames()}
 	if len(p.runs) == 0 {
-		m.setStatus("no output iteration under evals/results — run a stage first (R)", true)
+		m.setStatus("no output iteration under any *-workspace — run a stage first (R)", true)
 		return
 	}
 	if len(p.skills) == 0 {
@@ -143,7 +148,7 @@ func promoRuns(s *store.Store) []promoRun {
 		if len(cases) == 0 {
 			continue
 		}
-		out = append(out, promoRun{name: info.Name, path: info.Path, cases: cases})
+		out = append(out, promoRun{skill: info.Skill, name: info.Name, path: info.Path, cases: cases})
 	}
 	return out
 }
@@ -396,7 +401,7 @@ func (p *promoteState) rows() []promoRow {
 		return "off"
 	}
 	out := []promoRow{
-		{"from run", p.runs[p.runIx].name},
+		{"from run", p.runs[p.runIx].ref()},
 		{"from case", p.caseSlug()},
 		{"from arm", orDashText(p.arm())},
 		{"destination", p.destName()},
@@ -686,8 +691,8 @@ func (m *Model) doPromote() tea.Cmd {
 		return nil
 	}
 	req := store.PromoteRequest{Skill: p.skill(), Slug: p.slug, ID: p.id, Prompt: p.prompt,
-		Expected: p.expected, Source: p.sourceDir(), Run: p.runs[p.runIx].name,
-		Case: p.caseSlug(), Arm: p.arm(), DryRun: p.dryRun}
+		Expected: p.expected, Source: p.sourceDir(), SourceSkill: p.runs[p.runIx].skill,
+		Run: p.runs[p.runIx].name, Case: p.caseSlug(), Arm: p.arm(), DryRun: p.dryRun}
 	res, err := m.store.PromoteOutput(req)
 	if err != nil {
 		m.setStatus("promote failed: "+err.Error(), true)
@@ -707,7 +712,7 @@ func (m *Model) doPromote() tea.Cmd {
 		sha = sha[:12]
 	}
 	msg := fmt.Sprintf("promoted %s/%s/%s → %s case #%d (%s) · %d file(s) · fixture %s",
-		res.Run, res.Case, res.Arm, res.Skill, res.ID, res.Slug, len(res.Files), sha)
+		store.RefOf(res.SourceSkill, res.Run), res.Case, res.Arm, res.Skill, res.ID, res.Slug, len(res.Files), sha)
 	if len(res.Skipped) > 0 {
 		msg += " · left behind " + strings.Join(res.Skipped, ", ")
 	}
@@ -734,7 +739,8 @@ func (m *Model) doPromote() tea.Cmd {
 // append and nothing to focus afterwards, so it reports and returns to the list.
 func (m *Model) doPromoteReferences(p *promoteState) tea.Cmd {
 	res, err := m.store.PromoteReferences(store.ReferenceRequest{
-		Skill: p.skill(), Source: p.sourceDir(), Run: p.runs[p.runIx].name,
+		Skill: p.skill(), Source: p.sourceDir(), SourceSkill: p.runs[p.runIx].skill,
+		Run:  p.runs[p.runIx].name,
 		Case: p.caseSlug(), Arm: p.arm(), Workspace: p.workspace(),
 		File: p.fileList(), As: p.as, DryRun: p.dryRun})
 	if err != nil {
@@ -853,7 +859,7 @@ func (m *Model) promoteView() string {
 		if p.dest == destReferences {
 			to += "/references/"
 		}
-		add(dimStyle, fmt.Sprintf("  %s/%s/%s  →  %s", p.runs[p.runIx].name, p.caseSlug(),
+		add(dimStyle, fmt.Sprintf("  %s/%s/%s  →  %s", p.runs[p.runIx].ref(), p.caseSlug(),
 			orDashText(p.arm()), to))
 		lines = append(lines, "")
 	}

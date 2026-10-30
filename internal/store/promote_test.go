@@ -27,7 +27,7 @@ func promotionTree(t *testing.T) (*Store, string) {
 	mustWrite(t, filepath.Join(root, "learning-path", "evals", "files", "lp-1-outline", "MC-x", "PS-x.md"),
 		"**Subject Matter:**\n\nhand made\n")
 
-	arm := filepath.Join(root, "evals", "results", "iteration-2", "src-4-agentskills", "with_skill")
+	arm := filepath.Join(root, "source-research-workspace", "iteration-2", "src-4-agentskills", "with_skill", "outputs")
 	mustWrite(t, filepath.Join(arm, "MC-writing-agent-skills", "PS-writing-agent-skills.md"),
 		"**Subject Matter:**\n\nWriting Agent Skills\n\n**Type:**\n\nPrimary Sources\n")
 	mustWrite(t, filepath.Join(arm, "MC-writing-agent-skills", "sources", "home.md"), "raw snapshot")

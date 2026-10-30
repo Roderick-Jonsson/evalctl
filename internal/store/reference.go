@@ -25,17 +25,18 @@ import (
 // stage's fixture and drops the stage's own outputs, this one carries exactly those outputs
 // (stage.Outputs) back into the skill that wrote them.
 type ReferenceRequest struct {
-	Skill     string   // the skill whose references/ receives it (default: the case's own skill)
-	Source    string   // the arm dir under evals/results
-	Run       string   // provenance: iteration-2
-	Case      string   // provenance: the run's case slug
-	Arm       string   // provenance: with_skill
-	Workspace string   // MC-dir inside the arm (empty: the only one, or an error)
-	File      []string // workspace-relative paths; empty = the stage's own outputs
-	All       bool     // take the whole workspace instead
-	As        string   // destination inside references/ — a rename, or a dir when several files
-	Force     bool     // replace an existing reference (the old bytes go to .evalctl/backups/)
-	DryRun    bool
+	Skill       string   // the skill whose references/ receives it (default: the case's own skill)
+	Source      string   // the arm dir under <skill>-workspace/iteration-N/<case>/
+	SourceSkill string   // provenance: the skill whose workspace the run lives in
+	Run         string   // provenance: iteration-2
+	Case        string   // provenance: the run's case slug
+	Arm         string   // provenance: with_skill
+	Workspace   string   // MC-dir inside the arm (empty: the only one, or an error)
+	File        []string // workspace-relative paths; empty = the stage's own outputs
+	All         bool     // take the whole workspace instead
+	As          string   // destination inside references/ — a rename, or a dir when several files
+	Force       bool     // replace an existing reference (the old bytes go to .evalctl/backups/)
+	DryRun      bool
 }
 
 // Reference is what a reference promotion does, or would do on a dry run.
@@ -151,6 +152,8 @@ func (s *Store) referencePlan(req ReferenceRequest) (Reference, string, error) {
 	if info, err := os.Stat(src); err != nil || !info.IsDir() {
 		return Reference{}, "", fmt.Errorf("source run dir not found: %s", req.Source)
 	}
+	src = armOutputs(src)
+	run := RefOf(req.SourceSkill, req.Run)
 	workspaces := WorkspaceDirs(src)
 	if len(workspaces) == 0 {
 		return Reference{}, "", fmt.Errorf("nothing to promote: %s holds no MC-*/ workspace", src)
@@ -169,7 +172,7 @@ func (s *Store) referencePlan(req ReferenceRequest) (Reference, string, error) {
 	}
 
 	dir := s.ReferencesDir(req.Skill)
-	out := Reference{Skill: req.Skill, Run: req.Run, Case: req.Case, Arm: req.Arm, Source: src,
+	out := Reference{Skill: req.Skill, Run: run, Case: req.Case, Arm: req.Arm, Source: src,
 		Workspace: filepath.Base(ws), Dir: dir, Files: files, Targets: targets, Skipped: skipped,
 		LogPath: s.ReferenceLogPath()}
 	for _, t := range targets {
@@ -180,8 +183,10 @@ func (s *Store) referencePlan(req ReferenceRequest) (Reference, string, error) {
 	return out, ws, nil
 }
 
-// WorkspaceDirs lists the MC-* dirs a run's arm produced, sorted.
+// WorkspaceDirs lists the MC-* dirs a run's arm produced, sorted. It reads the arm's outputs/ dir
+// (the older layout kept MC-*/ in the arm dir itself, and that still reads).
 func WorkspaceDirs(dir string) []string {
+	dir = armOutputs(dir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil

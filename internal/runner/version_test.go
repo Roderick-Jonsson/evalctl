@@ -13,7 +13,7 @@ import (
 func TestReportsNameTheBuild(t *testing.T) {
 	want := "evalctl " + version.Resolve().String()
 
-	report := Report(nil, Benchmark{Generated: "2026-10-29T12:00:00+0100"}, 3)
+	report := Report(nil, Benchmark{Generated: "2026-10-29T12:00:00+0100"}, "slide-builder", 3)
 	if !strings.Contains(report, want) {
 		t.Errorf("output report does not name the build:\n%s", report)
 	}

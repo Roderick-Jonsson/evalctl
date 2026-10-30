@@ -19,12 +19,30 @@ import (
 // PromotedFrom records where a case's fixture came from: another stage's eval output. It rides
 // in the case JSON under a key the agentskills.io format does not define, so it survives every
 // round trip like any other unknown key — and a reader of evals.json sees the ancestry without
-// opening evals/results, which is gitignored.
+// opening the producing skill's workspace, which is gitignored.
 type PromotedFrom struct {
-	Run           string `json:"run"`            // iteration-2
-	Case          string `json:"case"`           // src-4-agentskills
-	Arm           string `json:"arm"`            // with_skill
-	FixtureSHA256 string `json:"fixture_sha256"` // hash of the fixture as promoted
+	Skill         string `json:"skill,omitempty"` // source-research — the workspace the run lives in
+	Run           string `json:"run"`             // iteration-2
+	Case          string `json:"case"`            // src-4-agentskills
+	Arm           string `json:"arm"`             // with_skill
+	FixtureSHA256 string `json:"fixture_sha256"`  // hash of the fixture as promoted
+}
+
+// RefOf names a run unambiguously: source-research@iteration-2. A run with no owning workspace
+// (the trigger lane) is just its own name.
+func RefOf(skill, run string) string {
+	if skill == "" {
+		return run
+	}
+	return skill + "@" + run
+}
+
+// Ref names the source run unambiguously: source-research@iteration-2.
+func (p *PromotedFrom) Ref() string {
+	if p == nil {
+		return ""
+	}
+	return RefOf(p.Skill, p.Run)
 }
 
 // ProvenanceKey is the case JSON key a PromotedFrom is stored under.
@@ -46,32 +64,34 @@ func DecodePromotedFrom(c model.OutputCase) (*PromotedFrom, error) {
 // PromoteRequest is one fixture promotion: a finished run's produced workspace, copied into a
 // new case's fixture with the target stage's own outputs left behind.
 type PromoteRequest struct {
-	Skill    string
-	Slug     string
-	ID       int
-	Prompt   string
-	Expected string
-	Source   string // the arm dir under evals/results
-	Run      string // provenance: iteration-2
-	Case     string // provenance: the run's case slug
-	Arm      string // provenance: with_skill
-	DryRun   bool
+	Skill       string
+	Slug        string
+	ID          int
+	Prompt      string
+	Expected    string
+	Source      string // the arm dir under <skill>-workspace/iteration-N/<case>/
+	SourceSkill string // provenance: the skill whose workspace the run lives in
+	Run         string // provenance: iteration-2
+	Case        string // provenance: the run's case slug
+	Arm         string // provenance: with_skill
+	DryRun      bool
 }
 
 // Promotion is what a promote does, or would do on a dry run.
 type Promotion struct {
-	Skill      string   `json:"skill"`
-	Slug       string   `json:"slug"`
-	ID         int      `json:"id"`
-	Run        string   `json:"run"`
-	Case       string   `json:"case"`
-	Arm        string   `json:"arm"`
-	Source     string   `json:"source"`
-	Workspaces []string `json:"workspaces"`
-	Files      []string `json:"files"`
-	Skipped    []string `json:"skipped"`
-	FixtureDir string   `json:"fixture_dir"`
-	SHA256     string   `json:"fixture_sha256"`
+	Skill       string   `json:"skill"`
+	SourceSkill string   `json:"source_skill,omitempty"`
+	Slug        string   `json:"slug"`
+	ID          int      `json:"id"`
+	Run         string   `json:"run"`
+	Case        string   `json:"case"`
+	Arm         string   `json:"arm"`
+	Source      string   `json:"source"`
+	Workspaces  []string `json:"workspaces"`
+	Files       []string `json:"files"`
+	Skipped     []string `json:"skipped"`
+	FixtureDir  string   `json:"fixture_dir"`
+	SHA256      string   `json:"fixture_sha256"`
 }
 
 // PromotedQueryFrom records where a trigger row's text came from: the output case whose prompt
@@ -133,7 +153,7 @@ type QueryPromotion struct {
 // skill load for this request?", and two rows of the same text measure one thing twice.
 func (s *Store) PromotePrompt(req PromotePromptRequest) (QueryPromotion, error) {
 	if !s.TriggerOK {
-		return QueryPromotion{}, errors.New("evals/trigger-evals.json is missing — the trigger lane cannot be managed")
+		return QueryPromotion{}, errors.New("trigger/trigger-evals.json is missing — the trigger lane cannot be managed")
 	}
 	src := s.Skill(req.Skill)
 	if src == nil {
@@ -233,6 +253,7 @@ func (s *Store) PromoteOutput(req PromoteRequest) (Promotion, error) {
 	if info, err := os.Stat(src); err != nil || !info.IsDir() {
 		return Promotion{}, fmt.Errorf("source run dir not found: %s", req.Source)
 	}
+	src = armOutputs(src)
 
 	content, files, skipped, workspaces, err := readPromotion(src, req.Skill)
 	if err != nil {
@@ -254,9 +275,9 @@ func (s *Store) PromoteOutput(req PromoteRequest) (Promotion, error) {
 		return Promotion{}, err
 	}
 
-	out := Promotion{Skill: req.Skill, Slug: req.Slug, ID: req.ID, Run: req.Run, Case: req.Case,
-		Arm: req.Arm, Source: src, Workspaces: workspaces, Files: files, Skipped: skipped,
-		FixtureDir: dir}
+	out := Promotion{Skill: req.Skill, SourceSkill: req.SourceSkill, Slug: req.Slug, ID: req.ID,
+		Run: req.Run, Case: req.Case, Arm: req.Arm, Source: src, Workspaces: workspaces,
+		Files: files, Skipped: skipped, FixtureDir: dir}
 	if req.DryRun {
 		return out, nil
 	}
@@ -276,7 +297,8 @@ func (s *Store) PromoteOutput(req PromoteRequest) (Promotion, error) {
 	}
 	out.SHA256 = sha
 
-	prov, err := json.Marshal(PromotedFrom{Run: req.Run, Case: req.Case, Arm: req.Arm, FixtureSHA256: sha})
+	prov, err := json.Marshal(PromotedFrom{Skill: req.SourceSkill, Run: req.Run, Case: req.Case,
+		Arm: req.Arm, FixtureSHA256: sha})
 	if err != nil {
 		return Promotion{}, err
 	}
@@ -308,12 +330,23 @@ func PromotionPreview(src, skill string) (Promotion, error) {
 	return Promotion{Skill: skill, Source: abs, Workspaces: workspaces, Files: files, Skipped: skipped}, nil
 }
 
-// readPromotion reads a run's arm dir into memory: only MC-*/ workspaces are carried (the arm
+// armOutputs is where a run's produced tree lives: <arm>/outputs. A run from the older layout kept
+// its MC-*/ workspaces directly in the arm dir, and those still read.
+func armOutputs(dir string) string {
+	outputs := filepath.Join(dir, "outputs")
+	if info, err := os.Stat(outputs); err == nil && info.IsDir() {
+		return outputs
+	}
+	return dir
+}
+
+// readPromotion reads a run's produced tree into memory: only MC-*/ workspaces are carried (the arm
 // dir also holds the runner's own artifacts), and `_archive/` stays behind because a fixture is
 // a run's input, not its history. The target stage's own outputs (stage.Own) are skipped: they
 // are the stage's answers, and a fixture must hold only its inputs.
 func readPromotion(src, skill string) (content map[string][]byte, files, skipped, workspaces []string, err error) {
 	content = map[string][]byte{}
+	src = armOutputs(src)
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		return nil, nil, nil, nil, err

@@ -52,7 +52,7 @@ const triggerJSON = `{
 func writeTestTree(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	mustWrite(t, filepath.Join(root, "evals", "trigger-evals.json"), triggerJSON)
+	mustWrite(t, filepath.Join(root, "trigger", "trigger-evals.json"), triggerJSON)
 	mustWrite(t, filepath.Join(root, "alpha", "evals", "evals.json"), `{
   "skill_name": "alpha",
   "evals": [
@@ -104,7 +104,7 @@ func TestSaveWithoutChangeIsByteIdentical(t *testing.T) {
 	if err := s.SaveTrigger(); err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile(filepath.Join(root, "evals", "trigger-evals.json"))
+	got, err := os.ReadFile(filepath.Join(root, "trigger", "trigger-evals.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestSaveWithoutChangeIsByteIdentical(t *testing.T) {
 // survive an edit, not be silently dropped.
 func TestUnknownKeysSurviveAnEdit(t *testing.T) {
 	root := writeTestTree(t)
-	path := filepath.Join(root, "evals", "trigger-evals.json")
+	path := filepath.Join(root, "trigger", "trigger-evals.json")
 	withExtra := strings.Replace(triggerJSON, `"why": "clear case",`,
 		`"why": "clear case",
       "notes": {"author": "rod", "reviewed": true},`, 1)

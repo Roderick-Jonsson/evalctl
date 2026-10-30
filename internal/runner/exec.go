@@ -120,8 +120,11 @@ func (r *Runner) RunArm(ctx context.Context, c Case, arm, armDir string, o Optio
 		return ArmResult{}, err
 	}
 
+	// The arm dir holds the harness's own evidence — stream, stderr, timing, changes, grading — and
+	// outputs/ holds the tree the run produced, so "what the run made" is exactly one directory.
+	outputs := filepath.Join(armDir, "outputs")
 	var base string
-	runRoot := armDir
+	runRoot := outputs
 	if o.Isolate {
 		dir, err := os.MkdirTemp("", "hermes-eval-")
 		if err != nil {
@@ -219,7 +222,7 @@ loop:
 		return ArmResult{}, err
 	}
 	if base != "" {
-		if err := CopyTree(runRoot, armDir); err != nil {
+		if err := CopyTree(runRoot, outputs); err != nil {
 			return ArmResult{}, err
 		}
 	}
@@ -293,12 +296,14 @@ func reloadArm(armDir string) ArmResult {
 	return out
 }
 
-// verifyWorkspaces runs the skill's own mechanical checks when it ships a scripts/ CLI.
+// verifyWorkspaces runs the skill's own mechanical checks when it ships a scripts/ CLI. It reads
+// the tree the run produced (armDir/outputs), not the harness's evidence next to it.
 func (r *Runner) verifyWorkspaces(skill, armDir string, o Options) []VerifyEntry {
 	if o.NoVerify || !fileExists(filepath.Join(r.Root, skill, "scripts", "go.mod")) {
 		return []VerifyEntry{}
 	}
-	entries, err := os.ReadDir(armDir)
+	outputs := filepath.Join(armDir, "outputs")
+	entries, err := os.ReadDir(outputs)
 	if err != nil {
 		return []VerifyEntry{}
 	}
@@ -309,7 +314,7 @@ func (r *Runner) verifyWorkspaces(skill, armDir string, o Options) []VerifyEntry
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 		cmd := exec.CommandContext(ctx, "go", "run", "-C", filepath.Join(r.Root, skill, "scripts"), ".",
-			"verify", e.Name(), "--root", armDir)
+			"verify", e.Name(), "--root", outputs)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		runErr := cmd.Run()

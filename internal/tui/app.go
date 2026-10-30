@@ -1233,7 +1233,7 @@ func (m *Model) helpView() string {
 		"  R            run what is selected (or the whole lane of this skill) — form, then enter",
 		"  c            chain: promote a run's output into the next stage's fixture (output lane)",
 		"  t            a case's prompt becomes a trigger query — does that request pick the skill?",
-		"  L            results: every iteration under evals/results, enter opens its report.md rendered",
+		"  L            results: every iteration, per skill workspace, enter opens its report.md rendered",
 		"  P            profiles: check the four sandboxes, u runs ensure on what fails",
 		"  esc          in a run table: back to the list, the run keeps going; x cancels it",
 		"  v / a        agent activity: v in the run table (live), a in the results browser",

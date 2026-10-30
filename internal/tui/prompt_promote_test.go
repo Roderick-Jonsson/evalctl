@@ -25,7 +25,10 @@ func promptPromoteTree(t *testing.T) *store.Store {
   ]
 }
 `
-	path := filepath.Join(s.Root, "evals", "trigger-evals.json")
+	path := filepath.Join(s.Root, "trigger", "trigger-evals.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
