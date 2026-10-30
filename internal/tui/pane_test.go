@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 
 	"evalctl/internal/store"
@@ -58,7 +59,7 @@ func TestEnterGivesThePaneTheKeysAndEscTakesThemBack(t *testing.T) {
 	if !strings.Contains(head, p.ANSI256(p.Accent)) {
 		t.Fatalf("the seam does not take the accent while the pane has the keys: %q", head)
 	}
-	if !strings.Contains(m.View(), "esc table") {
+	if !strings.Contains(ansi.Strip(m.View()), "esc table") {
 		t.Fatalf("the footer does not name the way back:\n%s", m.View())
 	}
 

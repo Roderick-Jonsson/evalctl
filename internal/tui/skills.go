@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"evalctl/internal/store"
 )
@@ -245,8 +246,8 @@ func (m *Model) updateSkills(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // enterSkill scopes the list to one skill ("" = every skill, the old two-lane view). A skill
-// opens on its output cases: they are the thing a skill is worked on for, and the trigger rows
-// that test its description are one tab away.
+// opens on its trigger queries: the strip is ordered as the work is done, and the first question
+// is whether the description fires at all — the output cases are the tab after it.
 func (m *Model) enterSkill(name string) {
 	m.skill = name
 	m.filter.Skill = name
@@ -261,10 +262,10 @@ func (m *Model) enterSkill(name string) {
 	// on trigger, so the strip promised "output cases" over a table of 32 trigger queries and tab
 	// did nothing but relabel the strip.
 	//
-	// A named skill is worked on for its cases. The aggregate keeps the lane the caller asked for,
-	// because --lane is the only thing that says what an unscoped view shows.
+	// A named skill opens on the first tab of the strip. The aggregate keeps the lane the caller
+	// asked for, because --lane is the only thing that says what an unscoped view shows.
 	if name != "" || m.lane == "" {
-		m.lane = store.LaneOutput
+		m.lane = store.LaneTrigger
 	}
 	m.tab = tabOfLane(m.lane)
 	m.tabCursor, m.tabOffset = [3]int{}, [3]int{}
@@ -504,12 +505,15 @@ func (m *Model) skillLine(r skillRow, isCursor bool) string {
 }
 
 // skillsHint keeps the same rules as the lane list: fixed keys first, everything else by rank.
+// skillsHint is the front door's footer band, drawn by the same band as the list's: the same keys
+// in the same register, and the same help cap in the same corner.
 func (m *Model) skillsHint() string {
 	st := m.skills
 	if st.searching {
-		return st.search.View() + dimStyle.Render("   enter apply · esc clear")
+		return m.footBand(st.search.View() + footAct.Render("   enter apply · esc clear"))
 	}
-	return m.hintLine(m.skillsHints())
+	room := max(10, m.width-lipgloss.Width(helpCap())-3)
+	return m.footBand(m.hintLine(m.skillsHints(), room))
 }
 
 // skillsHints is the front door's verb list: the footer renders it and ? explains it.
@@ -521,31 +525,31 @@ func (m *Model) skillsHints() []hint {
 		{key: "L", act: "results", rank: 4, help: "every iteration under the tree — the same results tab a scope has"},
 		{key: "P", act: "profiles", rank: 6, help: "the four sandboxes: what exists and what is stale"},
 		{key: "ctrl+s", act: "save", rank: 0, help: "write both lanes atomically"},
-		{key: "?", act: "keys", rank: 0, help: "this key map"},
 		{key: "q", act: "quit", rank: 5, help: "quit — asks once if there is an unsaved edit or a run in flight"},
 	}
 }
 
-// skillsStatus is the last row of the window, like the lane list's: position and whatever just
-// happened, then the two whole-tree states — an unsaved edit and a live run — because this is the
-// only screen that shows the whole tree.
+// skillsStatus is the last row of the window, built like the lane list's: the state of the tree on
+// the left, whatever just happened over it, and the fixed end on the right. Every screen ends the
+// same way, so the eye learns one footer and not four.
 func (m *Model) skillsStatus() string {
-	status := m.status
-	switch {
-	case status == "":
-		status = dimStyle.Render(m.skillsPosition())
-	case m.statusErr:
-		status = statusBad.Render(status)
-	default:
-		status = statusOk.Render(status)
+	left := m.stateLine()
+	if m.status != "" {
+		if m.statusErr {
+			left = statusBad.Render(m.status)
+		} else {
+			left = statusOk.Render(m.status)
+		}
 	}
+	var right []string
 	if m.dirty {
-		status += "  " + badgeWarn.Render("unsaved — ctrl+s writes")
+		right = append(right, badgeWarn.Render("unsaved"))
 	}
 	if m.runActive {
-		status += "  " + tabActive.Render(glyphs.Running+" run in progress — R opens the table")
+		right = append(right, tabActive.Render(glyphs.Running+" run"))
 	}
-	return status
+	right = append(right, m.health(""), statValue.Render(m.skillsPosition()))
+	return m.footRow(left, right)
 }
 
 func (m *Model) skillsPosition() string {

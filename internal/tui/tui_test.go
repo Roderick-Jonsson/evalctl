@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"evalctl/internal/store"
 )
@@ -95,16 +96,26 @@ func TestListViewRenders(t *testing.T) {
 	if !strings.Contains(view, "output cases 2") {
 		t.Fatalf("header does not name the other lane:\n%s", view)
 	}
-	// tab walks the scope's three views: cases → queries → results → cases.
-	m.Update(key("shift+tab"))
+	// tab walks the scope's three views in workflow order: queries → cases → results → queries.
+	m.Update(key("tab"))
 	after := m.View()
-	if !strings.Contains(after, "[output cases 2]") || !strings.Contains(after, "PROMPT") {
-		t.Fatalf("shift+tab did not walk back to the cases lane:\n%s", after)
+	if !strings.Contains(ansi.Strip(after), "output cases 2") || !strings.Contains(after, "PROMPT") {
+		t.Fatalf("tab did not walk forward to the cases lane:\n%s", after)
+	}
+	// The view on screen is the FILLED chip: the tab bar says where you are by fill, and tab
+	// has to move the fill with the body.
+	if !strings.Contains(after, tabActive.Render(" "+glyphs.Cases+" output cases 2 ")) {
+		t.Fatalf("the cases tab is not the filled one after tab:\n%s", after)
 	}
 	m.Update(key("tab"))
-	m.Update(key("tab"))
-	if view := m.View(); !strings.Contains(view, "[results") {
+	view = m.View()
+	if !strings.Contains(view, tabActive.Render(" "+glyphs.Results+" results")) {
 		t.Fatalf("tab did not reach the results view:\n%s", view)
+	}
+	// And one more step wraps to the first tab, the queries lane.
+	m.Update(key("tab"))
+	if !strings.Contains(m.View(), tabActive.Render(" "+glyphs.Queries+" trigger queries 4")) {
+		t.Fatalf("tab did not wrap back to the queries view:\n%s", m.View())
 	}
 }
 
@@ -115,7 +126,7 @@ func TestHeaderNamesTheBuild(t *testing.T) {
 	if !strings.HasPrefix(m.ver, "v") {
 		t.Fatalf("model version = %q", m.ver)
 	}
-	if !strings.Contains(m.View(), "evalctl "+m.ver) {
+	if !strings.Contains(m.View(), "evalctl ") || !strings.Contains(ansi.Strip(m.View()), "evalctl "+m.ver) {
 		t.Fatalf("header does not name the build:\n%s", m.View())
 	}
 }

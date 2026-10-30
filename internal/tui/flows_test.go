@@ -10,26 +10,28 @@ import (
 )
 
 // TestTabsWalkBothWays: a scope has three views and tab / shift+tab walk them in both directions,
-// with each view keeping its own place — a tab that forgets where you were is a tab you stop using.
+// in the order the work is done — the trigger queries decide whether the description fires, the
+// output cases decide what it produces, and the results are read last. Each view keeps its own
+// place: a tab that forgets where you were is a tab you stop using.
 func TestTabsWalkBothWays(t *testing.T) {
-	m := sized(newModel(testStore(t), store.LaneOutput), 140, 30)
-	if m.tab != tabCases {
-		t.Fatalf("a model built on the output lane opens on %v", m.tab)
+	m := sized(newModel(testStore(t), store.LaneTrigger), 140, 30)
+	if m.tab != tabQueries {
+		t.Fatalf("a model built on the trigger lane opens on %v", m.tab)
 	}
 	var walk []viewTab
 	for i := 0; i < 3; i++ {
 		walk = append(walk, m.tab)
 		m.Update(key("tab"))
 	}
-	if walk[0] != tabCases || walk[1] != tabQueries || walk[2] != tabResults {
+	if walk[0] != tabQueries || walk[1] != tabCases || walk[2] != tabResults {
 		t.Fatalf("tab walk = %v", walk)
 	}
-	if m.tab != tabCases {
+	if m.tab != tabQueries {
 		t.Fatalf("three tabs did not wrap back to the first, got %v", m.tab)
 	}
 	m.Update(key("shift+tab"))
 	if m.tab != tabResults {
-		t.Fatalf("shift+tab from cases should wrap to results, got %v", m.tab)
+		t.Fatalf("shift+tab from queries should wrap to results, got %v", m.tab)
 	}
 
 	// Each tab keeps its place.

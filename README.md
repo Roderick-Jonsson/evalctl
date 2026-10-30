@@ -63,8 +63,8 @@ It opens on the skill list — one line per stage skill, the thing you actually 
 under the cursor is spelled out underneath it:
 
 ```
-evalctl v0.6.0  all skills  12 cases · 32 queries
-presentation-skill  4 skill(s)  2 warnings
+all skills                                                                    evalctl v0.6.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   SKILL                  CASES GRADED FIXT FILES TRIG+ TRIG- HEALTH
 ▸ all skills                12   0/12   10    47    17    15 2 warnings
   av-production              3    0/3    3    10     5     5 ok
@@ -78,7 +78,25 @@ presentation-skill  4 skill(s)  2 warnings
 FINDINGS (1)
 ! output #4 sb-4-agentskills
   expected_output is empty: grading has nothing to check against
+
+ enter open  ·  j k move  ·  / filter  ·  L results  ·  ctrl+s save  ·  q quit        ? keys
+presentation-skill  ·  4 skill(s)                                     2 warnings  ·  1 / 5
 ```
+
+The frame is always three bands — the bar, the body, and the two rows at the bottom — and it is the
+same frame on every screen:
+
+- **the bar** names what you are looking at on the left (the scope, then its tabs as chips with
+  their counts inside) and parks the build at the right edge, so a screenshot is always traceable
+  to a binary. The active tab is the one chip with a fill;
+- **the rule** under the bar is the heavy mark, the only line in the frame that separates chrome
+  from content. It is drawn from the palette's `line` role: brighter than a box edge because it is
+  structure you are meant to find, still well below the text it divides;
+- **the footer** is one band. The keys in your hand are the bright register, what they do is the
+  soft one, `? keys` sits in the same corner at every width, and the last row carries the state on
+  the left (path, how much of it you are seeing, the facets cutting it down, or whatever just
+  happened) and the fixed end on the right (selection, run, unsaved, health, position). The
+  position is the last thing on the line and never moves.
 
 `CASES` is the cases the skill owns, `GRADED` how many of them carry assertions, `FIXT`/`FILES` the
 fixture dirs they stage and what is in them, `TRIG+`/`TRIG-` the trigger rows that test its
@@ -92,10 +110,12 @@ behind a number. `j`/`k` move it, and on a terminal too short for it the block g
 line rather than pushing it off. Narrow terminals drop whole columns by importance (`FILES` first,
 then `FIXT`, then the should-trigger split) instead of clipping the row.
 
-`enter` opens a skill on its **cases** tab: the output cases are what a skill is worked on for, and
-its trigger queries and its results are the two tabs beside it. `· all skills` opens the lane
-`--lane` names (`trigger` by default) — the unscoped view is the one where the lane, not a skill, is
-what you came to read. Nothing else is in the list; `esc` goes back.
+`enter` opens a skill on its **trigger queries** tab. The tabs are ordered as the work is done — the
+**trigger queries** (does the description fire at all?) first, the **output cases** (does the skill
+produce the right thing?) second, and the **results** of the runs against them last, as a read-only
+view of its own. `· all skills` opens the lane `--lane` names (`trigger` by default) — the unscoped
+view is the one where the lane, not a skill, is what you came to read. Nothing else is in the list;
+`esc` goes back. `--skill` on the command line still honours `--lane` over the tab a scope starts on.
 
 ### The tabs
 
@@ -104,14 +124,19 @@ directions. They share the frame, the header, the status line and the keys that 
 everywhere; only the body and the verbs in the footer change.
 
 ```
-evalctl v0.6.0  slide-builder  [output cases 5]  trigger queries 11   results 3
-                      ↑ the tab you are on        ↑ its count      ↑ a run in flight shows ⟳
+slide-builder │  ◎ trigger queries 11  │  ▤ output cases 5  │  ✓ results 3        evalctl v0.6.0
+                ↑ the filled chip       ↑ its count inside                ↑ a run in flight shows ⟳
 ```
+
+The chip carries the count, the icon says which view it is before you read the word, and a narrow
+window drops the icons first, then the words — never the counts. The three marks (`▤` cases, `◎`
+queries, `✓` results) are ordinary geometric characters, not private-use icons: on a terminal
+without the font they would be boxes, and `--glyphs ascii` draws `# o +` in the same cells.
 
 | tab | what it is | writable |
 |---|---|---|
-| `output cases` | the cases the skill is graded on | yes |
 | `trigger queries` | the rows that test its description | yes |
+| `output cases` | the cases the skill is graded on | yes |
 | `results` | the iterations measured against them | no — read, open, promote, run again |
 
 Each tab keeps its own cursor, so switching away and back leaves you where you were. `L` is the
@@ -121,7 +146,7 @@ never one keystroke away from meaning something else.
 | key | action |
 |---|---|
 | `j k ↑ ↓` `enter` | skill list: move / open a skill (`· all skills` = every skill) |
-| `tab` `shift+tab` | walk the scope's tabs — cases → queries → results, and back |
+| `tab` `shift+tab` | walk the scope's tabs — queries → cases → results, and back |
 | `esc` | one level up. The footer names the level: `esc table` (out of the pane), `esc clear column`, `esc clear selection`, `esc skills` — and esc does exactly that one thing |
 | `j k ↑ ↓` `home G` `ctrl+d ctrl+u` | in a tab: move / first / last / half page |
 | `space` | select row and advance — the trim gesture |
@@ -151,17 +176,17 @@ report the iteration wrote, rendered; `a` inside it switches to that run's activ
 There is no select, edit, new or delete there: results are what a run wrote, and the way to change
 them is to change the set and run again.
 
-The header carries the scope and both lanes of it, so the state is legible without a keystroke:
+The bar carries the scope and both lanes of it, so the state is legible without a keystroke:
 
 ```
-evalctl v0.6.0  ◆ av-production  [output cases 3]  trigger queries 10
-/Users/…/presentation-skill  3 of 3  clean
+slide-builder │  ▤ output cases 3  │  ◎ trigger queries 10                evalctl v0.6.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
 ### The frame
 
-The view is anchored to the terminal, not to the data: two header rows, the column head, the body,
-then the key line and the status line — and the status line is the **last row of the window**,
+The view is anchored to the terminal, not to the data: the bar and its rule, the column head, the
+body, then the key band and the status line — and the status line is the **last row of the window**,
 whatever the list's length. Filtering down to two rows does not lift the footer up the screen; the
 empty rows below are the frame.
 
@@ -533,12 +558,14 @@ edits are unsaved (the write would carry them along).
 ## Colour
 
 Views never name a colour, they name a role — `Text`, `Muted`, `Faint`, `Accent`, `Accent2`, `OK`,
-`Warn`, `Err`, `Border`, `Sel`, `CodeBG`/`CodeFG` — and `internal/theme` decides what each role is.
+`Warn`, `Err`, `Border`, `Line`, `Sel`, `CodeBG`/`CodeFG` — and `internal/theme` decides what each
+role is. `Line` is the frame's dividers (the rule under the bar, the seam beside the pane): brighter
+than a box edge, because it is structure you are meant to find, and well below the text it divides.
 Three palettes ship:
 
 | palette | for | held to |
 |---|---|---|
-| `midnight` | a dark terminal (the default) | body text ≥ 7:1, every other role ≥ 4.5:1, borders 1.4–3:1 |
+| `midnight` | a dark terminal (the default) | body text ≥ 7:1, every other role ≥ 4.5:1, borders 1.4–3:1, dividers 2.2–5:1 |
 | `high-contrast` | a bright room, a projector, tired eyes | nothing below 8.8:1 |
 | `daylight` | a light terminal | the same floors, with the hues darkened instead of brightened |
 

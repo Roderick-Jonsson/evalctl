@@ -40,6 +40,12 @@ func TestPalettesAreReadable(t *testing.T) {
 			if got := Contrast(p.Border, p.BG); got < 1.3 || got > 3.2 {
 				t.Errorf("%s: border %s is %.2f:1 on %s, want 1.3–3.2:1", p.Name, p.Border, got, p.BG)
 			}
+			// The dividers are the one piece of structure you are meant to FIND — the tabs end
+			// where the body starts, and two panes are two panes — so they are brighter than a
+			// box edge and still well below the text they divide.
+			if got := Contrast(p.Line, p.BG); got < 2.2 || got > 5.0 {
+				t.Errorf("%s: line %s is %.2f:1 on %s, want 2.2–5:1", p.Name, p.Line, got, p.BG)
+			}
 			// The row under the cursor has to be findable: a selection you cannot see is a lost
 			// cursor row.
 			if got := Contrast(p.Sel, p.BG); got < 1.25 {

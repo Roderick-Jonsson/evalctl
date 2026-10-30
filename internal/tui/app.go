@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"evalctl/internal/format"
 	"evalctl/internal/runner"
@@ -43,8 +44,8 @@ const (
 type viewTab int
 
 const (
-	tabCases   viewTab = iota // output cases — what a skill is worked on for
-	tabQueries                // trigger queries — what tests its description
+	tabQueries viewTab = iota // trigger queries — what tests its description, and what is settled first
+	tabCases                  // output cases — what a skill is worked on for
 	tabResults                // what the runs against them came back with
 )
 
@@ -1299,104 +1300,150 @@ func (m *Model) groupLine(it listItem) string {
 	return dimStyle.Render(strings.Repeat(glyphs.Rule, 2)) + styleGroup.Render(label)
 }
 
-// header is the frame the list is read in: three lines — identity, state, and the column head. It
-// carries what changes (scope, lane, counts, health) and nothing that does not: the tree's full
-// path lives in `?`, because a 60-character invariant repeated on every repaint is the least
-// informative thing a screen can spend its top row on.
+// header is the top edge of a list screen: the tab bar, and the rule under it. The caller adds the
+// column head as the third row, so the head is always bar → rule → columns — the three rows the
+// layout reserves (layout.go).
+//
+// What used to be a second line of state (path, counts, health, filters) is not here any more: it
+// is the footer's job. A bar with a rule under it says "these are the views of this scope" in one
+// glance, and the facts about the data belong at the bottom, where they do not compete with the
+// tabs for the same row.
 func (m *Model) header() string {
-	line1 := titleStyle.Render("evalctl " + m.ver)
-	if m.mode == screenSkills {
-		// The skill list is the front door. The lane tabs belong to a lane view; drawing them
-		// here advertises a switch that does not apply to what is on screen.
-		cases, queries := 0, 0
-		for _, r := range m.skills.rows {
-			if r.all {
-				cases, queries = r.sum.Cases, r.sum.Queries
-			}
-		}
-		line1 += "  " + dimStyle.Render("all skills") +
-			"  " + fmt.Sprintf("%d cases · %d queries", cases, queries)
-	} else {
-		scope := dimStyle.Render("all skills")
-		if m.skill != "" {
-			scope = titleStyle.Render(m.skill)
-		}
-		line1 += "  " + scope + "  " + m.tabStrip()
+	bar := m.tabBar()
+	w := m.width
+	if w <= 0 {
+		// Unsized (before the first WindowSizeMsg) there is no window to fill: the rule is as
+		// wide as the bar it sits under, so a probe sees the view rather than a one-cell frame.
+		w = lipgloss.Width(bar)
 	}
-
-	errs, warns := m.counts()
-	badge := statusOk.Render("clean")
-	if errs > 0 {
-		badge = statusBad.Render(plural(errs, "error"))
-	} else if warns > 0 {
-		badge = badgeWarn.Render(plural(warns, "warning"))
-	}
-	var line2 string
-	if m.mode == screenSkills {
-		line2 = dimStyle.Render(filepath.Base(m.store.Root)) + "  " +
-			fmt.Sprintf("%d skill(s)", len(m.skills.rows)-1)
-	} else {
-		// What is on screen decides what "2 of 32" counts: rows in a lane, iterations on the results
-		// tab. A count of something you are not looking at is worse than no count.
-		shown := fmt.Sprintf("%d of %d", len(m.rows), len(m.store.Rows(m.lane, store.Filter{Skill: m.skill})))
-		if m.tab == tabResults {
-			n := 0
-			if m.runsList != nil {
-				n = len(m.runsList.infos)
-			}
-			shown = plural(n, "iteration")
-		}
-		line2 = dimStyle.Render(filepath.Base(m.store.Root)) + "  " + shown
-	}
-	line2 += "  " + badge
-	if n := len(m.chosen); n > 0 {
-		line2 += "  " + selMark.Render(fmt.Sprintf("%d selected", n)) + m.selectionBreakdown()
-	}
-	if m.dirty {
-		line2 += "  " + badgeWarn.Render("unsaved")
-	}
-	if m.runActive {
-		line2 += "  " + tabActive.Render(glyphs.Running+" run in progress")
-	}
-	if fh := m.filterHint(); fh != "" {
-		line2 += "  " + fh
-	}
-	return line1 + "\n" + line2
+	return bar + "\n" + tabRule.Render(strings.Repeat(glyphs.Heavy, max(1, w)))
 }
 
-// tabStrip draws the scope's three views; the active one is bracketed and bright, the others still
-// carry their counts, so what is behind a tab is never a surprise. tab and shift+tab walk it. On a
-// narrow terminal the labels shorten rather than the line clipping: a header that runs off the edge
-// loses its counts, which is the only part of it that changes.
-func (m *Model) tabStrip() string {
-	var parts []string
-	compact := m.width > 0 && m.width < 110
-	for _, t := range []viewTab{tabCases, tabQueries, tabResults} {
-		label, n := "results", m.resultsCount()
-		if t == tabCases {
-			label, n = "output cases", len(m.store.Rows(store.LaneOutput, store.Filter{Skill: m.skill}))
+// tabBar is the top row: the scope and its views on the left, the build in hand at the right edge.
+// The two ends are laid out independently and joined by whatever gap is left, so the version is
+// parked at the window's edge at every width instead of drifting with the strip.
+func (m *Model) tabBar() string {
+	right := m.brand()
+	if m.width <= 0 {
+		left := m.tabStrip(1 << 30)
+		if right == "" {
+			return left
 		}
-		if t == tabQueries {
-			label, n = "trigger queries", len(m.store.Rows(store.LaneTrigger, store.Filter{Skill: m.skill}))
-		}
-		if compact {
-			label = map[viewTab]string{tabCases: "out", tabQueries: "trig", tabResults: "res"}[t]
-		}
-		text := label
-		if n >= 0 {
-			text = fmt.Sprintf("%s %d", label, n)
-		}
-		// A run in flight belongs to the results tab: the marker says which view has news coming.
-		if t == tabResults && m.runActive {
-			text += " " + glyphs.Running
-		}
-		if t == m.tab {
-			parts = append(parts, tabActive.Render("["+text+"]"))
-			continue
-		}
-		parts = append(parts, tabIdle.Render(" "+text+" "))
+		return left + "  " + right
 	}
-	return strings.Join(parts, " ")
+	room := m.width - lipgloss.Width(right) - 1
+	if room < 1 {
+		right, room = "", m.width
+	}
+	left := m.tabStrip(room)
+	if gap := m.width - lipgloss.Width(left) - lipgloss.Width(right); gap > 0 && right != "" {
+		return left + strings.Repeat(" ", gap) + right
+	}
+	return left
+}
+
+// barRule is the line under the bar, at the full width of the window. It is the heavy rule and not
+// the section rule: the bar and the body are different things, and the line under the bar is the
+// one place in the frame that says so. It is drawn even on a terminal too short for a body, because
+// it is part of the bar and not part of the table.
+func (m *Model) barRule() string {
+	w := max(1, m.width)
+	return tabRule.Render(strings.Repeat(glyphs.Heavy, w))
+}
+
+// brand is "evalctl v0.6.0": the name filled with the accent, the number quiet beside it. The
+// version is a fact about the binary in hand, so it is never mixed into the row's other content —
+// it is the one thing at the far right of the bar and it does not move.
+func (m *Model) brand() string {
+	if m.width > 0 && m.width < 40 {
+		return ""
+	}
+	return brandName.Render(" evalctl ") + brandVer.Render(m.ver)
+}
+
+// tabStrip is the scope and its three views. The scope is a title (accent, no fill); each view is a
+// chip with its count inside it, so what is behind a tab is never a surprise. The active chip is
+// filled and bold, the others are soft text, and the same vertical line that divides the table from
+// its pane divides them: one divider on the screen, drawn the same way everywhere.
+//
+// A narrow window loses the icons first, then the words, then the strip itself — never the counts,
+// because a tab without its count is a tab you have to open to read.
+func (m *Model) tabStrip(room int) string {
+	scope := m.skill
+	if scope == "" || m.mode == screenSkills {
+		scope = "all skills"
+	}
+	left := tabScope.Render(scope)
+	if m.mode == screenSkills {
+		// The front door has one view. A strip of tabs over a screen that cannot switch would be
+		// advertising a key that does nothing here.
+		return fitTo(left, room)
+	}
+
+	type tabLabel struct{ icon, long, short string }
+	labels := map[viewTab]tabLabel{
+		tabCases:   {glyphs.Cases, "output cases", "cases"},
+		tabQueries: {glyphs.Queries, "trigger queries", "queries"},
+		tabResults: {glyphs.Results, "results", "results"},
+	}
+	counts := map[viewTab]int{
+		tabCases:   len(m.store.Rows(store.LaneOutput, store.Filter{Skill: m.skill})),
+		tabQueries: len(m.store.Rows(store.LaneTrigger, store.Filter{Skill: m.skill})),
+		tabResults: m.resultsCount(),
+	}
+	sep := tabSep.Render(" " + glyphs.Seam + " ")
+
+	build := func(withIcon, long bool) string {
+		var parts []string
+		for _, t := range []viewTab{tabQueries, tabCases, tabResults} {
+			l := labels[t]
+			name := l.short
+			if long {
+				name = l.long
+			}
+			text := name
+			if withIcon {
+				text = l.icon + " " + name
+			}
+			if t == tabResults && m.runActive {
+				text += " " + glyphs.Running
+			}
+			n := counts[t]
+			if n >= 0 { // an unread results list has no count, and no count is not zero
+				text += " " + strconv.Itoa(n)
+			}
+			parts = append(parts, m.tabChip(text, t == m.tab))
+		}
+		return left + sep + strings.Join(parts, sep)
+	}
+	for _, variant := range []struct{ icon, long bool }{{true, true}, {false, true}, {false, false}} {
+		if line := build(variant.icon, variant.long); lipgloss.Width(line) <= room {
+			return line
+		}
+	}
+	return fitTo(left, room)
+}
+
+// tabChip is one view: padded by one cell on each side so the fill reads as a chip, filled only
+// when it is the view on screen.
+func (m *Model) tabChip(text string, active bool) string {
+	if active {
+		return tabActive.Render(" " + text + " ")
+	}
+	return tabIdle.Render(" " + text + " ")
+}
+
+// fitTo cuts a finished, already-styled run to w cells. It goes through x/ansi rather than a rune
+// count because the escapes are zero-width: cutting "styled" text by runes cuts the colour, and the
+// rest of the line then paints itself in whatever the cut left open.
+func fitTo(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= w {
+		return s
+	}
+	return ansi.Truncate(s, w, glyphs.Ellipsis)
 }
 
 // resultsCount is how many iterations the scope has, or -1 when the list has not been read for this
@@ -1618,13 +1665,15 @@ func (m *Model) columnHead(f frame) string {
 	return head + seam.Render(paneSep) + title.Render(padCell(ellipsis(m.paneTitle(e, f), f.pane), f.pane, false))
 }
 
-// seamStyles is the divider and the pane's title in the colour of where the keys are: the accent
-// when the pane is focused, the faint role when the table is.
+// seamStyles is the divider and the pane's title in the colour of where the keys are. The divider is
+// the frame's border role — a line between two things, not a label — and only turns accent while the
+// pane has the keys; the title is the pane's name, bold whenever the pane exists, because the pane
+// is always the row under the cursor and its title is always the answer to "what am I reading".
 func (m *Model) seamStyles() (seam, title lipgloss.Style) {
 	if m.paneFocus {
 		return paneSeam, paneSeam
 	}
-	return dimStyle, dimStyle
+	return seamLine, paneTitle
 }
 
 // paneTitle names the row the pane is showing, and — while the pane has the keys — where in the
@@ -1733,21 +1782,22 @@ func (h hint) long() string {
 	return h.act
 }
 
-// hintLine renders the bindings that fit. Ranks 0 (save, keys) are unconditional: whatever else
-// goes, the operator can always find out how to write and how to ask for help.
-func (m *Model) hintLine(hints []hint) string {
+// hintLine renders the bindings that fit: the key in the bright register, what it does in the soft
+// one. Ranks 0 (save, keys, esc) are unconditional: whatever else goes, the operator can always find
+// out how to write and how to ask for help.
+func (m *Model) hintLine(hints []hint, width int) string {
 	render := func(hs []hint) string {
 		parts := make([]string, 0, len(hs))
 		for _, h := range hs {
-			parts = append(parts, h.key+" "+h.act)
+			parts = append(parts, footKey.Render(h.key)+" "+footAct.Render(h.act))
 		}
-		return strings.Join(parts, " · ")
+		return strings.Join(parts, footAct.Render("  ·  "))
 	}
 	live := append([]hint(nil), hints...)
 	for {
 		line := render(live)
-		if m.width <= 0 || lipgloss.Width(line) <= m.width-1 {
-			return dimStyle.Render(line)
+		if width <= 0 || lipgloss.Width(line) <= width {
+			return line
 		}
 		worst := -1
 		for i, h := range live {
@@ -1759,9 +1809,183 @@ func (m *Model) hintLine(hints []hint) string {
 			}
 		}
 		if worst < 0 {
-			return dimStyle.Render(ellipsis(line, m.width-1))
+			return ansi.Truncate(line, width, glyphs.Ellipsis)
 		}
 		live = append(live[:worst], live[worst+1:]...)
+	}
+}
+
+// helpCap is the key cap at the right edge of the footer band. It is the only inverted cell in the
+// frame, so its position is a promise: the answer to "what can I press" is always at the same
+// corner of the window.
+func helpCap() string { return helpChip.Render(" ? keys ") }
+
+// footBand is the footer's first row: a band across the whole window, the keys in your hand on the
+// left, the help cap at the right edge. It is chrome for the screen and not for the table — it spans
+// pane and table alike — and it is the bottom edge of the frame rather than a line of prose that
+// stopped where the text did.
+func (m *Model) footBand(hint string) string {
+	w := max(1, m.width)
+	cap := helpCap()
+	line := " " + hint
+	pad := w - lipgloss.Width(line) - lipgloss.Width(cap)
+	if pad < 1 {
+		pad = 1
+	}
+	line += strings.Repeat(" ", pad) + cap
+	return banded(footSeq, line, w)
+}
+
+// hintFooter is the binding line: the one that says what the keys in your hand do. Each tab
+// advertises only its own verbs: a read-only view that lists write keys is a view that lies.
+func (m *Model) hintFooter() string {
+	room := max(10, m.width-lipgloss.Width(helpCap())-3)
+	switch {
+	case m.searching:
+		return m.footBand(m.search.View() + footAct.Render("   enter apply · esc clear"))
+	case m.paneFocus:
+		// The pane's verbs, from the pane's own table: the footer and ? cannot disagree about what
+		// a key does inside it.
+		return m.footBand(m.hintLine(m.paneKeys(), room))
+	case m.focusedColumnName() != "":
+		// The focused-column line replaces the verb list, but esc still leaves this state, so it
+		// is named here too: a footer may shorten, never lie by omission.
+		return m.footBand(footAct.Render(fmt.Sprintf(
+			"col %s · o sort · g group · / search it · esc clears", m.focusedColumnName())))
+	}
+	return m.footBand(m.hintLine(m.tabHints(), room))
+}
+
+// statusFooter is the last row of the terminal: what just happened on the left, and how the tree is
+// plus where you are at the right edge. The status message may replace the state line — it is
+// transient — but it never moves the position: a scrollbar that walks is a scrollbar you re-find.
+func (m *Model) statusFooter() string {
+	left := m.stateLine()
+	if m.status != "" {
+		if m.statusErr {
+			left = statusBad.Render(m.status)
+		} else {
+			left = statusOk.Render(m.status)
+		}
+	}
+	// The facets survive the status message: a search or a group is still cutting the list while
+	// the status is talking, and a filter you cannot see is a filter you have forgotten.
+	if fh := m.filterHint(); fh != "" {
+		left += "  " + fh
+	}
+	return m.footRow(left, m.rightFoot())
+}
+
+// footRow is the last row's two ends: the note on the left, the fixed facts on the right. What does
+// not fit is dropped from the note, because the right-hand facts are the ones with a fixed place.
+func (m *Model) footRow(left string, right []string) string {
+	tail := strings.Join(right, footAct.Render("  ·  "))
+	room := m.width - lipgloss.Width(tail) - 1
+	if room < 8 {
+		room = 8
+	}
+	if lipgloss.Width(left) > room {
+		left = ansi.Truncate(left, room, glyphs.Ellipsis)
+	}
+	if tail == "" {
+		return left
+	}
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(tail)
+	if gap < 1 {
+		gap = 1
+	}
+	return left + strings.Repeat(" ", gap) + tail
+}
+
+// stateLine is what is true about the body on screen: the tree, how much of it you are looking at,
+// and the facets that cut it down. It is the line the old header spent its second row on, in the
+// place it belongs — under the table, where it reads as a footnote to the data and not as a title.
+func (m *Model) stateLine() string {
+	parts := []string{statValue.Render(filepath.Base(m.store.Root))}
+	if m.mode == screenSkills {
+		parts = append(parts, statValue.Render(fmt.Sprintf("%d skill(s)", len(m.skills.rows)-1)))
+	} else {
+		// What is on screen decides what "2 of 32" counts: rows in a lane, iterations on the
+		// results tab. A count of something you are not looking at is worse than no count.
+		shown := fmt.Sprintf("%d of %d", len(m.rows), len(m.store.Rows(m.lane, store.Filter{Skill: m.skill})))
+		if m.tab == tabResults {
+			n := 0
+			if m.runsList != nil {
+				n = len(m.runsList.infos)
+			}
+			shown = plural(n, "iteration")
+		}
+		parts = append(parts, statValue.Render(shown))
+	}
+	line := strings.Join(parts, footAct.Render("  ·  "))
+	return line
+}
+
+// rightFoot is the last row's fixed end: the selection, a run in flight, an unsaved edit, the tree's
+// health, and the position — in that order, so the position is always the last thing on the line.
+func (m *Model) rightFoot() []string {
+	var parts []string
+	if n := len(m.chosen); n > 0 {
+		parts = append(parts, selMark.Render(fmt.Sprintf("%d selected", n))+m.selectionBreakdown())
+	}
+	if m.runActive {
+		parts = append(parts, tabActive.Render(glyphs.Running+" run"))
+	}
+	if m.dirty {
+		parts = append(parts, badgeWarn.Render("unsaved"))
+	}
+	parts = append(parts, m.health(m.skill))
+	parts = append(parts, statValue.Render(m.position()))
+	return parts
+}
+
+// health is the badge for what the tree holds: errors, then warnings, then the good news. Scoped to
+// a skill it counts only that skill's findings — "2 warnings" over another stage is noise in a view
+// about this one — and on the front door (scope "") it counts the whole tree.
+func (m *Model) health(skill string) string {
+	errs, warns := 0, 0
+	for _, i := range m.issues {
+		if skill != "" && i.Skill != skill {
+			continue
+		}
+		if i.Severity == store.SeverityError {
+			errs++
+		} else {
+			warns++
+		}
+	}
+	switch {
+	case errs > 0:
+		return statusBad.Render(plural(errs, "error"))
+	case warns > 0:
+		return badgeWarn.Render(plural(warns, "warning"))
+	}
+	return statusOk.Render("clean")
+}
+
+// listHints is ordered by how often a hand reaches for it, and ranked by how little is lost when it
+// has to go.
+func (m *Model) laneHints() []hint {
+	return []hint{
+		{key: "space", act: "select", rank: 1, help: "select the row and move down — the trim gesture"},
+		{key: "enter", act: "detail", rank: 1, help: "the cursor row in the pane beside the table; the pane then takes the keys"},
+		{key: "e", act: "edit", rank: 2, help: "edit the row under the cursor"},
+		{key: "d", act: "delete", rank: 5, help: "delete the selection, or the row under the cursor — asks first"},
+		{key: "/", act: "search", rank: 4, help: "search this lane; with a column focused, only that column"},
+		{key: "tab", act: "next tab", rank: 6, help: "walk the scope's views: queries → cases → results"},
+		{key: "R", act: "run", rank: 3, help: "run what is selected, or the whole lane of this scope"},
+		{key: "n", act: "new", rank: 12, help: "new row in this tab's lane"},
+		{key: "v", act: "whole", rank: 10, help: "the row in full at the width of the window"},
+		{key: "1–6", act: "column", rank: 9, help: "focus a column — o sorts by it, g groups by it, / searches it"},
+		{key: "c", act: "chain", rank: 11, help: "promote: a run's output becomes the next stage's fixture"},
+		{key: "t", act: glyphs.Arrow + "trigger", rank: 11, help: "this case's prompt becomes a trigger query"},
+		{key: "P", act: "profiles", rank: 13, help: "the four sandboxes: what exists and what is stale"},
+		{key: "ctrl+s", act: "save", rank: 0, help: "write both lanes atomically — previous bytes in .evalctl/backups/"},
+		// ? itself is not a hint: the footer's help cap is the binding, and a list that repeats
+		// it spends a slot on the one key that is already parked in the corner.
+		{key: "q", act: "quit", rank: 10, help: "quit — asks once if there is an unsaved edit or a run in flight"},
+		// esc keeps rank 0: it is the way out, and it names the level it will actually take.
+		{key: "esc", act: m.escLabel(), rank: 0, help: "one level up — the footer always names the level"},
 	}
 }
 
@@ -1777,67 +2001,6 @@ func (m *Model) tabHints() []hint {
 			hint{key: "l", act: "label", rank: 15, help: "cycle the label filter (should trigger / should not)"})
 	}
 	return append(m.laneHints(), hint{key: "u", act: "dupes", rank: 14, help: "only near-duplicate rows — the trim shortlist"})
-}
-
-// listHints is ordered by how often a hand reaches for it, and ranked by how little is lost when it
-// has to go.
-func (m *Model) laneHints() []hint {
-	return []hint{
-		{key: "space", act: "select", rank: 1, help: "select the row and move down — the trim gesture"},
-		{key: "enter", act: "detail", rank: 1, help: "the cursor row in the pane beside the table; the pane then takes the keys"},
-		{key: "e", act: "edit", rank: 2, help: "edit the row under the cursor"},
-		{key: "d", act: "delete", rank: 5, help: "delete the selection, or the row under the cursor — asks first"},
-		{key: "/", act: "search", rank: 4, help: "search this lane; with a column focused, only that column"},
-		{key: "tab", act: "next tab", rank: 6, help: "walk the scope's views: cases → queries → results"},
-		{key: "R", act: "run", rank: 3, help: "run what is selected, or the whole lane of this scope"},
-		{key: "n", act: "new", rank: 12, help: "new row in this tab's lane"},
-		{key: "v", act: "whole", rank: 10, help: "the row in full at the width of the window"},
-		{key: "1–6", act: "column", rank: 9, help: "focus a column — o sorts by it, g groups by it, / searches it"},
-		{key: "c", act: "chain", rank: 11, help: "promote: a run's output becomes the next stage's fixture"},
-		{key: "t", act: glyphs.Arrow + "trigger", rank: 11, help: "this case's prompt becomes a trigger query"},
-		{key: "P", act: "profiles", rank: 13, help: "the four sandboxes: what exists and what is stale"},
-		{key: "ctrl+s", act: "save", rank: 0, help: "write both lanes atomically — previous bytes in .evalctl/backups/"},
-		{key: "?", act: "keys", rank: 0, help: "this key map"},
-		{key: "q", act: "quit", rank: 10, help: "quit — asks once if there is an unsaved edit or a run in flight"},
-		// esc keeps rank 0: it is the way out, and it names the level it will actually take.
-		{key: "esc", act: m.escLabel(), rank: 0, help: "one level up — the footer always names the level"},
-	}
-}
-
-// hintFooter is the binding line: the one that says what the keys in your hand do. It spans the
-// whole frame, pane included — it is chrome for the screen, not for the table. Each tab advertises
-// only its own verbs: a read-only view that lists write keys is a view that lies.
-func (m *Model) hintFooter() string {
-	switch {
-	case m.searching:
-		return m.search.View() + dimStyle.Render("   enter apply · esc clear")
-	case m.paneFocus:
-		// The pane's verbs, from the pane's own table: the footer and ? cannot disagree about what
-		// a key does inside it.
-		return m.hintLine(m.paneKeys())
-	case m.focusedColumnName() != "":
-		// The focused-column line replaces the verb list, but esc still leaves this state, so it
-		// is named here too: a footer may shorten, never lie by omission.
-		return dimStyle.Render(fmt.Sprintf(
-			"col %s · o sort · g group · / search it · esc clears", m.focusedColumnName()))
-	}
-	return m.hintLine(m.tabHints())
-}
-
-// statusFooter is the last row of the terminal: position, then whatever just happened. It is here,
-// and not under the last row of the list, because a status that moves is a status you have to hunt
-// for.
-func (m *Model) statusFooter() string {
-	status := m.status
-	switch {
-	case status == "":
-		status = dimStyle.Render(m.position())
-	case m.statusErr:
-		status = statusBad.Render(status)
-	default:
-		status = statusOk.Render(status)
-	}
-	return status
 }
 
 func (m *Model) position() string {
@@ -1871,7 +2034,7 @@ func (m *Model) helpLines() []string {
 		titleStyle.Render("evalctl "+m.ver) + "  " + dimStyle.Render(m.store.Root),
 		"",
 		head("EVERYWHERE"),
-		row("tab "+glyphs.Shift+"tab", "walk the scope's views — cases · queries · results"),
+		row("tab "+glyphs.Shift+"tab", "walk the scope's views — queries · cases · results"),
 		row("esc", "one level up: "+m.escLabel()),
 		row("?", "this key map"),
 		row("ctrl+v", "the validation findings, for both lanes of this scope"),
@@ -1885,7 +2048,7 @@ func (m *Model) helpLines() []string {
 	}
 	// The tab sections come from the same tables the footers render, so the map cannot describe a
 	// key the footer does not offer (or offer one it does not describe).
-	for _, t := range []viewTab{tabCases, tabQueries, tabResults} {
+	for _, t := range []viewTab{tabQueries, tabCases, tabResults} {
 		saved := m.tab
 		m.tab = t
 		hints := m.tabHints()

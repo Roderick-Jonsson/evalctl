@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"evalctl/internal/store"
 )
 
@@ -46,23 +48,29 @@ func TestEnteringASkillScopesBothLanes(t *testing.T) {
 	if m.mode != screenList {
 		t.Fatalf("enter did not open the list (mode %v)", m.mode)
 	}
-	if m.skill != "alpha" || m.lane != store.LaneOutput {
-		t.Fatalf("scope = %q lane = %q, want alpha on its output cases", m.skill, m.lane)
+	if m.skill != "alpha" || m.lane != store.LaneTrigger {
+		t.Fatalf("scope = %q lane = %q, want alpha on its trigger queries", m.skill, m.lane)
 	}
-	if len(m.rows) != 1 || m.rows[0].Skill != "alpha" || m.rows[0].Lane != store.LaneOutput {
-		t.Fatalf("rows = %+v, want alpha's one case", m.rows)
+	if len(m.rows) != 2 || m.rows[0].Skill != "alpha" || m.rows[0].Lane != store.LaneTrigger {
+		t.Fatalf("rows = %+v, want alpha's two trigger rows", m.rows)
 	}
 	// Scoped, the SKILL column would repeat the header on every row.
 	if strings.Contains(m.View(), "SKILL") {
 		t.Fatalf("scoped view still draws the skill column:\n%s", m.View())
 	}
-	if !strings.Contains(m.View(), " alpha ") {
+	// The header names the scope in its first line — the tab strip's left edge.
+	if head := strings.Split(ansi.Strip(m.View()), "\n")[0]; !strings.Contains(head, m.skill) {
 		t.Fatalf("header does not name the scope:\n%s", m.View())
 	}
+	// The strip is drawn in workflow order, with the first tab (queries) filled on arrival.
+	if !strings.Contains(m.View(), tabActive.Render(" "+glyphs.Queries+" trigger queries 2 ")) {
+		t.Fatalf("a skill does not open on its queries tab:\n%s", m.View())
+	}
 
+	// The cases tab is one step on from the queries tab, where a skill opens.
 	m.Update(key("tab"))
-	if len(m.rows) != 2 || m.rows[0].Lane != store.LaneTrigger {
-		t.Fatalf("tab rows = %+v, want alpha's two trigger rows", m.rows)
+	if len(m.rows) != 1 || m.rows[0].Lane != store.LaneOutput {
+		t.Fatalf("tab rows = %+v, want alpha's one case", m.rows)
 	}
 	for _, e := range m.rows {
 		if e.Skill != "alpha" {

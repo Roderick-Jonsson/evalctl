@@ -200,13 +200,11 @@ func TestResultsBrowserFollowsTheSkillScope(t *testing.T) {
 	if m.tab != tabCases {
 		t.Fatalf("opening a skill should start on its cases tab, got %v", m.tab)
 	}
-	m.updateList(key("tab"))
-	m.updateList(key("tab"))
+	m.updateList(key("tab")) // cases → results: results are the tab after the two lanes
 	if m.tab != tabResults || m.runsList.skill != "" {
-		t.Fatalf("two tabs should reach results, got tab=%v scope=%q", m.tab, m.runsList.skill)
+		t.Fatalf("one tab should reach results, got tab=%v scope=%q", m.tab, m.runsList.skill)
 	}
 	m.enterSkill("slide-builder")
-	m.updateList(key("tab"))
 	m.updateList(key("tab"))
 	if m.runsList.skill != "slide-builder" || len(m.runsList.infos) != 2 {
 		t.Fatalf("scoped runs = %+v", m.runsList)
@@ -227,8 +225,8 @@ func TestResultsBrowserFollowsTheSkillScope(t *testing.T) {
 	}
 	// A skill with nothing published says so instead of showing an empty table.
 	m.enterSkill("learning-path")
-	m.updateList(key("tab"))
-	m.updateList(key("tab"))
+	m.updateList(key("tab")) // queries → cases
+	m.updateList(key("tab")) // cases → results
 	if view := m.listView(); !contains(view, "nothing yet for learning-path") {
 		t.Fatalf("empty scope view:\n%s", view)
 	}

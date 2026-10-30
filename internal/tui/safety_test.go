@@ -86,14 +86,16 @@ func TestFooterNeverClips(t *testing.T) {
 		if len(lines) != 30 {
 			t.Errorf("%d cols: view is %d rows on a 30-row terminal", w, len(lines))
 		}
-		hint := lines[len(lines)-2]
+		hint := ansi.Strip(lines[len(lines)-2])
 		for _, want := range []string{"ctrl+s save", "? keys"} {
 			if !strings.Contains(hint, want) {
 				t.Errorf("%d cols: the footer lost %q: %q", w, want, hint)
 			}
 		}
-		if status := strings.TrimSpace(ansi.Strip(lines[len(lines)-1])); status != "1 / 4" {
-			t.Errorf("%d cols: status row = %q, want the position", w, status)
+		// The position is the last thing on the last row: it is the one fact that must not move,
+		// so it is anchored to the right edge rather than floating after the status message.
+		if status := strings.TrimSpace(ansi.Strip(lines[len(lines)-1])); !strings.HasSuffix(status, "1 / 4") {
+			t.Errorf("%d cols: status row = %q, want it to end with the position", w, status)
 		}
 	}
 }

@@ -10,7 +10,9 @@
 // A colour must be readable on its own background. Each shipped palette is checked against the
 // background it is designed for (see theme_test.go): body text at 7:1 or better, every secondary
 // and status role at 4.5:1 or better, borders at 1.4–3:1 so a frame reads as a frame and not as
-// text. That bar is why evalctl no longer uses the terminal's own ANSI red or blue: on a black
+// text, and the frame's dividers (Line) at 2.2–5:1 — those you are meant to find, so they are
+// brighter than a box edge and still quieter than the text they separate. That bar is why evalctl
+// no longer uses the terminal's own ANSI red or blue: on a black
 // background a palette's ANSI-8 colour is often near-invisible (Apple Terminal's blue #0000B3 is
 // 1.7:1, its magenta-adjacent bright blue #0000FF is 2.4:1), and a status glyph you cannot see is
 // a status glyph that does not exist.
@@ -49,6 +51,7 @@ type Palette struct {
 	Warn    string // dupes, warnings, tool calls, run notes
 	Err     string // no, fail, errors
 	Border  string // boxes, rules, table separators
+	Line    string // the frame's dividers: the tab bar's rule and the pane's seam
 	Sel     string // background of the row under the cursor
 	CodeBG  string // inline code and code blocks
 	CodeFG  string
@@ -64,7 +67,7 @@ func (p Palette) Roles() []Role {
 		{"text", p.Text}, {"muted", p.Muted}, {"faint", p.Faint},
 		{"accent", p.Accent}, {"accent2", p.Accent2},
 		{"ok", p.OK}, {"warn", p.Warn}, {"err", p.Err},
-		{"border", p.Border}, {"sel", p.Sel}, {"code", p.CodeFG},
+		{"border", p.Border}, {"line", p.Line}, {"sel", p.Sel}, {"code", p.CodeFG},
 	}
 }
 
@@ -77,7 +80,7 @@ var midnight = Palette{
 	Text: "#EEEEEE", Muted: "#BCBCBC", Faint: "#8A8A8A",
 	Accent: "#87AFFF", Accent2: "#5FD7D7",
 	OK: "#5FD787", Warn: "#FFAF00", Err: "#FF8787",
-	Border: "#3A3A3A", Sel: "#444444",
+	Border: "#3A3A3A", Line: "#6B6B6B", Sel: "#444444",
 	CodeBG: "#262626", CodeFG: "#AFD7FF",
 }
 
@@ -88,7 +91,7 @@ var highContrast = Palette{
 	Text: "#FFFFFF", Muted: "#B2B2B2", Faint: "#A8A8A8",
 	Accent: "#87D7FF", Accent2: "#FFAFFF",
 	OK: "#5FFF87", Warn: "#FFD75F", Err: "#FF8787",
-	Border: "#585858", Sel: "#444444",
+	Border: "#585858", Line: "#757575", Sel: "#444444",
 	CodeBG: "#262626", CodeFG: "#AFFFFF",
 }
 
@@ -100,7 +103,7 @@ var daylight = Palette{
 	Text: "#1C1C1C", Muted: "#626262", Faint: "#767676",
 	Accent: "#005FAF", Accent2: "#8700AF",
 	OK: "#008700", Warn: "#875F00", Err: "#870000",
-	Border: "#D0D0D0", Sel: "#C6C6C6",
+	Border: "#D0D0D0", Line: "#9C9C9C", Sel: "#C6C6C6",
 	CodeBG: "#E4E4E4", CodeFG: "#005F87",
 }
 

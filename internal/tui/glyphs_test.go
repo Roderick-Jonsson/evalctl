@@ -15,6 +15,8 @@ func TestASCIIProfileIsPureASCII(t *testing.T) {
 		"done": asciiGlyphs.Done, "failed": asciiGlyphs.Failed, "sort-up": asciiGlyphs.SortUp,
 		"sort-down": asciiGlyphs.SortDown, "arrow": asciiGlyphs.Arrow, "shift": asciiGlyphs.Shift,
 		"seam": asciiGlyphs.Seam, "rule": asciiGlyphs.Rule, "ellipsis": asciiGlyphs.Ellipsis,
+		"heavy": asciiGlyphs.Heavy, "cases": asciiGlyphs.Cases, "queries": asciiGlyphs.Queries,
+		"results": asciiGlyphs.Results,
 	}
 	for name, g := range fields {
 		if g == "" {
@@ -91,7 +93,7 @@ func TestASCIIProfileDrawsNoBoxDrawing(t *testing.T) {
 	views = append(views, struct{ name, view string }{"help", m.View()})
 
 	for _, v := range views {
-		for _, mark := range []string{"▸", "▪", "│", "─", "⟳", "…"} {
+		for _, mark := range []string{"▸", "▪", "│", "─", "━", "⟳", "…", "▤", "◎", "✓"} {
 			if strings.Contains(v.view, mark) {
 				t.Errorf("%s: the ascii profile still draws %q:\n%s", v.name, mark, v.view)
 			}

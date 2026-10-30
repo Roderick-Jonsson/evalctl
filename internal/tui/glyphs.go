@@ -25,19 +25,28 @@ type glyphSet struct {
 	SortDown string
 	Arrow    string // "this becomes that" in a hint
 	Shift    string // the ⇧ of a shifted binding
-	Seam     string // the divider between the table and its pane
+	Seam     string // the divider between the table and its pane, and between two tabs
 	Rule     string // the rule under a head row, and the section rules
+	Heavy    string // the heavier rule under the tab bar, so the bar reads as a bar
 	Ellipsis string // what a fitted line ends with
+	// The tab bar's marks: one per view, so a tab is recognised before it is read. They are
+	// ordinary geometric characters on purpose — a private-use icon would be a box on every
+	// terminal that has not got the font, and a tab is not worth a row of replacements.
+	Cases   string // output cases — the table of what a skill is worked on for
+	Queries string // trigger queries — the target its description is measured against
+	Results string // results — what the runs came back with
 }
 
 var (
 	unicodeGlyphs = glyphSet{
 		Name: "unicode", Cursor: "▸ ", Selected: "▪ ", Running: "⟳", Done: "✓", Failed: "✗",
-		SortUp: "↑", SortDown: "↓", Arrow: "→", Shift: "⇧", Seam: "│", Rule: "─", Ellipsis: "…",
+		SortUp: "↑", SortDown: "↓", Arrow: "→", Shift: "⇧", Seam: "│", Rule: "─", Heavy: "━",
+		Ellipsis: "…", Cases: "▤", Queries: "◎", Results: "✓",
 	}
 	asciiGlyphs = glyphSet{
 		Name: "ascii", Cursor: "> ", Selected: "* ", Running: "~", Done: "+", Failed: "x",
-		SortUp: "^", SortDown: "v", Arrow: ">", Shift: "^", Seam: "|", Rule: "-", Ellipsis: "~",
+		SortUp: "^", SortDown: "v", Arrow: ">", Shift: "^", Seam: "|", Rule: "-", Heavy: "=",
+		Ellipsis: "~", Cases: "#", Queries: "o", Results: "+",
 	}
 )
 

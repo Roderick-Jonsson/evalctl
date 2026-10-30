@@ -82,12 +82,14 @@ func TestSkillsDetailNeverEatsTheFrame(t *testing.T) {
 // TestPaneOnlyWhileWidthIsSpare: the text column keeps a readable measure and the pane takes what
 // is left over — it is not drawn at a width where it would be paid for out of the table.
 func TestPaneOnlyWhileWidthIsSpare(t *testing.T) {
+	// The divider belongs to the pane, so it is checked where the panes are drawn: the body. The
+	// tab bar draws the same glyph between its chips, and that is not a pane divider.
 	narrow := sized(newModel(testStore(t), store.LaneTrigger), 120, 30)
 	if f := narrow.frame(); f.pane != 0 {
 		t.Fatalf("120 cols: a pane of %d was reserved", f.pane)
 	}
-	if strings.Contains(narrow.View(), paneSep) {
-		t.Fatalf("120 cols: a divider is drawn with no pane behind it:\n%s", narrow.View())
+	if body := strings.Join(narrow.bodyLines(narrow.frame(), 5), "\n"); strings.Contains(body, paneSep) {
+		t.Fatalf("120 cols: a divider is drawn with no pane behind it:\n%s", body)
 	}
 
 	wide := sized(newModel(testStore(t), store.LaneTrigger), 200, 30)

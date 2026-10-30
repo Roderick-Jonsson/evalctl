@@ -896,7 +896,8 @@ func (m *Model) resultsHead(f frame) string {
 	if list := m.runsList; list != nil && list.cursor < len(list.infos) {
 		title = list.infos[list.cursor].Ref()
 	}
-	return head + dimStyle.Render(paneSep) + dimStyle.Render(padCell(ellipsis(title, f.pane), f.pane, false))
+	seam, pane := m.seamStyles()
+	return head + seam.Render(paneSep) + pane.Render(padCell(ellipsis(title, f.pane), f.pane, false))
 }
 
 // resultsBody is the iterations, then the detail card for the one under the cursor.
@@ -932,6 +933,7 @@ func (m *Model) resultsBody(f frame, h int) []string {
 	}
 
 	pane := m.resultsPaneColumn(f, h)
+	seam, _ := m.seamStyles()
 	out := make([]string, 0, h)
 	for i := 0; i < h; i++ {
 		var line string
@@ -942,7 +944,7 @@ func (m *Model) resultsBody(f frame, h int) []string {
 			if i >= len(left) {
 				line = strings.Repeat(" ", f.table)
 			}
-			line += dimStyle.Render(paneSep) + pane[i]
+			line += seam.Render(paneSep) + pane[i]
 		}
 		out = append(out, line)
 	}
