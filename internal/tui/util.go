@@ -64,6 +64,23 @@ func ellipsis(s string, width int) string {
 	return string(runes) + glyphs.Ellipsis
 }
 
+// padCell pads one table cell to its column width. Numeric columns are right-aligned, so 5 and 47
+// end on the same edge and a screenful of counts can be read down the column instead of across.
+func padCell(s string, width int, right bool) string {
+	if width <= 0 {
+		return s
+	}
+	s = ellipsis(s, width)
+	if n := lipgloss.Width(s); n < width {
+		pad := strings.Repeat(" ", width-n)
+		if right {
+			return pad + s
+		}
+		s += pad
+	}
+	return s
+}
+
 // fitTo cuts or pads a string to exactly w cells, so a column never reflows.
 func fitTo(s string, w int) string {
 	if w <= 0 {

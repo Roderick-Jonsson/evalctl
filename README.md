@@ -128,13 +128,13 @@ behind a divider that is not there.
  trigger optimization > choose a skill                                                evalctl v0.8.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  SKILL                 TRAIN  VALID  ITERS    STATE
-  ────────────────────────────────────────────────────────────────────────────────────────
-▶ slide-builder         2      2      0/5      set ready — nothing measured yet
+  SKILL                TRAIN VALID   ITERS  STATE
+▶ slide-builder            2     2     0/5  set ready — nothing measured yet
 
-
-
-
+  ── slide-builder ────────────────────────────────────────────────────────────────
+  2 train queries · 2 validation queries · 0 of 5 iterations measured
+  set ready — nothing measured yet
+  ! no cases: the runner will have nothing to measure for this stage
 
 
 
@@ -154,6 +154,12 @@ j k move · enter open the loop · esc lanes                                    
 `TRAIN`/`VALID` are the query rows that name the skill, `ITERS` is where it stands against the five
 iterations the guide asks for, and `STATE` is what the loop would do next with it — one phrase, read
 off the ledger and the iterations on disk rather than remembered.
+
+The table is the shape the eval tables had: a two-cell gutter where the cursor lives, fixed columns,
+counts right-aligned so 1 and 47 end on one edge, a quiet header and no rule under it. Below it the
+row under the cursor is said out loud — the counts as words, where the loop stands, and the findings
+that belong to that skill (which is the only place a `HEALTH` number would have been hiding).
+`STATE` is the column that gives way on a narrow window, because the block already says it.
 
 `enter` opens that skill's loop **at the step the disk says it is on**. No ledger yet: the wording in
 `SKILL.md` is adopted as candidate #1 and step 3 is where you start. A train set with no validation

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"evalctl/internal/runner"
 	"evalctl/internal/store"
@@ -219,8 +220,9 @@ type skillRow struct {
 	valid  int
 	iters  int
 	state  string
-	gated  bool // five iterations and validation not yet run
-	onDisk bool // has a description and a ledger file
+	gated  bool          // five iterations and validation not yet run
+	onDisk bool          // has a description and a ledger file
+	issues []store.Issue // what validation says about this skill's rows
 }
 
 func (m *Model) skillNames() []string { return m.store.KnownSkills() }
@@ -255,8 +257,14 @@ func (m *Model) openSkill(name string) {
 func (m *Model) loadSkills() {
 	m.skills.rows = nil
 	r := runner.New(m.store)
+	// One validation pass for the whole list, grouped by skill: the block under the table is the
+	// only place a finding is shown, and it must show the same findings the runner would act on.
+	bySkill := map[string][]store.Issue{}
+	for _, issue := range m.store.Validate() {
+		bySkill[issue.Skill] = append(bySkill[issue.Skill], issue)
+	}
 	for _, name := range m.skillNames() {
-		row := skillRow{name: name}
+		row := skillRow{name: name, issues: bySkill[name]}
 		if lab, err := r.DescriptionLab(name); err == nil {
 			row.onDisk = true
 			row.iters = len(iterationsOf(lab))
@@ -291,19 +299,43 @@ func loopState(lab *runner.Lab, iters int) string {
 	return fmt.Sprintf("%d of %d iterations · ready to generalize", iters, iterationsRequired)
 }
 
+// The chooser's table, in the shape the eval tables had: a two-cell gutter where the cursor lives,
+// fixed columns, numbers right-aligned so 5 and 47 end on one edge, a quiet header with no rule under
+// it, and the row under the cursor spelled out in a block below the list — which is also where the
+// emptiness under four rows goes.
+const (
+	skillNameW  = 20
+	skillTrainW = 5
+	skillValidW = 5
+	skillItersW = 7
+)
+
 func (m *Model) skillBody(h int) []string {
 	if len(m.skills.rows) == 0 {
 		m.loadSkills()
 	}
-	lines := []string{
-		"",
-		"  " + headerFocus.Render(fitTo("SKILL", 20)) + "  " +
-			headerFocus.Render(fitTo("TRAIN", 5)) + "  " + headerFocus.Render(fitTo("VALID", 5)) + "  " +
-			headerFocus.Render(fitTo("ITERS", 7)) + "  " + headerFocus.Render("STATE"),
-		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(88, m.width-4)))),
+	// Columns drop by importance, the way the eval tables did: STATE is the flexible one, and the
+	// block under the list says the same thing as words when the column cannot hold it.
+	withState := m.width >= 72
+	head := "  " + dimStyle.Render(padCell("SKILL", skillNameW, false)) + " " +
+		dimStyle.Render(padCell("TRAIN", skillTrainW, true)) + " " +
+		dimStyle.Render(padCell("VALID", skillValidW, true)) + " " +
+		dimStyle.Render(padCell("ITERS", skillItersW, true))
+	if withState {
+		head += "  " + dimStyle.Render("STATE")
 	}
-	const head = 3
-	room := max(1, h-head-2)
+	lines := []string{"", head}
+
+	// The block below the list is worth its rows only when the whole list fits above it; with more
+	// skills than window, the list wins and the block goes — the list is what you are choosing from.
+	const blockRows = 6
+	avail := h - len(lines)
+	showBlock := len(m.skills.rows)+len(lines)+blockRows <= h
+	if showBlock {
+		avail = h - len(lines) - blockRows
+	}
+	room := max(1, min(len(m.skills.rows), avail))
+
 	top := m.skills.top
 	if m.skills.cursor < top {
 		top = m.skills.cursor
@@ -312,26 +344,94 @@ func (m *Model) skillBody(h int) []string {
 		top = m.skills.cursor - room + 1
 	}
 	m.skills.top = top
-	for i := top; i < len(m.skills.rows) && len(lines) < head+room; i++ {
-		r := m.skills.rows[i]
-		mark := "  "
-		if i == m.skills.cursor {
-			mark = cursorMark.Render(glyphs.Cursor)
-		}
-		state := dimStyle.Render(r.state)
-		if r.gated {
-			state = styleOn.Render(r.state)
-		}
-		line := mark + colSkill.Render(fitTo(r.name, 20)) + "  " +
-			colText.Render(fitTo(fmt.Sprint(r.train), 5)) + "  " +
-			colText.Render(fitTo(fmt.Sprint(r.valid), 5)) + "  " +
-			colSplit.Render(fitTo(fmt.Sprint(r.iters)+"/"+fmt.Sprint(iterationsRequired), 7)) + "  " + state
-		if i == m.skills.cursor {
-			line = selected(line)
-		}
-		lines = append(lines, line)
+	for i := top; i < len(m.skills.rows) && i < top+room; i++ {
+		lines = append(lines, m.skillRow(i))
+	}
+	if showBlock {
+		lines = append(lines, "")
+		lines = append(lines, m.skillBlock()...)
 	}
 	return fitRows(lines, h)
+}
+
+// skillRow is one skill: the mark, the name, the three counts and where the loop stands.
+func (m *Model) skillRow(i int) string {
+	r := m.skills.rows[i]
+	mark := "  "
+	if i == m.skills.cursor {
+		mark = cursorMark.Render(glyphs.Cursor)
+	}
+	state := dimStyle.Render(r.state)
+	if r.gated {
+		state = styleOn.Render(r.state)
+	}
+	line := mark + colSkill.Render(padCell(r.name, skillNameW, false)) + " " +
+		colText.Render(padCell(fmt.Sprint(r.train), skillTrainW, true)) + " " +
+		colText.Render(padCell(fmt.Sprint(r.valid), skillValidW, true)) + " " +
+		colSplit.Render(padCell(fmt.Sprint(r.iters)+"/"+fmt.Sprint(iterationsRequired), skillItersW, true))
+	if m.width >= 72 {
+		line += "  " + state
+	}
+	if i == m.skills.cursor {
+		line = selected(line)
+	}
+	return line
+}
+
+// stateWord is where the loop stands with this skill, in the case the STATE column is not there.
+func stateWord(r skillRow) string {
+	if r.gated {
+		return "ready to generalize"
+	}
+	return r.state
+}
+
+// skillBlock is the row under the cursor said out loud: the counts as words, then the findings that
+// belong to that skill. It is the one thing on this screen that was behind a number.
+func (m *Model) skillBlock() []string {
+	if len(m.skills.rows) == 0 {
+		return nil
+	}
+	r := m.skills.rows[m.skills.cursor]
+	rule := func(n int) string { return dimStyle.Render(strings.Repeat(glyphs.Rule, max(4, n))) }
+	lines := []string{
+		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, 2)) + " " + titleStyle.Render(r.name) + " " +
+			rule(min(64, max(8, m.width-8-lipgloss.Width(r.name)))),
+	}
+	facts := strings.Join([]string{
+		pluralOf(r.train, "train query", "train queries"),
+		pluralOf(r.valid, "validation query", "validation queries"),
+		fmt.Sprintf("%d of %d iterations measured", r.iters, iterationsRequired),
+	}, " · ")
+	for _, line := range wrapPlain(facts, max(20, m.width-4)) {
+		lines = append(lines, "  "+dimStyle.Render(line))
+	}
+	// Where the loop stands gets its own line: it is the answer to "and then what", and it is the
+	// one fact on this screen that can turn into advice.
+	stateStyle := dimStyle
+	if r.gated {
+		stateStyle = styleOn
+	}
+	for _, line := range wrapPlain(stateWord(r), max(20, m.width-4)) {
+		lines = append(lines, "  "+stateStyle.Render(line))
+	}
+	shown := 0
+	for _, issue := range r.issues {
+		if shown == 2 {
+			lines = append(lines, "  "+dimStyle.Render(fmt.Sprintf("and %s", plural(len(r.issues)-2, "more finding"))))
+			break
+		}
+		mark := badgeWarn.Render("!")
+		if issue.Severity == store.SeverityError {
+			mark = statusBad.Render(glyphs.Failed)
+		}
+		lines = append(lines, "  "+mark+" "+dimStyle.Render(clipText(issue.Msg, max(20, m.width-6))))
+		shown++
+	}
+	if len(r.issues) == 0 {
+		lines = append(lines, "  "+styleOn.Render(glyphs.Done+" no findings"))
+	}
+	return lines
 }
 
 func (m *Model) updateSkills(msg tea.KeyMsg) tea.Cmd {

@@ -532,3 +532,48 @@ func TestTheDoorIsASelectorWithAPane(t *testing.T) {
 		t.Fatalf("a narrow door hid the explanation entirely:\n%s", narrow)
 	}
 }
+
+// TestTheSkillTableIsATable: the chooser is a table in the same shape as the eval tables — a quiet
+// header, counts right-aligned so 1 and 7 end on one edge, and the row under the cursor spelled out
+// in a block below the list.
+func TestTheSkillTableIsATable(t *testing.T) {
+	m, root, _ := fixture(t)
+	// A second skill, so the cursor has somewhere to go and the block has to follow it.
+	write(t, filepath.Join(root, "learning-path", "evals", "evals.json"), `{"skill_name":"learning-path","evals":[]}`)
+	write(t, filepath.Join(root, "learning-path", "SKILL.md"), strings.Replace(skillMD, "slide-builder", "learning-path", -1))
+	m.store, _ = store.Open(root)
+	m.width, m.height = 120, 28
+	press(m, "enter")
+	m.loadSkills()
+
+	lines := strings.Split(m.View(), "\n")
+	head, row := "", ""
+	for _, line := range lines {
+		plain := stripMarks(line)
+		if strings.HasPrefix(plain, "  SKILL") {
+			head = plain
+		}
+		if strings.Contains(plain, "slide-builder") && strings.HasPrefix(plain, " ") {
+			row = plain
+		}
+	}
+	if head == "" || row == "" {
+		t.Fatalf("no header/row pair in the chooser:\n%s", strings.Join(lines, "\n"))
+	}
+	// Right alignment: the number's last cell is the header's last cell.
+	at := strings.Index(head, "TRAIN")
+	if at < 0 || row[at+len("TRAIN")-1] != '2' {
+		t.Fatalf("the TRAIN column is not right-aligned under its head:\n%s\n%s", head, row)
+	}
+	first := m.skills.rows[m.skills.cursor].name
+	body := stripMarks(m.View())
+	if !strings.Contains(body, "── "+first+" ─") {
+		t.Fatalf("the block does not name the row under the cursor:\n%s", body)
+	}
+	press(m, "j")
+	second := m.skills.rows[m.skills.cursor].name
+	body = stripMarks(m.View())
+	if second == first || !strings.Contains(body, "── "+second+" ─") || strings.Contains(body, "── "+first+" ─") {
+		t.Fatalf("the block did not follow the cursor:\n%s", body)
+	}
+}
