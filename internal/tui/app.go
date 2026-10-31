@@ -288,62 +288,93 @@ func (m *Model) View() string {
 }
 
 func (m *Model) headLines() []string {
-	left := " " + titleStyle.Render(m.scopeLabel())
-	if m.mode == screenFlow && m.flow != nil {
-		left += dimStyle.Render("   " + m.flow.stateLine())
-	}
 	// The tool's name and the build sit together at the right edge: what you are looking at is read
-	// from the left margin inward, and which evalctl drew it is one look at the corner. A screenshot
-	// is traceable to a binary from the same row either way, and the scope keeps the left edge.
-	right := brandName.Render(" evalctl") + " " + brandVer.Render(m.ver)
-	bar := endsLine(left, right, m.width)
+	// from the left margin inward, and which evalctl drew it is one look at the corner.
+	bar := endsLine(m.barLeft(), brandName.Render(" evalctl")+" "+brandVer.Render(m.ver), m.width)
 	rule := tabRule.Render(strings.Repeat(glyphs.Heavy, max(1, m.width)))
 	// The context row is prose of wildly different lengths — the rail on a step screen, a sentence
 	// on the door — so it is cut here, once, rather than trusted per screen.
-	return []string{bar, rule, ellipsis(m.contextLine(), m.width)}
+	return []string{bar, rule, ellipsis(m.contextLine(m.width), m.width)}
 }
 
-// scopeLabel names what is on screen in the words the flow uses, so a screenshot says where it was
-// taken without the rail.
-func (m *Model) scopeLabel() string {
+// pathSegments is where you are, as a path: the optimization, the skill, and then the step, the
+// form, the document or the run that is open. The bar draws it with `>` between the segments and
+// nothing else is allowed on that row, because a path with facts tacked onto its end stops reading
+// as a path — it reads as one more run-on line of separated words.
+func (m *Model) pathSegments() []string {
 	switch m.mode {
 	case screenLane:
-		return "what to optimize"
+		return []string{"what to optimize"}
 	case screenSkill:
-		return "trigger optimization · choose a skill"
+		return []string{"trigger optimization", "choose a skill"}
 	}
-	lane := "trigger optimization"
+	segs := []string{"trigger optimization"}
 	if m.skill != "" {
-		lane += " · " + m.skill
+		segs = append(segs, m.skill)
 	}
 	switch m.mode {
 	case screenFlow:
 		if m.flow != nil {
-			lane += " · " + stepNames[m.flow.step]
+			segs = append(segs, stepNames[m.flow.step])
 		}
 	case screenForm:
-		lane += " · query"
+		segs = append(segs, "query")
 	case screenDraft:
-		lane += " · revise"
+		segs = append(segs, "revise")
 	case screenDoc:
 		if m.doc != nil {
-			lane += " · " + m.doc.scope
+			segs = append(segs, m.doc.scope)
 		}
 	case screenRunAsk, screenRunLive:
 		if m.run != nil {
-			lane += " · " + m.run.scope
+			segs = append(segs, m.run.scope)
 		}
 	case screenAsk:
-		lane += " · " + m.ask.scope
+		if m.ask != nil {
+			segs = append(segs, m.ask.scope)
+		}
 	}
-	return lane
+	return segs
+}
+
+// barLeft draws the path: what you came through in the quiet register, what you are looking at in the
+// accent. `>` is the separator because it is one ASCII cell that says "and then" in every font, and
+// because a middot between three words is a sentence, not a path.
+func (m *Model) barLeft() string {
+	segs := m.pathSegments()
+	var b strings.Builder
+	b.WriteString(" ")
+	for i, seg := range segs {
+		if i > 0 {
+			b.WriteString(dimStyle.Render(" > "))
+		}
+		switch i {
+		case len(segs) - 1:
+			b.WriteString(tabScope.Render(seg))
+		case 0:
+			b.WriteString(dimStyle.Render(seg))
+		default:
+			b.WriteString(colSkill.Render(seg))
+		}
+	}
+	return b.String()
 }
 
 // contextLine is the second row under the bar. On a step screen it is the rail — which step you are
 // in, what is done, what is locked — and that rail is the only navigation this app has.
-func (m *Model) contextLine() string {
+func (m *Model) contextLine(w int) string {
+	// On a step screen the rail is the left half and the loop's numbers are the right half: the
+	// steps say where you are, the numbers say how far in. They are two registers of one row, and
+	// neither belongs on the path above.
 	if m.mode == screenFlow && m.flow != nil {
-		return m.flow.rail(m.width)
+		rail := m.flow.rail(w)
+		facts := m.flow.stateLine()
+		// The numbers are the secondary register: when the row cannot hold both with a gutter between
+		// them, they go — a rail cut in half loses the step you are in, and the body repeats them.
+		if facts != "" && lipgloss.Width(rail)+lipgloss.Width(facts)+4 <= w {
+			return endsLine(rail, statValue.Render(facts)+" ", w)
+		}
+		return rail
 	}
 	switch m.mode {
 	case screenLane:

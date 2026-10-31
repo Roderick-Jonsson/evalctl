@@ -473,26 +473,29 @@ func TestTheBarNamesTheToolAtTheRightEdge(t *testing.T) {
 	}
 }
 
-// TestTheRailIsSpelledOut: the breadcrumb states each step in a word. A mark is a speck on a
-// terminal, and the state has to be readable without colour, so DONE / NOW / LOCKED are words.
-func TestTheRailIsSpelledOut(t *testing.T) {
+// TestTheBarIsAPathNotASentence: the top row is a path — the optimization, the skill, the step —
+// with `>` between the segments. It carried the loop's numbers too, separated by middots, and three
+// words and two dots read as a sentence rather than as somewhere you are; the numbers live at the
+// right end of the rail row now.
+func TestTheBarIsAPathNotASentence(t *testing.T) {
 	m, _, _ := fixture(t)
 	m.width, m.height = 120, 30
 	m.openSkill("slide-builder")
-	rail := stripMarks(m.flow.rail(120))
-	for _, want := range []string{"1 TRAIN SET DONE", "2 VALIDATION SET DONE", "3 ITERATE NOW", "4 GENERALIZE LOCKED"} {
-		if !strings.Contains(rail, want) {
-			t.Fatalf("the rail must say %q:\n%s", want, rail)
-		}
+	lines := strings.Split(m.View(), "\n")
+	bar := stripMarks(lines[0])
+	if !strings.Contains(bar, "trigger optimization > slide-builder > iterate") {
+		t.Fatalf("the bar is not a path:\n%s", bar)
 	}
-	// A narrow window shortens the names and keeps the words: the state is what the row is for.
-	narrow := stripMarks(m.flow.rail(74))
-	if !strings.Contains(narrow, "NOW") || !strings.Contains(narrow, "LOCKED") {
-		t.Fatalf("a narrow rail lost its state words:\n%s", narrow)
+	if strings.Contains(bar, " · ") {
+		t.Fatalf("the bar still separates its segments with dots:\n%s", bar)
 	}
-	// Forcing the gate is what turns LOCKED into NOW, so the word tracks the rule and not the layout.
-	m.flow.forced = true
-	if forced := stripMarks(m.flow.rail(120)); strings.Contains(forced, "LOCKED") {
-		t.Fatalf("a forced gate still reads locked:\n%s", forced)
+	rail := stripMarks(lines[2])
+	if !strings.Contains(rail, "iteration 1 of 5") {
+		t.Fatalf("the loop's numbers left the rail row:\n%s", rail)
+	}
+	// The path narrows with the screen instead of running over it.
+	m.width = 60
+	if got := stripMarks(strings.Split(m.View(), "\n")[0]); strings.Contains(got, "evalctl v") == false {
+		t.Fatalf("the build left the bar:\n%s", got)
 	}
 }

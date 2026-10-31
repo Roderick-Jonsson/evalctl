@@ -38,8 +38,8 @@ a stale-binary warning — never a failed commit. It is per-clone: run it once a
 inside the repo just works, installed or not.
 
 `--glyphs auto|unicode|ascii` (`$EVALCTL_GLYPHS` as the default) picks the marks the frame draws
-itself: the cursor, the rule under the bar, and a run in flight. The rail does not use marks: its
-state is a word (see below), because a breadcrumb has to be readable before it is pretty. `auto` follows the locale. The ASCII profile draws the same frame in `> | - + x` for a
+itself: the cursor, the rule under the bar, the rail's marks for a step that is done, current or
+locked, and a run in flight. `auto` follows the locale. The ASCII profile draws the same frame in `> | - + x` for a
 terminal without UTF-8 — same widths, same columns, and a test that no frame mark escapes it.
 
 ## Version
@@ -80,6 +80,12 @@ It walks one loop and asks one question at a time: **which optimization**, **whi
 loop's four steps. There is no table to sort, no column to focus and no second menu — what used to be
 four tabs is now the rail at the top of every step, which is also the resume point.
 
+The top row is a path, not a sentence: `trigger optimization > slide-builder > iterate`. A middot
+between three words reads as prose, and with the loop's numbers tacked on after another middot the
+row stopped looking like anywhere at all — so the segments are separated with `>`, the last one is
+the one you are looking at, and the numbers moved to the right end of the rail's row, where the steps
+already are.
+
 ```
  what to optimize                                                                     evalctl v0.8.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -113,7 +119,7 @@ says plainly that it is not built rather than opening a "coming soon" screen.
 ### Which skill
 
 ```
- trigger optimization · choose a skill                                                evalctl v0.8.0
+ trigger optimization > choose a skill                                                evalctl v0.8.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   the description loop is per skill — pick the one whose wording is being tuned
 
@@ -151,23 +157,18 @@ paraphrase would measure a text nobody ships.
 ### The four steps
 
 ```
-LOOP  1 TRAIN SET DONE > 2 VALIDATION SET DONE > 3 ITERATE NOW > 4 GENERALIZE LOCKED
+✓ 1 train set ─── ✓ 2 validation set ─── ▸ 3 iterate ─── 4 generalize · locked
 ```
 
-Every step is spelled out in a word — `DONE`, `NOW`, `TO DO`, `LOCKED` — because a one-cell tick or
-triangle is a speck at a glance, and the state has to survive a monochrome terminal, a font without
-the glyph and a screenshot. The step you are in is reversed (accent fill, dark text) as well, and
-`LOOP` in front says the row is navigation and not content — a narrow window gives that label up
-first, then the long names (`VALIDATION SET` → `VALIDATE`), and never the state words. The number
-keys `1`–`4` jump, and a jump that is not allowed says why in the status row instead of doing
-nothing.
+`✓` done, `▸` current, `·` waiting, `locked` behind the gate. The number keys `1`–`4` jump, and a jump
+that is not allowed says why in the status row instead of doing nothing.
 
 **Steps 1 and 2 — the query set.** One table per split, edited in place:
 
 ```
- trigger optimization · slide-builder · train set   train set · 2 rows                evalctl v0.8.0
+ trigger optimization > slide-builder > train set                                     evalctl v0.8.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- LOOP  1 TRAIN SET NOW > 2 VALIDATION SET DONE > 3 ITERATE TO DO > 4 GENERALIZE LOCKED
+ ▶ 1 train set ─── ✓ 2 validation set ─── 3 iterate ─── 4 generalize · locked                2 rows 
 
   train set — the queries the wording may learn from
   ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -205,9 +206,9 @@ the train set, and to the loop from the validation set.
 under the cursor, so the whole loop is one screenful:
 
 ```
- trigger optimization · slide-builder · iterate   iteration 1 of 5                    evalctl v0.8.0
+ trigger optimization > slide-builder > iterate                                       evalctl v0.8.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- LOOP  1 TRAIN SET DONE > 2 VALIDATION SET DONE > 3 ITERATE NOW > 4 GENERALIZE LOCKED
+ ✓ 1 train set ─── ✓ 2 validation set ─── ▶ 3 iterate ─── 4 generalize · locked
 
   iteration 1 of 5 · candidate #1
   ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -249,9 +250,9 @@ wording nobody has measured should not be in it.
 **Step 4 — generalization.** The validation set is run once against every measured wording:
 
 ```
- trigger optimization · slide-builder · generalize   2 iterations measured            evalctl v0.8.0
+ trigger optimization > slide-builder > generalize                                    evalctl v0.8.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- LOOP  1 TRAIN SET DONE > 2 VALIDATION SET DONE > 3 ITERATE DONE > 4 GENERALIZE NOW
+ ✓ 1 train set ─── ✓ 2 validation set ─── ✓ 3 iterate ─── ▶ 4 generalize      2 iterations measured 
 
   generalization · every measured wording on the validation set
   ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -314,8 +315,8 @@ the wait.
 
 ### The frame
 
-The bar carries where you are — the scope, the step, the loop's counter — on the left, and the tool
-with its build on the right. The rail sits under it. The key band and the status row are the last two rows of the window,
+The bar carries the path — `trigger optimization > skill > step` — and the tool with its build at the
+right edge. The rail sits under it, and the loop's own numbers sit at the right end of the rail's row. The key band and the status row are the last two rows of the window,
 always; `esc` is one level up and the footer names the level. `--glyphs ascii` draws the same frame in
 `> - + ~`, and a narrow window cuts the hints before it cuts the `? keys` cap.
 
