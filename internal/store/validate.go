@@ -91,7 +91,7 @@ func (s *Store) validateTrigger() []Issue {
 		known[n] = true
 	}
 	seenIDs := map[int]bool{}
-	splitLabels := map[string]map[bool]bool{"train": {}, "validation": {}}
+	splitLabels := map[string]map[bool]bool{SplitTrain: {}, SplitValidation: {}, SplitHoldout: {}}
 	splitCounts := map[string]int{}
 	textSeen := map[string]int{}
 
@@ -116,10 +116,10 @@ func (s *Store) validateTrigger() []Issue {
 			one.Msg = fmt.Sprintf("skill %q has no evals/evals.json in the tree (the runner rejects it)", q.Skill)
 			issues = append(issues, one)
 		}
-		if q.Split != "train" && q.Split != "validation" {
+		if !KnownSplit(q.Split) {
 			one := base
 			one.Severity = SeverityError
-			one.Msg = fmt.Sprintf("split must be train or validation, got %q", q.Split)
+			one.Msg = fmt.Sprintf("split must be train, validation or holdout, got %q", q.Split)
 			issues = append(issues, one)
 			continue
 		}
@@ -144,7 +144,7 @@ func (s *Store) validateTrigger() []Issue {
 	}
 
 	// the runner hard-fails when a split holds only one label: both halves must carry both.
-	for _, name := range []string{"train", "validation"} {
+	for _, name := range []string{SplitTrain, SplitValidation} {
 		labels := splitLabels[name]
 		if len(labels) != 2 {
 			issues = append(issues, Issue{SeverityError, LaneTrigger, "", 0, "",

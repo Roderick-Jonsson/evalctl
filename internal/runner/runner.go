@@ -99,8 +99,8 @@ func (o *Options) Normalize() error {
 	if o.Split == "" {
 		o.Split = "all"
 	}
-	if o.Split != "all" && o.Split != "train" && o.Split != "validation" {
-		return fmt.Errorf("--split must be all, train or validation")
+	if o.Split != "all" && !KnownSplit(o.Split) {
+		return fmt.Errorf("--split must be all, train, validation or holdout")
 	}
 	if len(o.Arms) == 0 {
 		o.Arms = append([]string(nil), AllArms...)

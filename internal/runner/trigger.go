@@ -25,8 +25,8 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 	if o.Split == "" {
 		o.Split = "all"
 	}
-	if o.Split != "all" && o.Split != "train" && o.Split != "validation" {
-		return fmt.Errorf("--split must be all, train or validation")
+	if o.Split != "all" && !KnownSplit(o.Split) {
+		return fmt.Errorf("--split must be all, train, validation or holdout")
 	}
 	cfg := r.TriggerConfigOf()
 	if o.Runs <= 0 {

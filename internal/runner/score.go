@@ -344,6 +344,8 @@ type SkillScore struct {
 	Positives     Tally `json:"positives"`
 	Negatives     Tally `json:"negatives"`
 	All           Tally `json:"all"`
+	Loop          Tally `json:"loop"`              // train + validation only: the number the loop ranks on
+	Holdout       Tally `json:"holdout,omitempty"` // the fresh set, measured on its own
 	FalseTriggers []int `json:"false_triggers"`
 	Missed        []int `json:"missed"`
 }
@@ -356,6 +358,7 @@ type TriggerScore struct {
 	Skills      map[string]SkillScore `json:"skills"`
 	Splits      map[string]Tally      `json:"splits"`
 	Overall     Tally                 `json:"overall"`
+	Loop        Tally                 `json:"loop"`
 	RootGuardOK bool                  `json:"root_guard_ok"`
 }
 
@@ -455,12 +458,17 @@ func (r *Runner) ScoreTrigger(cases []TriggerCase, records map[int][]*TriggerRec
 
 	skills := map[string]SkillScore{}
 	for _, skill := range r.Profiles.Skills {
-		var positives, negatives, pool []ScoreRow
+		var positives, negatives, pool, holdout, loop []ScoreRow
 		for _, row := range rows {
 			if row.Skill != skill {
 				continue
 			}
 			pool = append(pool, row)
+			if row.Split == SplitHoldout {
+				holdout = append(holdout, row)
+			} else {
+				loop = append(loop, row)
+			}
 			if row.ShouldTrigger {
 				positives = append(positives, row)
 			} else {
@@ -471,6 +479,7 @@ func (r *Runner) ScoreTrigger(cases []TriggerCase, records map[int][]*TriggerRec
 			continue
 		}
 		entry := SkillScore{Positives: tally(positives), Negatives: tally(negatives), All: tally(pool),
+			Loop: tally(loop), Holdout: tally(holdout),
 			FalseTriggers: []int{}, Missed: []int{}}
 		for _, row := range negatives {
 			if row.Passed != nil && !*row.Passed {
@@ -486,7 +495,7 @@ func (r *Runner) ScoreTrigger(cases []TriggerCase, records map[int][]*TriggerRec
 	}
 
 	splits := map[string]Tally{}
-	for _, name := range []string{"train", "validation"} {
+	for _, name := range append(append([]string{}, LoopSplits...), SplitHoldout) {
 		var pool []ScoreRow
 		for _, row := range rows {
 			if row.Split == name {
@@ -494,6 +503,12 @@ func (r *Runner) ScoreTrigger(cases []TriggerCase, records map[int][]*TriggerRec
 			}
 		}
 		splits[name] = tally(pool)
+	}
+	var loopRows []ScoreRow
+	for _, row := range rows {
+		if row.Split != SplitHoldout {
+			loopRows = append(loopRows, row)
+		}
 	}
 	overall := tally(rows)
 	guardOK := true
@@ -503,7 +518,7 @@ func (r *Runner) ScoreTrigger(cases []TriggerCase, records map[int][]*TriggerRec
 		}
 	}
 	return TriggerScore{Threshold: threshold, Runs: runs, Rows: rows, Skills: skills,
-		Splits: splits, Overall: overall, RootGuardOK: guardOK}
+		Splits: splits, Overall: overall, Loop: tally(loopRows), RootGuardOK: guardOK}
 }
 
 // CollectTriggerRuns reads the lane back from disk, so a resumed or filtered invocation still

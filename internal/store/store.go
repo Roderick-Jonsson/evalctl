@@ -21,7 +21,19 @@ const (
 	LaneOutput  = "output"
 
 	TriggerFileName = "trigger-evals.json"
+
+	// The trigger set's three splits. Train guides a description change, validation judges whether
+	// it generalizes, and holdout is the fresh set written at the end, which no loop iteration may
+	// measure — freshness is the whole of its value.
+	SplitTrain      = "train"
+	SplitValidation = "validation"
+	SplitHoldout    = "holdout"
 )
+
+// KnownSplit reports whether a query's declared split is one the runner accepts.
+func KnownSplit(split string) bool {
+	return split == SplitTrain || split == SplitValidation || split == SplitHoldout
+}
 
 // Skill is one stage skill: its name, its case file and the cases in it.
 type Skill struct {

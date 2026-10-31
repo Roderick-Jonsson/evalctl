@@ -2,8 +2,6 @@ package runner
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -105,6 +103,22 @@ func (r *Runner) TriggerConfigOf() TriggerConfig {
 	return cfg
 }
 
+// The trigger set's three splits. Train guides a description change, validation judges whether it
+// generalizes, and holdout is the fresh set the guide asks for at the end: it is never part of a
+// loop iteration, so `all` (the loop's own run) deliberately leaves it alone. The names live in the
+// store because they are what the file says; the runner reads them from there.
+const (
+	SplitTrain      = store.SplitTrain
+	SplitValidation = store.SplitValidation
+	SplitHoldout    = store.SplitHoldout
+)
+
+// LoopSplits are the splits a loop iteration measures and scores.
+var LoopSplits = []string{SplitTrain, SplitValidation}
+
+// KnownSplit reports whether a query's declared split is one the runner accepts.
+func KnownSplit(split string) bool { return store.KnownSplit(split) }
+
 // LoadTriggerQueries validates the whole file — the guide's split rule is about the file, not
 // the selection — then returns the rows the invocation asked for.
 func (r *Runner) LoadTriggerQueries(skills []string, only map[int]bool, split string) ([]TriggerCase, error) {
@@ -130,8 +144,8 @@ func (r *Runner) LoadTriggerQueries(skills []string, only map[int]bool, split st
 			return nil, fmt.Errorf("%s: 'skill' must be one of %s, got %q", where,
 				strings.Join(r.Profiles.Skills, ", "), q.Skill)
 		}
-		if q.Split != "train" && q.Split != "validation" {
-			return nil, fmt.Errorf("%s: 'split' must be train or validation, got %q", where, q.Split)
+		if !KnownSplit(q.Split) {
+			return nil, fmt.Errorf("%s: 'split' must be train, validation or holdout, got %q", where, q.Split)
 		}
 		if strings.TrimSpace(q.Query) == "" {
 			return nil, fmt.Errorf("%s: 'query' is empty", where)
@@ -140,7 +154,7 @@ func (r *Runner) LoadTriggerQueries(skills []string, only map[int]bool, split st
 			ShouldTrigger: q.ShouldTrigger, Split: q.Split, Why: q.Why})
 	}
 	// Each half has to carry both labels or the pass rates measure different things.
-	for _, name := range []string{"train", "validation"} {
+	for _, name := range LoopSplits {
 		labels := map[bool]string{}
 		for _, c := range cases {
 			if c.Split == name {
@@ -176,7 +190,13 @@ func (r *Runner) LoadTriggerQueries(skills []string, only map[int]bool, split st
 		if only != nil && !only[c.ID] {
 			continue
 		}
-		if split != "all" && c.Split != split {
+		// "all" is the loop's own set: train and validation only. A holdout row is fresh on
+		// purpose, so measuring it here is how it stops being fresh.
+		if split == "all" {
+			if c.Split == SplitHoldout {
+				continue
+			}
+		} else if c.Split != split {
 			continue
 		}
 		picked = append(picked, c)
@@ -194,45 +214,10 @@ func contains(list []string, want string) bool {
 }
 
 // FrontmatterDescription is the `description:` value from SKILL.md frontmatter, block scalars
-// folded flat — the text the router actually reads.
+// folded flat — the text the router actually reads. The parser lives in the store next to the
+// writer, so the text the lab measures and the text it writes cannot be read two different ways.
 func (r *Runner) FrontmatterDescription(skill string) string {
-	b, err := os.ReadFile(filepath.Join(r.Root, skill, "SKILL.md"))
-	if err != nil {
-		return ""
-	}
-	text := string(b)
-	if !strings.HasPrefix(text, "---") {
-		return ""
-	}
-	block := text[3:]
-	if end := strings.Index(block, "\n---"); end != -1 {
-		block = block[:end]
-	}
-	lines := strings.Split(block, "\n")
-	for index, line := range lines {
-		if !strings.HasPrefix(line, "description:") {
-			continue
-		}
-		rest := strings.TrimSpace(strings.TrimPrefix(line, "description:"))
-		switch rest {
-		case "|", ">", "|-", ">-", "|+", ">+":
-			var gathered []string
-			for _, follow := range lines[index+1:] {
-				if follow != "" && (follow[0] == ' ' || follow[0] == '\t') {
-					if part := strings.TrimSpace(follow); part != "" {
-						gathered = append(gathered, part)
-					}
-					continue
-				}
-				if strings.TrimSpace(follow) != "" {
-					break
-				}
-			}
-			return strings.Join(gathered, " ")
-		}
-		return strings.Trim(rest, "\"'")
-	}
-	return ""
+	return r.Store.SkillDescription(skill)
 }
 
 // LintRow is the guide's description principles as an advisory — never a gate.

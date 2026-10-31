@@ -27,11 +27,11 @@ import (
 // printed for `evalctl help`, never after an error (that is one line plus a pointer).
 const usage = `evalctl — manage and run the eval sets: trigger queries and output cases.
 
-  evalctl                            interactive TUI, opening on the skill list
-  evalctl tui [--skill S] [--lane L]  open a skill directly, or the unscoped lane view
+  evalctl                            the TUI: trigger optimization, step by step
+  evalctl tui [--skill S] [--lane L]  skip the door, or start on the output lane
   evalctl skills                     the set by skill: cases, fixtures, trigger rows, health
   evalctl ls                         list rows
-      --lane trigger|output|both  --skill S  --label yes|no  --split train|validation
+      --lane trigger|output|both  --skill S  --label yes|no  --split train|validation|holdout
       --search Q [--in COL]  --sort skill,id:desc  --group COL  --dupes  --json  --width N
   evalctl show <ref> [--lane]        one row in full (ref: t12, o:skill:3, or 12 --lane)
   evalctl add  --lane trigger ...    create a row
@@ -46,6 +46,7 @@ const usage = `evalctl — manage and run the eval sets: trigger queries and out
   evalctl promote --to-trigger ...    a case's prompt becomes a trigger query
   evalctl dupes [--lane] [--threshold 0.60]   near-duplicate groups, the trim shortlist
   evalctl stats                      counts per skill / label / split
+  evalctl lab --skill S [--json]     where the description loop stands, and the guide's next move
   evalctl validate [--strict] [--json]  check the tree against the runner's rules
   evalctl renumber                   close id gaps (breaks comparability with old results)
   evalctl version                    which build this is (version, commit, dirty, go)
@@ -125,6 +126,8 @@ func Run(args []string) int {
 	case "trigger":
 		// `evalctl trigger` is the run command with the trigger lane selected.
 		return runRun(append([]string{"--lane", store.LaneTrigger}, rest...))
+	case "lab":
+		return runLab(rest)
 	case "runs", "results":
 		return runRuns(rest)
 	case "report":
@@ -634,7 +637,7 @@ func saveTouched(c *common, changes []string, touched map[string]bool) int {
 func runTUI(args []string, lane string) int {
 	fs, c := newFS("tui")
 	laneFlag := fs.String("lane", lane, "lane to open: trigger or output")
-	skillFlag := fs.String("skill", "", "open scoped to this stage skill (default: the skill list)")
+	skillFlag := fs.String("skill", "", "open this skill's loop directly (default: the door)")
 	// A terminal without UTF-8 gets the frame's marks and rules in ASCII rather than a row of
 	// replacement boxes. auto follows the locale; $EVALCTL_GLYPHS is the default for callers that
 	// wrap the binary and cannot pass a flag.
@@ -671,7 +674,7 @@ func runTUI(args []string, lane string) int {
 	return tui.Run(s, *skillFlag, *laneFlag, *glyphFlag)
 }
 
-// runSkills is the CLI face of the TUI's front door: one row per stage skill, so the state of a
+// runSkills is the CLI face of the TUI's door: one row per stage skill, so the state of a
 // skill — its cases, how many carry assertions, its fixtures, its trigger rows, its findings —
 // is one command instead of a filter away in each lane.
 func runSkills(args []string) int {

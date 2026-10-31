@@ -3,508 +3,244 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
-	"path/filepath"
-
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
-	"evalctl/internal/profile"
 	"evalctl/internal/runner"
 	"evalctl/internal/store"
 )
 
-// runEventMsg carries one progress event out of a running lane.
-type runEventMsg struct{ event runner.Event }
+// The run: what it will cost, then what it is doing.
+//
+// Two screens, because a run is the one action in the loop that spends money and time. The first
+// states the candidate, the rows, the runs per query, the number of agent calls and where it writes
+// — and it is the only place the knobs live, so nothing about a run is changed by accident from a
+// screen that was about something else. The second is the run itself: one line per query, a mark per
+// attempt, and the arm's own stream folded in as it arrives.
 
-// runDoneMsg is the channel closing: the lane returned (see progress.err for why).
-type runDoneMsg struct{}
+type runKind int
 
-// tickMsg re-renders the elapsed clock; nobody else refreshes a long arm.
-type tickMsg time.Time
+const (
+	runTrain runKind = iota
+	runValidation
+	runHoldout
+)
 
-// ---------------------------------------------------------------- launcher
-
-type launcherState struct {
-	lane     string
-	skills   []string // "" entry means every skill
-	caseIDs  []int
-	queryIDs []int
-	target   string
-
-	iteration int
-	arms      string // "both", "with", "without"
-	resume    bool
-	force     bool
-	verify    bool
-	isolate   bool
-	dryRun    bool
-	split     string
-	activity  string // full, tools or off — how much of the agent's stream is shown
-	runs      int
-	threshold float64
-	maxTurns  int
-	budget    int
-	model     string
-
-	cursor  int
-	editing bool
-	input   textinput.Model
+func (k runKind) String() string {
+	switch k {
+	case runValidation:
+		return "validation run"
+	case runHoldout:
+		return "holdout run"
+	}
+	return "training run"
 }
 
-// openLauncher prefills the form from the current selection (or the focused row, or the whole
-// lane), so "run these three cases" is one key from the list.
-func (m *Model) openLauncher() {
-	// Selected rows are the target; with nothing selected the whole lane is, because a run that
-	// silently measured only the focused row would be a lie about what was graded.
-	var targets []store.Entry
-	for _, e := range m.selectedAcrossLanes() {
-		if e.Lane == m.lane {
-			targets = append(targets, e)
-		}
-	}
-	lane := m.lane
-	l := &launcherState{
-		lane: lane, arms: "both", resume: false, force: false, verify: true,
-		isolate: true, split: m.filter.Split, runs: 0, threshold: 0, maxTurns: 0,
-		activity: "full",
-	}
-	if l.split == "" {
-		l.split = "all"
-	}
-	if lane == store.LaneOutput {
-		l.budget = 1200
-	} else {
-		l.budget = 240
-	}
-	// Show the file's own knobs, not this file's copy of the defaults: the form is a claim about
-	// what the run will measure.
-	cfg := runner.New(m.store).TriggerConfigOf()
-	l.runs = cfg.Runs
-	l.threshold = cfg.Threshold
-	l.maxTurns = runner.DefaultTriggerTurns
-
-	skillSeen := map[string]bool{}
-	if len(targets) > 0 {
-		for _, e := range targets {
-			if !skillSeen[e.Skill] {
-				skillSeen[e.Skill] = true
-				l.skills = append(l.skills, e.Skill)
-			}
-			if lane == store.LaneOutput {
-				if sk := m.store.Skill(e.Skill); sk != nil && e.Index < len(sk.Output.Evals) {
-					l.caseIDs = append(l.caseIDs, sk.Output.Evals[e.Index].ID)
-				}
-			} else {
-				l.queryIDs = append(l.queryIDs, e.ID)
-			}
-		}
-	}
-	if len(targets) == 0 && m.skill != "" {
-		// Nothing selected in a skill's view means that skill's whole lane: the list on screen is
-		// already the filter, and running every other stage from here would grade far more than
-		// the form said.
-		l.skills = []string{m.skill}
-	}
-	switch n := len(targets); {
-	case n == 0 && m.skill != "":
-		l.target = "every row of " + m.skill + " in this lane"
-	case n == 0:
-		l.target = "every row in this lane"
-	case n == 1:
-		l.target = "the focused row"
-	default:
-		l.target = fmt.Sprintf("%d selected rows", n)
-	}
-	if len(l.skills) == len(m.store.SkillNames()) {
-		l.skills = nil
-	}
-
-	ti := textinput.New()
-	ti.Placeholder = "default model"
-	ti.CharLimit = 64
-	l.input = ti
-	l.cursor = 1 // "target" above is a read-out, not a knob
-	m.launcher = l
-	m.mode = screenRunLauncher
-	m.setStatus("", false)
+type runState struct {
+	kind  runKind
+	cand  int // the candidate measured; 0 means "whatever SKILL.md holds"
+	runs  int
+	dry   bool
+	scope string
+	hint  string
+	gen   bool // this run is one step of the generalization queue
+	live  *liveRun
 }
 
-// options is the form's row list: label plus the current value and how to change it.
-// onOff renders a boolean as a checkbox, not as a word: "[x] resume" is a thing you can toggle,
-// "resume on" is a fact you have to reverse-engineer a key from.
-func onOff(b bool) string {
-	if b {
-		return "[x]"
-	}
-	return "[ ]"
+// liveRun is the run in flight: what has happened to each query, and the newest lines of the arm's
+// own log. It is a plain struct and not a tea.Model so the event fold stays testable without a
+// terminal.
+type liveRun struct {
+	title   string
+	started time.Time
+	cases   []liveCase
+	index   map[string]int
+	log     []string
+	summary string
+	err     error
+	done    bool
+	dry     bool
+	cancel  context.CancelFunc
+	logPath string
+	logArm  string
 }
 
-func (m *Model) options() []struct{ label, value string } {
-	l := m.launcher
-	next := "next free"
-	if l.iteration > 0 {
-		next = fmt.Sprintf("%d", l.iteration)
-	}
-	rows := []struct{ label, value string }{
-		{"target", l.target},
-		{"iteration", next},
-	}
-	if l.lane == store.LaneTrigger {
-		rows = append(rows,
-			struct{ label, value string }{"split", l.split},
-			struct{ label, value string }{"runs per query", fmt.Sprintf("%d", l.runs)},
-			struct{ label, value string }{"threshold", fmt.Sprintf("%.2f", l.threshold)},
-			struct{ label, value string }{"max turns", fmt.Sprintf("%d", l.maxTurns)},
-			struct{ label, value string }{"resume", onOff(l.resume)},
-			struct{ label, value string }{"force", onOff(l.force)},
-			struct{ label, value string }{"dry run", onOff(l.dryRun)},
-			struct{ label, value string }{"model", orDashText(l.model)},
-			struct{ label, value string }{"activity", l.activity},
-			struct{ label, value string }{"budget", shortDuration(time.Duration(l.budget) * time.Second)},
-		)
-		return rows
-	}
-	arms := "with_skill + without_skill"
-	switch l.arms {
-	case "with":
-		arms = "with_skill only"
-	case "without":
-		arms = "without_skill only"
-	}
-	rows = append(rows,
-		struct{ label, value string }{"arms", arms},
-		struct{ label, value string }{"resume", onOff(l.resume)},
-		struct{ label, value string }{"force", onOff(l.force)},
-		struct{ label, value string }{"verify", onOff(l.verify)},
-		struct{ label, value string }{"isolate", onOff(l.isolate)},
-		struct{ label, value string }{"dry run", onOff(l.dryRun)},
-		struct{ label, value string }{"model", orDashText(l.model)},
-		struct{ label, value string }{"activity", l.activity},
-		struct{ label, value string }{"budget", shortDuration(time.Duration(l.budget) * time.Second)},
-	)
-	return rows
+type liveCase struct {
+	name string
+	runs []liveArm
 }
 
-func orDashText(s string) string {
-	if s == "" {
-		return "(default)"
-	}
-	return s
-}
-
-func (m *Model) rowIsModel() bool {
-	l := m.launcher
-	if l == nil {
-		return false
-	}
-	rows := m.options()
-	return rows[l.cursor].label == "model"
-}
-
-func (m *Model) updateLauncher(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	l := m.launcher
-	if l == nil {
-		m.mode = screenList
-		return m, nil
-	}
-	if l.editing {
-		switch msg.String() {
-		case "esc":
-			l.editing = false
-			l.input.Blur()
-			return m, nil
-		case "enter":
-			l.model = strings.TrimSpace(l.input.Value())
-			l.editing = false
-			l.input.Blur()
-			return m, nil
-		}
-		var cmd tea.Cmd
-		l.input, cmd = l.input.Update(msg)
-		return m, cmd
-	}
-
-	rows := m.options()
-	switch msg.String() {
-	case "esc", "q":
-		m.launcher = nil
-		m.mode = screenList
-		m.setStatus("run cancelled — nothing started", false)
-		return m, nil
-	case "up", "k":
-		if l.cursor > 0 {
-			l.cursor--
-		}
-		return m, nil
-	case "down", "j":
-		if l.cursor < len(rows)-1 {
-			l.cursor++
-		}
-		return m, nil
-	case "enter":
-		if m.rowIsModel() {
-			l.editing = true
-			l.input.SetValue(l.model)
-			l.input.Focus()
-			return m, textinput.Blink
-		}
-		return m, m.startRun()
-	case "left", "h":
-		m.adjustOption(-1)
-		return m, nil
-	case "right", "l", " ":
-		m.adjustOption(1)
-		return m, nil
-	}
-	return m, nil
-}
-
-func (m *Model) adjustOption(dir int) {
-	l := m.launcher
-	rows := m.options()
-	label := rows[l.cursor].label
-	toggle := func(b *bool) {
-		if dir != 0 {
-			*b = !*b
-		}
-	}
-	switch label {
-	case "iteration":
-		l.iteration += dir
-		if l.iteration < 0 {
-			l.iteration = 0
-		}
-	case "arms":
-		order := []string{"both", "with", "without"}
-		index := 0
-		for i, name := range order {
-			if name == l.arms {
-				index = i
-			}
-		}
-		index = (index + dir + len(order)) % len(order)
-		l.arms = order[index]
-	case "resume":
-		toggle(&l.resume)
-	case "force":
-		toggle(&l.force)
-	case "verify":
-		toggle(&l.verify)
-	case "isolate":
-		toggle(&l.isolate)
-	case "dry run":
-		toggle(&l.dryRun)
-	case "budget":
-		l.budget += 60 * dir
-		if l.budget < 30 {
-			l.budget = 30
-		}
-	case "split":
-		order := []string{"all", "train", "validation"}
-		index := 0
-		for i, name := range order {
-			if name == l.split {
-				index = i
-			}
-		}
-		l.split = order[(index+dir+len(order))%len(order)]
-	case "runs per query":
-		l.runs += dir
-		if l.runs < 1 {
-			l.runs = 1
-		}
-	case "threshold":
-		l.threshold += 0.05 * float64(dir)
-		if l.threshold < 0.05 {
-			l.threshold = 0.05
-		}
-		if l.threshold > 0.95 {
-			l.threshold = 0.95
-		}
-	case "activity":
-		order := []string{"full", "tools", "off"}
-		index := 0
-		for i, name := range order {
-			if name == l.activity {
-				index = i
-			}
-		}
-		l.activity = order[(index+dir+len(order))%len(order)]
-	case "max turns":
-		l.maxTurns += dir
-		if l.maxTurns < 1 {
-			l.maxTurns = 1
-		}
-	}
-}
-
-func (m *Model) launcherView() string {
-	l := m.launcher
-	if l == nil {
-		return ""
-	}
-	var b strings.Builder
-	laneName := "output lane — with skill vs without"
-	if l.lane == store.LaneTrigger {
-		laneName = "trigger lane — does the right skill load?"
-	}
-	b.WriteString(titleStyle.Render("run · "+laneName) + "\n")
-	// The scope, before Enter commits to it: what will be measured, how many jobs that is, and
-	// what it may cost. A form that never states the size of the job is a form that gets pressed
-	// on by accident.
-	b.WriteString("  " + m.runScope(l) + "\n\n")
-	for i, row := range m.options() {
-		mark := "  "
-		if i == l.cursor {
-			mark = cursorMark.Render(glyphs.Cursor)
-		}
-		label := fmt.Sprintf("%-16s", row.label)
-		value := row.value
-		if l.editing && i == l.cursor && row.label == "model" {
-			value = l.input.View()
-		}
-		if i == l.cursor {
-			value = cursorMark.Render(value)
-		}
-		b.WriteString(mark + label + " " + value + "\n")
-	}
-	b.WriteString("\n")
-	if l.editing {
-		b.WriteString(dimStyle.Render("  type the model, enter keeps it, esc drops it"))
-	} else {
-		b.WriteString(dimStyle.Render("  j k move · ← → change · space toggles · enter run · esc cancel"))
-	}
-	b.WriteString("\n")
-	if l.dryRun {
-		b.WriteString(badgeWarn.Render("  dry run: prints the hermes commands, writes nothing"))
-	}
-	return b.String()
-}
-
-// runScope is the one-line answer to "what am I about to start". It counts arms and cases, not
-// rows, because that is what the run will actually spawn — and it says the budget per arm.
-func (m *Model) runScope(l *launcherState) string {
-	arms := 2
-	if l.arms == "with" || l.arms == "without" {
-		arms = 1
-	}
-	n := len(l.caseIDs)
-	if l.lane == store.LaneTrigger {
-		n = len(l.queryIDs)
-	}
-	if n == 0 {
-		// No explicit selection: the run takes the whole lane of the scope on screen.
-		n = len(m.store.Rows(l.lane, store.Filter{Skill: m.skill}))
-	}
-	rows := "the whole lane"
-	if n > 0 {
-		rows = plural(n, "row")
-	}
-	jobs := n * arms
-	return fmt.Sprintf("%s × %s = %s · budget %s",
-		rows, plural(arms, "arm"), plural(jobs, "job"), shortDuration(time.Duration(l.budget)*time.Second))
-}
-
-// shortDuration says 1200s as 20m: the operator is deciding whether to wait, not reading a spec.
-func shortDuration(d time.Duration) string {
-	if d < time.Minute {
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	}
-	if d%time.Minute == 0 && d < time.Hour {
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	}
-	if d >= time.Hour && d%time.Hour == 0 {
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	}
-	return d.Round(time.Minute).String()
-}
-
-// optionsOf builds the runner's options from the form.
-func (m *Model) optionsOf() runner.Options {
-	l := m.launcher
-	opts := runner.Options{
-		Lane: l.lane, Skills: l.skills, CaseIDs: l.caseIDs, QueryIDs: l.queryIDs,
-		Split: l.split, Model: l.model, Budget: time.Duration(l.budget) * time.Second,
-		Resume: l.resume, Force: l.force, NoVerify: !l.verify, Isolate: l.isolate,
-		DryRun: l.dryRun, Iteration: l.iteration, Runs: l.runs, Threshold: l.threshold,
-		MaxTurns: l.maxTurns, Log: activityLevel(l.activity),
-	}
-	switch l.arms {
-	case "with":
-		opts.Arms = []string{runner.ArmWith}
-	case "without":
-		opts.Arms = []string{runner.ArmWithout}
-	default:
-		opts.Arms = append([]string(nil), runner.AllArms...)
-	}
-	return opts
-}
-
-// ---------------------------------------------------------------- progress
-
-type progressArm struct {
+type liveArm struct {
 	name   string
-	status string // pending, running, done, failed, skipped
+	status string // running, done, failed
 	detail string
 }
 
-type progressCase struct {
-	name  string
-	skill string
-	arms  []progressArm
+type runEventMsg struct{ event runner.Event }
+type runDoneMsg struct{}
+type tickMsg time.Time
+
+func newLiveRun(title string, dry bool) *liveRun {
+	return &liveRun{title: title, started: time.Now(), index: map[string]int{}, dry: dry}
 }
 
-type progressState struct {
-	lane    string
-	title   string
-	runRef  string
-	started time.Time
-	cases   []progressCase
-	index   map[string]int
-	log     []string
-	logPath string // activity.log of the arm whose lines are newest
-	logArm  string
-	cancel  context.CancelFunc
-	err     error
-	summary string
-}
-
-// activityLevel reads the form's verbosity; "" is full, the same default the CLI uses.
-func activityLevel(s string) runner.ActivityLevel {
-	level, err := runner.ParseActivity(s)
-	if err != nil || level == runner.ActivityUnset {
-		return runner.ActivityFull
-	}
-	return level
-}
-
-func (p *progressState) caseAt(name string) *progressCase {
+func (p *liveRun) caseAt(name string) *liveCase {
 	if i, ok := p.index[name]; ok {
 		return &p.cases[i]
 	}
 	p.index[name] = len(p.cases)
-	p.cases = append(p.cases, progressCase{name: name})
+	p.cases = append(p.cases, liveCase{name: name})
 	return &p.cases[len(p.cases)-1]
 }
 
-func (m *Model) startRun() tea.Cmd {
-	l := m.launcher
-	opts := m.optionsOf()
-	ctx, cancel := context.WithCancel(context.Background())
-	p := &progressState{lane: l.lane, started: time.Now(), index: map[string]int{}, cancel: cancel}
-	p.title = fmt.Sprintf("%s lane · %s", l.lane, l.target)
-	m.progress = p
-	m.launcher = nil
-	m.mode = screenRunProgress
-	m.runActive = true
+func (p *liveRun) stateText() string {
+	if p.err != nil {
+		return p.err.Error()
+	}
+	if p.done {
+		return p.summary
+	}
+	return fmt.Sprintf("running %s · %s elapsed", pluralOf(len(p.cases), "query", "queries"), shortDuration(time.Since(p.started)))
+}
 
+// ---------------------------------------------------------------- the ask
+
+// openRunAsk opens the training run for the wording the loop is waiting on.
+func (m *Model) openRunAsk() tea.Cmd {
+	f := m.flow
+	cand := pendingID(f.pending(), f.latest())
+	m.run = &runState{
+		kind:  runTrain,
+		cand:  cand,
+		runs:  f.lab.Runs,
+		scope: "training run",
+		hint:  "nothing has been spent yet — enter starts it, d only prints the commands",
+	}
+	m.mode = screenRunAsk
+	return nil
+}
+
+func (m *Model) askBody(h int) []string { return m.run.askBody(m, h) }
+
+func (r *runState) askBody(m *Model, h int) []string {
+	f := m.flow
+	rows := f.lab.TrainRows
+	split := store.SplitTrain
+	title := fmt.Sprintf("%s · candidate #%d", r.scope, r.cand)
+	switch r.kind {
+	case runValidation:
+		rows, split = f.lab.ValidationRows, store.SplitValidation
+	case runHoldout:
+		rows, split = f.lab.HoldoutRows, store.SplitHoldout
+	}
+	d := &docWriter{w: max(28, m.width-4)}
+	d.title(title)
+	d.lead(askLead(r.kind))
+	d.rule()
+	d.fact("scope", fmt.Sprintf("%s of %s, %d runs each = %d agent calls",
+		pluralOf(rows, split+" query", split+" queries"), m.skill, r.runs, rows*r.runs))
+	d.fact("budget", fmt.Sprintf("%s per run · profile eval-vcc-trigger", shortDuration(runner.DefaultTriggerBudget)))
+	d.fact("writes", fmt.Sprintf("trigger-workspace/trigger-%d/", nextTrigger(m.store)))
+	if r.cand != 0 && r.kind != runHoldout {
+		d.fact("measures", fmt.Sprintf("candidate #%d — it is written into %s/SKILL.md first, because the router reads the file", r.cand, m.skill))
+	}
+	d.fact("dry run", onOff(r.dry))
+	d.blank()
+	d.para("The run is the only thing in this tool that costs money. Everything it records lands in the iteration directory; nothing is written into the skill itself except the description being measured.")
+	d.action("enter", "start it")
+	return fitRows(d.lines, h)
+}
+
+func askLead(k runKind) string {
+	switch k {
+	case runValidation:
+		return "The validation set is run once per measured wording, and it is the only thing that ranks them. It is read after the wording is frozen — never while it is being revised."
+	case runHoldout:
+		return "The fresh queries are measured once, after the winner is applied. They are not part of the loop and never steer it: their only job is to say whether the shipped wording works on something nobody tuned against."
+	}
+	return "The train set is what a revision may learn from. Validation is not run here: it judges the wording in step 4, and measuring it now would let the loop learn from it."
+}
+
+func (r *runState) askHints() []hint {
+	return []hint{
+		{"← →", "runs per query"},
+		{"d", "dry run"},
+		{"enter", "start"},
+		{"esc", "back"},
+	}
+}
+
+func (m *Model) updateRunAsk(msg tea.KeyMsg) tea.Cmd {
+	r := m.run
+	if r == nil {
+		return nil
+	}
+	switch msg.String() {
+	case "left", "h":
+		r.runs = max(1, r.runs-1)
+	case "right", "l":
+		r.runs = min(9, r.runs+1)
+	case "d":
+		r.dry = !r.dry
+	case "enter":
+		return m.startRun()
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------- starting
+
+func (m *Model) startRun() tea.Cmd {
+	r := m.run
+	if r == nil {
+		return nil
+	}
+	// A candidate is measured by being in SKILL.md: the router reads the file, so this is the step
+	// that puts it there. It happens when the operator asks to run, not when the form opened, so a
+	// cancelled form changes nothing about the tree.
+	if r.cand != 0 && !r.dry && r.kind != runHoldout {
+		if msg, err := runner.New(m.store).PrepareMeasure(m.skill, r.cand); err != nil {
+			m.run = nil
+			m.mode = screenFlow
+			m.setStatus(err.Error(), true)
+			return nil
+		} else if msg != "" {
+			m.setStatus(msg, false)
+		}
+		m.reload()
+	}
+	split := store.SplitTrain
+	switch r.kind {
+	case runValidation:
+		split = store.SplitValidation
+	case runHoldout:
+		split = store.SplitHoldout
+	}
+	opts := runner.Options{
+		Lane:   store.LaneTrigger,
+		Skills: []string{m.skill},
+		Split:  split,
+		Runs:   r.runs,
+		Budget: runner.DefaultTriggerBudget,
+		DryRun: r.dry,
+		Log:    runner.ActivityFull,
+	}
+	r.live = newLiveRun(r.scope, r.dry)
+	m.mode = screenRunLive
+	return m.startTriggerRun(opts)
+}
+
+// startTriggerRun is the one place a trigger run is launched, so a training run, a validation run
+// and a holdout run cannot differ in how they are wired to the event stream.
+func (m *Model) startTriggerRun(opts runner.Options) tea.Cmd {
+	ctx, cancel := context.WithCancel(context.Background())
+	if m.run != nil && m.run.live != nil {
+		m.run.live.cancel = cancel
+	} else {
+		cancel()
+	}
 	ch := make(chan runner.Event, 128)
 	m.runEvents = ch
 	r := runner.New(m.store)
@@ -516,13 +252,7 @@ func (m *Model) startRun() tea.Cmd {
 	}
 	go func() {
 		defer close(ch)
-		var err error
-		if opts.Lane == store.LaneTrigger {
-			err = r.RunTrigger(ctx, opts)
-		} else {
-			err = r.RunQuality(ctx, opts)
-		}
-		if err != nil {
+		if err := r.RunTrigger(ctx, opts); err != nil {
 			ch <- runner.Event{Kind: "error", Lane: opts.Lane, Err: err, Message: err.Error()}
 		}
 	}()
@@ -540,13 +270,13 @@ func waitForEvent(ch chan runner.Event) tea.Cmd {
 }
 
 func tickEvery() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
+	return tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
-// applyEvent folds one progress event into the table. The runner is the source of truth for what
-// happened; the table only mirrors it.
+// applyEvent folds one runner event into the live view. The runner is the only thing that knows what
+// happened; this function decides only how it reads.
 func (m *Model) applyEvent(e runner.Event) {
-	p := m.progress
+	p := m.run.live
 	if p == nil {
 		return
 	}
@@ -556,30 +286,23 @@ func (m *Model) applyEvent(e runner.Event) {
 		p.log = append(p.log, e.Message)
 	case runner.EventCase:
 		pc := p.caseAt(e.Case)
-		pc.skill = e.Message
-	case runner.EventArmStart:
+		p.log = append(p.log, e.Message)
+		_ = pc
+	case runner.EventTriggerRun, runner.EventArmStart:
 		pc := p.caseAt(e.Case)
-		pc.arms = append(pc.arms, progressArm{name: e.Arm, status: "running"})
-	case runner.EventTriggerRun:
-		pc := p.caseAt(e.Case)
-		pc.arms = append(pc.arms, progressArm{name: e.Arm, status: "running"})
+		pc.runs = append(pc.runs, liveArm{name: e.Arm, status: "running"})
 	case runner.EventArmDone:
 		pc := p.caseAt(e.Case)
 		status := "done"
-		detail := e.Message
 		if e.Result != nil {
 			if !e.Result.Checks.Containment.OK {
 				status = "failed"
 			} else if e.Result.Timing.ExitCode != nil && *e.Result.Timing.ExitCode != 0 {
 				status = "failed"
 			}
-			detail = e.Message
 		}
-		updateArm(pc, e.Arm, status, detail)
+		setArm(pc, e.Arm, status, e.Message)
 	case runner.EventActivity:
-		// The arm's own stream: tool calls, results and its running text, folded straight into
-		// the log box. Lines are kept plain and coloured at render time so a clipped line never
-		// cuts an escape sequence.
 		if text := strings.TrimSpace(e.Message); text != "" {
 			p.log = append(p.log, text)
 		}
@@ -589,9 +312,6 @@ func (m *Model) applyEvent(e runner.Event) {
 		}
 	case runner.EventScored, runner.EventDone:
 		p.summary = e.Message
-		if e.Case != "" {
-			p.runRef = e.Case
-		}
 		if e.Kind == runner.EventScored {
 			p.log = append(p.log, e.Message)
 		}
@@ -600,17 +320,17 @@ func (m *Model) applyEvent(e runner.Event) {
 		if text == "" {
 			return
 		}
-		// A trigger observation reports through messages; keep the newest few lines only.
-		if strings.HasPrefix(text, "run ") {
-			if len(p.cases) > 0 {
-				last := &p.cases[len(p.cases)-1]
-				if len(last.arms) > 0 {
-					last.arms[len(last.arms)-1].status = "done"
-					last.arms[len(last.arms)-1].detail = text
-					if strings.Contains(text, "no evidence") {
-						last.arms[len(last.arms)-1].status = "failed"
-					}
+		// A trigger observation reports through messages: it is the only place a run's verdict on
+		// one query is said in words the operator can read.
+		if strings.HasPrefix(text, "run ") && len(p.cases) > 0 {
+			last := &p.cases[len(p.cases)-1]
+			if len(last.runs) > 0 {
+				status := "done"
+				if strings.Contains(text, "no evidence") {
+					status = "failed"
 				}
+				last.runs[len(last.runs)-1].status = status
+				last.runs[len(last.runs)-1].detail = text
 			}
 		}
 		p.log = append(p.log, text)
@@ -628,561 +348,269 @@ func (m *Model) applyEvent(e runner.Event) {
 	}
 }
 
-func updateArm(pc *progressCase, name, status, detail string) {
-	for i := range pc.arms {
-		if pc.arms[i].name == name {
-			pc.arms[i].status = status
-			pc.arms[i].detail = detail
+func setArm(pc *liveCase, name, status, detail string) {
+	for i := range pc.runs {
+		if pc.runs[i].name == name {
+			pc.runs[i].status, pc.runs[i].detail = status, detail
 			return
 		}
 	}
-	pc.arms = append(pc.arms, progressArm{name: name, status: status, detail: detail})
+	pc.runs = append(pc.runs, liveArm{name: name, status: status, detail: detail})
 }
 
-func (m *Model) updateProgress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	p := m.progress
-	if p == nil {
-		m.mode = screenList
-		return m, nil
+// finishRun is where a run ends. A generalization queue chains: the next candidate's validation run
+// starts from here, because the queue is one batch and stopping between candidates would ask the
+// same question three times.
+func (m *Model) finishRun() tea.Cmd {
+	if m.run == nil || m.run.live == nil {
+		return nil
 	}
-	switch msg.String() {
-	case "esc", "q":
-		// The run keeps going: detaching from the table must not kill a 20-minute arm.
-		m.mode = screenList
-		if m.runActive {
-			m.setStatus("run continues in the background — R opens its table, tab 2× the results", false)
+	m.run.live.done = true
+	m.run.live.cancel = nil
+	m.reload()
+	if m.run.gen && m.flow != nil && m.flow.gen != nil {
+		g := m.flow.gen
+		g.done++
+		g.at++
+		if g.at < len(g.queue) {
+			return m.startValidationStep()
 		}
-		return m, nil
-	case "x":
-		if m.runActive && p.cancel != nil {
-			p.cancel()
-			m.setStatus("cancelling — the running arm is killed, finished arms are kept", true)
-		}
-		return m, nil
-	case "o":
-		if !m.runActive {
-			m.openReportFor(p.runRef)
-		}
-		return m, nil
-	case "v":
-		m.openActivity(p.logPath, p.logArm)
-		return m, nil
+		m.run.live.summary = fmt.Sprintf("validation run finished · %s measured", plural(g.done, "iteration"))
+		m.flow.gen = nil
+		m.setStatus(m.run.live.summary, false)
+		return nil
 	}
-	return m, nil
-}
-
-// openActivity shows one arm's activity.log in full, following it while the arm still writes.
-func (m *Model) openActivity(path, label string) {
-	if path == "" {
-		m.setStatus("no activity yet — nothing has reached the stream", false)
-		return
-	}
-	text, err := os.ReadFile(path)
-	if err != nil {
-		m.setStatus("cannot read "+path+": "+err.Error(), true)
-		return
-	}
-	v := &viewerState{kind: "activity", path: path, title: label + " · activity.log",
-		lines: textLines(string(text))}
-	v.refresh()
-	v.follow = m.runActive
-	m.viewer = v
-	m.mode = screenViewer
-}
-
-func (m *Model) progressView() string {
-	p := m.progress
-	if p == nil {
-		return ""
-	}
-	elapsed := time.Duration(0)
-	if !p.started.IsZero() {
-		elapsed = time.Since(p.started).Round(time.Second)
-	}
-	state := "running"
-	if !m.runActive {
-		state = "finished"
-	}
-	var b strings.Builder
-	b.WriteString(titleStyle.Render(fmt.Sprintf("evalctl run · %s · %s", state, elapsed)) + "\n")
-	b.WriteString(dimStyle.Render(p.title) + "\n\n")
-
-	done, total, failures := 0, 0, 0
-	for _, pc := range p.cases {
-		name := pc.name
-		if name == "" {
-			name = "…"
-		}
-		line := fmt.Sprintf("  %-30s ", clipLine(name, 30))
-		for _, arm := range pc.arms {
-			total++
-			switch arm.status {
-			case "done":
-				done++
-				line += styleOn.Render(glyphs.Done) + " "
-			case "failed":
-				done++
-				failures++
-				line += statusBad.Render(glyphs.Failed) + " "
-			case "running":
-				line += colDupe.Render(glyphs.Running) + " "
-			default:
-				line += dimStyle.Render("·") + " "
-			}
-			line += fmt.Sprintf("%-13s ", arm.name)
-		}
-		b.WriteString(line + "\n")
-	}
-	b.WriteString("\n")
-	counter := fmt.Sprintf("  %d/%d arms done", done, total)
-	if failures > 0 {
-		// The one line that summarises the run is green only when nothing failed: a green
-		// "3/10 arms done · 7 failures" is the exact colour that makes an operator stop reading.
-		counter += fmt.Sprintf(" · %s", plural(failures, "failure"))
-		b.WriteString(statusBad.Render(counter) + "\n")
+	if m.run.kind == runTrain {
+		m.setStatus("training run finished — the result is rung 2", false)
 	} else {
-		b.WriteString(styleOn.Render(counter) + "\n")
+		m.setStatus("run finished", false)
 	}
+	return nil
+}
 
-	if len(p.log) > 0 {
-		b.WriteString("\n" + dimStyle.Render("  activity") + "\n")
-		start := max(0, len(p.log)-8)
-		for _, line := range p.log[start:] {
-			b.WriteString("  " + activityStyled(line, max(30, m.width-6)) + "\n")
+func (m *Model) updateRunLive(msg tea.KeyMsg) tea.Cmd {
+	r := m.run
+	p := r.live
+	switch msg.String() {
+	case "x":
+		if !p.done && p.cancel != nil {
+			p.cancel()
+			m.setStatus("cancelled — the queries already measured keep their results", true)
 		}
+	case "v":
+		if p.logPath != "" {
+			m.openActivityDoc(p.logPath, p.logArm)
+		}
+	case "r":
+		if p.done {
+			m.reload()
+		}
+	case "enter":
+		if p.done {
+			return m.leaveRun()
+		}
+	}
+	return nil
+}
+
+// leaveRun puts the flow back on the rung the run was for: a finished training run lands on its
+// result, a finished generalization lands on the comparison.
+func (m *Model) leaveRun() tea.Cmd {
+	kind := m.run.kind
+	gen := m.run.gen
+	m.run = nil
+	m.mode = screenFlow
+	switch {
+	case gen:
+		m.flow.step = StepGeneralize
+		m.flow.res = 0
+	case kind == runTrain:
+		m.flow.step, m.flow.sub = StepIterate, subResult
+	default:
+		m.flow.step = StepGeneralize
+	}
+	return nil
+}
+
+func (r *runState) liveHints() []hint {
+	if r.live.done {
+		return []hint{{"enter", "back to the loop"}, {"v", "activity log"}}
+	}
+	return []hint{{"x", "cancel"}, {"v", "activity log"}, {"q", "quit"}}
+}
+
+func (r *runState) liveBody(m *Model, h int) []string {
+	p := r.live
+	lines := []string{
+		"",
+		"  " + titleStyle.Render(p.title),
+		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4)))),
+	}
+	// One row per query, then the newest lines of the arm's stream underneath.
+	const logRows = 8
+	room := max(1, h-3-logRows)
+	for i, c := range p.cases {
+		if i >= room {
+			break
+		}
+		lines = append(lines, "  "+m.liveCaseLine(c))
+	}
+	for len(lines) < 3+min(len(p.cases), room) {
+		lines = append(lines, "")
+	}
+	if p.dry {
+		lines = append(lines, "  "+badgeWarn.Render("dry run")+" "+dimStyle.Render("the commands above were printed; nothing was written"))
+	} else {
+		lines = append(lines, "  "+dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4)))))
+	}
+	log := p.log
+	if len(log) > logRows {
+		log = log[len(log)-logRows:]
+	}
+	for _, line := range log {
+		lines = append(lines, "  "+activityStyled(line, m.width-4))
 	}
 	if p.err != nil {
-		b.WriteString("\n" + statusBad.Render("  "+p.err.Error()) + "\n")
-	} else if p.summary != "" && !m.runActive {
-		b.WriteString("\n" + styleOn.Render("  "+p.summary) + "\n")
+		lines = append(lines, "  "+statusBad.Render("! "+p.err.Error()))
 	}
-	foot := "  esc back · o open report · v activity"
-	if m.runActive {
-		foot = "  esc back (run keeps going) · x cancel · v activity"
-	}
-	b.WriteString("\n" + dimStyle.Render(foot))
-	return b.String()
+	return fitRows(lines, h)
 }
 
-// activityStyled clips a plain activity line and then colours it: clipping an already-coloured
-// line would cut an escape sequence in half. Lines the runner did not produce are left alone.
+func (m *Model) liveCaseLine(c liveCase) string {
+	marks := make([]string, 0, len(c.runs))
+	running := false
+	for _, a := range c.runs {
+		switch a.status {
+		case "done":
+			marks = append(marks, styleOn.Render(glyphs.Done))
+		case "failed":
+			marks = append(marks, statusBad.Render(glyphs.Failed))
+		case "running":
+			marks = append(marks, cursorMark.Render(glyphs.Running))
+			running = true
+		default:
+			marks = append(marks, dimStyle.Render("·"))
+		}
+	}
+	_ = running
+	return colText.Render(fitTo(c.name, min(30, max(12, m.width/3)))) + "  " + strings.Join(marks, " ")
+}
+
+// activityStyled colours one line of the arm's stream: a tool call and its result are the two things
+// worth telling apart at a glance, and everything else is the agent's own prose.
 func activityStyled(line string, width int) string {
-	clipped := clipLine(line, width)
+	line = ellipsis(line, max(10, width))
 	switch {
-	case strings.HasPrefix(clipped, "▸"):
-		return activityTool.Render(clipped)
-	case strings.HasPrefix(clipped, "✓"):
-		return statusOk.Render(clipped)
-	case strings.HasPrefix(clipped, "✗"):
-		return statusBad.Render(clipped)
-	case strings.HasPrefix(clipped, "│"):
-		return dimStyle.Render(clipped)
+	case strings.Contains(line, glyphs.Failed):
+		return statusBad.Render(line)
+	case strings.Contains(line, glyphs.Done):
+		return styleOn.Render(line)
+	case strings.Contains(line, "▸") || strings.Contains(line, ">"):
+		return activityTool.Render(line)
 	}
-	return clipped
+	return dimStyle.Render(line)
 }
 
-// openReportFor shows the report.md the run just wrote.
-func (m *Model) openReportFor(ref string) {
-	if ref == "" {
-		m.setStatus("no report yet — the run did not finish an iteration", true)
-		return
-	}
-	r := runner.New(m.store)
-	lane := ""
-	if m.progress != nil {
-		lane = m.progress.lane
-	}
-	info, err := r.ResolveRun(ref, lane)
+// openActivityDoc shows a finished arm's log in the document reader.
+func (m *Model) openActivityDoc(path, label string) {
+	lines, err := readLog(path)
 	if err != nil {
 		m.setStatus(err.Error(), true)
 		return
 	}
-	text, err := runner.ReadReport(r.ReportPath(info))
-	if err != nil {
-		m.setStatus("no report.md yet — the iteration may not have finished", true)
-		return
-	}
-	m.viewer = newMarkdownViewer(info.Ref()+" · report.md", text, m.width)
-	m.mode = screenViewer
+	m.doc = &docState{scope: "activity", title: "activity · " + label, lines: lines}
+	m.backTo = screenRunLive
+	m.mode = screenDoc
 }
 
-// ---------------------------------------------------------------- results browser
+// ---------------------------------------------------------------- the queue
 
-type runsState struct {
-	infos  []runner.RunInfo
-	cursor int
-	skill  string // "" is every skill; otherwise the scope the results tab is open in
+// genState is the generalization batch: every measured wording that has not met the validation set
+// yet, run in the order the loop wrote them.
+type genState struct {
+	queue []int
+	at    int
+	done  int
 }
 
-// loadRuns (re)reads the published results of the current scope. It is called on entering a scope,
-// on entering the results tab, after a run finishes and after a promote — and not on every
-// keystroke, because it walks the results tree.
-func (m *Model) loadRuns() {
-	m.runsList = &runsState{infos: runner.New(m.store).ListRunsFor(m.skill), skill: m.skill}
-}
-
-// The results tab is a table of iterations, not of rows: a different set of columns from the lanes,
-// and no flexible prose column, so it takes its own frame. Whatever width is left over goes to the
-// detail card — that is the only content the results tab has that a single row cannot show.
-
-// resultsFrame is the results table's width budget: the same order a lane asks in — the columns it
-// has, then the pane, which takes what is left. There is no flexible text column here to absorb
-// the surplus, and capping the pane instead left the frame 46 columns short at 220 and the divider
-// frozen at column 75 at every width: the same scope, laid out like a different program. The
-// table's own columns are the constraint; the pane is what fills the window.
-func (m *Model) resultsFrame() frame {
-	fixed := rowGutter
-	for _, c := range resultsColumns(m.runsList) {
-		fixed += c.width + 1
-	}
-	avail := m.width - 1
-	if avail < 20 {
-		return frame{table: max(avail, 10)}
-	}
-	sep := len([]rune(paneSep))
-	if pane := avail - fixed - sep; pane >= paneMin {
-		return frame{table: fixed, pane: pane}
-	}
-	return frame{table: fixed}
-}
-
-// resCol is one column of the results table. A row here is a run, not an eval entry, so it cannot
-// reuse the lane drawer's column type — but it is drawn by the same rules: fixed widths, right
-// alignment for numbers, and no cell that pads itself.
-type resCol struct {
-	name  string
-	head  string
-	width int
-	right bool
-	style lipgloss.Style
-	cell  func(runner.RunInfo) string
-}
-
-// resultsColumns drops the SKILL column inside a skill's own scope: the header already says which
-// skill this is. A trigger run has no workspace and every finished iteration has a report, so
-// neither is a column — what a row is not is not a column of dashes.
-func resultsColumns(list *runsState) []resCol {
-	cols := []resCol{
-		{name: "run", head: "RUN", width: 16, style: colSkill, cell: func(i runner.RunInfo) string { return i.Name }},
-	}
-	if list == nil || list.skill == "" {
-		cols = append(cols, resCol{name: "skill", head: "SKILL", width: 12, style: colSkill, cell: func(i runner.RunInfo) string { return i.Skill }})
-	}
-	return append(cols,
-		resCol{name: "lane", head: "LANE", width: 7, style: colSplit, cell: func(i runner.RunInfo) string { return i.Lane }},
-		resCol{name: "cases", head: "CASES", width: 5, right: true, style: colCases, cell: func(i runner.RunInfo) string { return strconv.Itoa(i.Cases) }},
-		resCol{name: "runs", head: "RUNS", width: 4, right: true, style: colSplit, cell: func(i runner.RunInfo) string { return strconv.Itoa(i.Runs) }},
-		resCol{name: "pass", head: "PASS", width: 5, right: true, style: colAsr, cell: func(i runner.RunInfo) string {
-			if i.PassRate == nil {
-				return "-"
-			}
-			return fmt.Sprintf("%.0f%%", *i.PassRate*100)
-		}},
-		resCol{name: "started", head: "STARTED", width: 16, style: dimStyle, cell: func(i runner.RunInfo) string { return shortTime(i.Started) }},
-	)
-}
-
-func (m *Model) resultsHead(f frame) string {
-	var b strings.Builder
-	b.WriteString(strings.Repeat(" ", rowGutter))
-	for _, c := range resultsColumns(m.runsList) {
-		b.WriteString(dimStyle.Render(headCell(c.head, c.width, c.right)) + " ")
-	}
-	if f.pane == 0 {
-		return b.String()
-	}
-	head := padCell(b.String(), f.table, false)
-	title := "no iteration yet"
-	if list := m.runsList; list != nil && list.cursor < len(list.infos) {
-		title = list.infos[list.cursor].Ref()
-	}
-	seam, pane := m.seamStyles()
-	return head + seam.Render(paneSep) + pane.Render(padCell(ellipsis(title, f.pane), f.pane, false))
-}
-
-// resultsBody is the iterations, then the detail card for the one under the cursor.
-func (m *Model) resultsBody(f frame, h int) []string {
-	var left []string
-	list := m.runsList
-	if list == nil || len(list.infos) == 0 {
-		hint := "nothing yet — R starts a run"
-		if list != nil && list.skill != "" {
-			hint = "nothing yet for " + list.skill + " — R starts a run"
-		}
-		left = append(left, "  "+dimStyle.Render(hint))
-	} else {
-		for i, info := range list.infos {
-			mark := "  "
-			if i == list.cursor {
-				mark = cursorMark.Render(glyphs.Cursor)
-			}
-			var b strings.Builder
-			b.WriteString(mark)
-			for _, c := range resultsColumns(list) {
-				b.WriteString(c.style.Render(padCell(c.cell(info), c.width, c.right)) + " ")
-			}
-			line := b.String()
-			if f.pane > 0 {
-				line = padCell(line, f.table, false)
-			}
-			if i == list.cursor {
-				line = selected(line)
-			}
-			left = append(left, line)
-		}
-	}
-
-	pane := m.resultsPaneColumn(f, h)
-	seam, _ := m.seamStyles()
-	out := make([]string, 0, h)
-	for i := 0; i < h; i++ {
-		var line string
-		if i < len(left) {
-			line = left[i]
-		}
-		if f.pane > 0 {
-			if i >= len(left) {
-				line = strings.Repeat(" ", f.table)
-			}
-			line += seam.Render(paneSep) + pane[i]
-		}
-		out = append(out, line)
-	}
-	return out
-}
-
-// resultsPaneColumn is one iteration read properly: what it measured, how it scored, and where it
-// lives. It is the same shape as a row's pane — the cursor's object, spelled out — so the two tabs
-// teach each other, and they share the same window (paneWindow) and the same measure cap.
-//
-// It does NOT list the keys. The footer and ? already answer that from one table, and a third copy
-// inside the pane is a copy that drifts; it was also the block that got cut first on a short
-// terminal, so the pane spent its last rows repeating the line under it.
-func (m *Model) resultsPaneColumn(f frame, h int) []string {
-	out := make([]string, h)
-	list := m.runsList
-	if f.pane == 0 || list == nil || list.cursor >= len(list.infos) {
-		return out
-	}
-	w := f.pane
-	// The facts are short and the paths are long: the measure is capped like the table's, so a pane
-	// that grew to 140 cells does not turn a path into one 130-character line to scan.
-	measure := min(w, textMax)
-	info := list.infos[list.cursor]
-	doc := []string{dimStyle.Render(strings.Repeat(glyphs.Rule, w))}
-	row := func(k, v string) {
-		doc = append(doc, dimStyle.Render(padCell(k, 12, false))+colSkill.Render(ellipsis(v, measure-12)))
-	}
-	row("lane", info.Lane)
-	row("cases", strconv.Itoa(info.Cases))
-	row("runs", strconv.Itoa(info.Runs))
-	row("judged", fmt.Sprintf("%d of %d", info.Judged, info.Cases))
-	pass := "-"
-	if info.PassRate != nil {
-		pass = fmt.Sprintf("%.0f%% (%d/%d passed)", *info.PassRate*100, info.Passed, info.Judged)
-	}
-	row("pass", pass)
-	if info.Model != "" {
-		row("model", info.Model)
-	}
-	if info.Threshold > 0 {
-		row("threshold", fmt.Sprintf("%.2f", info.Threshold))
-	}
-	row("started", shortTime(info.Started))
-	doc = append(doc, "", dimStyle.Render("PATH"))
-	// The path is the last thing in the document, so a frame too short for it cuts the path — the
-	// facts you came for stay. The cut names the key that shows the run whole.
-	for _, l := range wrapPlain(strings.TrimPrefix(info.Path, strings.TrimSuffix(m.store.Root, "/")+"/"), measure) {
-		doc = append(doc, l)
-	}
-	lines := paneWindow(doc, 0, h, "v opens the report")
-	for i := range out {
-		if i < len(lines) {
-			out[i] = lines[i]
+// unvalidatedIDs is the work step 4 has to do before it can rank anything: measured candidates with
+// no validation measurement, in iteration order.
+func (m *Model) unvalidatedIDs() []int {
+	var out []int
+	for _, it := range m.flow.iters {
+		if it.Valid == nil {
+			out = append(out, it.Cand.ID)
 		}
 	}
 	return out
 }
 
-// updateResultsTab is the results view's key map: movement, open, refresh, and the promote that
-// turns a run's output into a fixture. Nothing here writes to the set, so no key here edits it.
-func (m *Model) updateResultsTab(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	list := m.runsList
-	if list == nil {
-		m.loadRuns()
-		list = m.runsList
+func (m *Model) startGeneralization() tea.Cmd {
+	if m.flow.lab == nil || m.flow.lab.ValidationRows == 0 {
+		m.setStatus("no validation queries — step 2 defines what judges the wording", true)
+		return nil
 	}
-	n := 0
-	if list != nil {
-		n = len(list.infos)
+	ids := m.unvalidatedIDs()
+	if len(ids) == 0 {
+		m.setStatus("every measured iteration has been validated", false)
+		return nil
 	}
-	clearStatusOnMove(m, msg)
-	switch msg.String() {
-	case "up", "k":
-		if list != nil && list.cursor > 0 {
-			list.cursor--
-		}
-	case "down", "j":
-		if list != nil && list.cursor < n-1 {
-			list.cursor++
-		}
-	case "home", "g":
-		if list != nil {
-			list.cursor = 0
-		}
-	case "G", "end":
-		if list != nil {
-			list.cursor = max(0, n-1)
-		}
-	case "pgup", "ctrl+u":
-		if list != nil {
-			list.cursor = max(0, list.cursor-m.listHeight()/2)
-		}
-	case "pgdown", "ctrl+d":
-		if list != nil {
-			list.cursor = min(n-1, list.cursor+m.listHeight()/2)
-		}
-	case "enter", "v":
-		m.openRunReport()
-	case "c":
-		return m, m.openPromote()
-	case "r":
-		m.loadRuns()
-		if m.runsList != nil {
-			m.runsList.cursor = min(list.cursor, max(0, len(m.runsList.infos)-1))
-		}
-		m.setStatus("results re-read from the tree", false)
-	case "esc":
-		return m.escUp()
-	}
-	return m, nil
+	m.flow.gen = &genState{queue: ids}
+	return m.startValidationStep()
 }
 
-// resultsHints is the results tab's own verbs. There is no select, edit, new or delete here: the
-// results are what a run wrote, and the way to change them is to change the set and run again.
-func (m *Model) resultsHints() []hint {
-	return []hint{
-		{key: "enter", act: "report", rank: 1, help: "open the report.md the iteration wrote, rendered"},
-		{key: "c", act: "chain", rank: 3, help: "promote: a run's output becomes the next stage's fixture"},
-		{key: "r", act: "re-read", rank: 5, help: "re-read results/ for iterations finished elsewhere"},
-		{key: "tab", act: "next tab", rank: 6, help: "walk the scope's views back to the lanes"},
-		{key: "R", act: "run", rank: 3, help: "run what is selected, or the whole lane of this scope"},
-		{key: "P", act: "profiles", rank: 13, help: "the four sandboxes: what exists and what is stale"},
-		{key: "ctrl+s", act: "save", rank: 0, help: "write both lanes atomically"},
-		{key: "?", act: "keys", rank: 0, help: "this key map"},
-		{key: "q", act: "quit", rank: 10, help: "quit — asks once if there is an unsaved edit or a run in flight"},
-		{key: "esc", act: m.escLabel(), rank: 0, help: "one level up — the footer always names the level"},
+// startValidationStep writes one candidate into SKILL.md and runs the validation set against it.
+func (m *Model) startValidationStep() tea.Cmd {
+	g := m.flow.gen
+	if g == nil || g.at >= len(g.queue) {
+		return nil
 	}
+	id := g.queue[g.at]
+	if msg, err := runner.New(m.store).PrepareMeasure(m.skill, id); err != nil {
+		m.flow.gen = nil
+		m.setStatus(err.Error(), true)
+		return nil
+	} else if msg != "" {
+		m.setStatus(msg, false)
+	}
+	m.reload()
+	r := &runState{
+		kind:  runValidation,
+		cand:  id,
+		runs:  m.flow.lab.Runs,
+		gen:   true,
+		scope: fmt.Sprintf("validation run · candidate #%d", id),
+		hint:  fmt.Sprintf("candidate %d of %d — the queue runs each measured wording in turn", g.at+1, len(g.queue)),
+	}
+	r.live = newLiveRun(r.scope, false)
+	m.run = r
+	m.mode = screenRunLive
+	opts := runner.Options{
+		Lane:   store.LaneTrigger,
+		Skills: []string{m.skill},
+		Split:  store.SplitValidation,
+		Runs:   r.runs,
+		Budget: runner.DefaultTriggerBudget,
+		Log:    runner.ActivityFull,
+	}
+	return m.startTriggerRun(opts)
 }
 
-// openRunReport opens the report.md an iteration wrote, as a document. The document knows which run
-// it came from, so `a` inside it can switch to the activity log — one object, two views.
-func (m *Model) openRunReport() {
-	list := m.runsList
-	if list == nil || list.cursor >= len(list.infos) {
-		return
+// onOff is a boolean as the run screen says it.
+func onOff(b bool) string {
+	if b {
+		return "on"
 	}
-	info := list.infos[list.cursor]
-	text, err := runner.ReadReport(runner.New(m.store).ReportPath(info))
-	if err != nil {
-		m.setStatus(info.Ref()+" has no report.md yet", true)
-		return
-	}
-	v := newMarkdownViewer(info.Ref()+" · report.md", text, m.width)
-	v.run = &info
-	m.viewer = v
-	m.mode = screenViewer
+	return "off"
 }
 
-// openRunActivity concatenates every arm's activity.log under an iteration: a finished run can be
-// read back the way it was watched.
-func (m *Model) openRunActivity(info runner.RunInfo) {
-	var files []string
-	for _, pattern := range []string{"*/*/activity.log", "*/*/*/activity.log"} {
-		if matches, err := filepath.Glob(filepath.Join(info.Path, pattern)); err == nil {
-			files = append(files, matches...)
-		}
+// shortDuration says 1200s as 20m: the operator is deciding whether to wait, not reading a spec.
+func shortDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
 	}
-	sort.Strings(files)
-	if len(files) == 0 {
-		m.setStatus(info.Ref()+" has no activity.log — run it again with activity on", true)
-		return
+	if d%time.Minute == 0 && d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
 	}
-	lines := []string{}
-	for _, file := range files {
-		label, err := filepath.Rel(info.Path, file)
-		if err != nil {
-			label = file
-		}
-		lines = append(lines, "", "  "+titleStyle.Render(strings.TrimSuffix(label, "/activity.log")))
-		if b, err := os.ReadFile(file); err == nil {
-			lines = append(lines, textLines(string(b))...)
-		}
-	}
-	m.viewer = &viewerState{kind: "run-activity",
-		title: fmt.Sprintf("%s · activity · %d arms", info.Ref(), len(files)), lines: lines}
-	m.mode = screenViewer
-}
-
-// shortTime defers to the runner's formatter, so the TUI and the CLI cannot print two different
-// renderings of the same run's start.
-func shortTime(s string) string { return runner.ShortTime(s) }
-
-// textLines turns a log (activity.log, a live tail) into viewable lines. Logs are plain text by
-// nature, so they skip the markdown renderer; a *report* goes through newMarkdownViewer instead.
-func textLines(text string) []string {
-	raw := strings.Split(strings.TrimRight(text, "\n"), "\n")
-	out := make([]string, 0, len(raw))
-	for _, line := range raw {
-		out = append(out, "  "+strings.ReplaceAll(line, "\t", "  "))
-	}
-	return out
-}
-
-// ---------------------------------------------------------------- profiles
-
-// ensureProfiles brings all four profiles to their intended state. Only reachable from the
-// profiles viewer, and only ever on the four known names.
-func (m *Model) ensureProfiles() string {
-	man := profile.New(m.store.Root, m.store.SkillNames())
-	count := 0
-	for _, name := range []string{profile.Real, profile.With, profile.Without, profile.Trigger} {
-		if _, err := man.Ensure(name, false); err != nil {
-			return "ensure failed: " + err.Error()
-		}
-		count++
-	}
-	return fmt.Sprintf("ensure: %d profile(s) provisioned — P shows the re-check", count)
-}
-
-// openProfiles shows the four profiles as check judges them; `u` runs ensure on whatever fails.
-func (m *Model) openProfiles() {
-	man := profile.New(m.store.Root, m.store.SkillNames())
-	rows, problems := man.Check([]string{profile.Real, profile.With, profile.Without, profile.Trigger})
-	var lines []string
-	lines = append(lines, "  "+lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("%-24s %-7s %-9s %-9s %s",
-		"PROFILE", "SKILLS", "MEMORIES", "CONTRACT", "CWD")))
-	for _, row := range rows {
-		contract := statusBad.Render("STALE")
-		if row.ContractCurrent {
-			contract = statusOk.Render("ok")
-		}
-		cwd := "—"
-		if row.TerminalCwd != "" {
-			cwd = "pinned"
-		}
-		lines = append(lines, fmt.Sprintf("  %-24s %-7d %-9d %-9s %s", row.Profile, len(row.Skills),
-			len(row.Memories), contract, cwd))
-	}
-	lines = append(lines, "")
-	if len(problems) == 0 {
-		lines = append(lines, "  "+statusOk.Render("all profiles in their intended state"))
-	} else {
-		for _, p := range problems {
-			lines = append(lines, "  "+statusBad.Render(glyphs.Failed+" ")+p)
-		}
-		lines = append(lines, "", "  "+dimStyle.Render("u runs ensure: creates what is missing, renders, syncs, scrubs"))
-	}
-	m.viewer = &viewerState{kind: "profiles", title: "profiles · check", lines: lines}
-	m.mode = screenViewer
+	return d.Round(time.Minute).String()
 }

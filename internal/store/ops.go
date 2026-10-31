@@ -104,8 +104,8 @@ func (s *Store) checkTrigger(q model.TriggerQuery, self int) error {
 	if strings.TrimSpace(q.Query) == "" {
 		return fmt.Errorf("query is empty")
 	}
-	if q.Split != "train" && q.Split != "validation" {
-		return fmt.Errorf("split must be train or validation")
+	if !KnownSplit(q.Split) {
+		return fmt.Errorf("split must be train, validation or holdout")
 	}
 	return nil
 }

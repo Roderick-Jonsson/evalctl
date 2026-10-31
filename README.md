@@ -15,15 +15,15 @@ make install                  # stamped build, put on PATH — then `evalctl` fr
 make hooks                    # post-commit hook: reinstalls whenever a commit touches the tool
 make build                    # stamped: commit, build time, dirty flag → ./bin/evalctl
 go build -o bin/evalctl .     # plain build: commit comes from the Go build info
-./bin/evalctl                 # TUI, opens on the skill list
+./bin/evalctl                 # TUI: the door, then the loop, step by step
 ```
 
 Once installed (`$(go env GOPATH)/bin/evalctl`, which `make install` warns you about if it is not
 on `PATH`), no path into this directory is needed:
 
 ```bash
-evalctl                       # TUI, opens on the skill list
-evalctl tui --skill slide-builder   # straight into one skill
+evalctl                       # TUI: what to optimize, then which skill
+evalctl tui --skill slide-builder   # straight into one skill's loop
 evalctl tui --glyphs ascii          # unicode marks and rules, or the ASCII fallback
 evalctl version               # which build this is
 make uninstall                # take it back off PATH
@@ -38,8 +38,8 @@ a stale-binary warning — never a failed commit. It is per-clone: run it once a
 inside the repo just works, installed or not.
 
 `--glyphs auto|unicode|ascii` (`$EVALCTL_GLYPHS` as the default) picks the marks the frame draws
-itself: the cursor, the seam between the table and its pane, the rules, the sort arrows, a run in
-flight. `auto` follows the locale. The ASCII profile draws the same frame in `> | - + x` for a
+itself: the cursor, the rule under the bar, the rail's marks for a step that is done, current or
+locked, and a run in flight. `auto` follows the locale. The ASCII profile draws the same frame in `> | - + x` for a
 terminal without UTF-8 — same widths, same columns, and a test that no frame mark escapes it.
 
 ## Version
@@ -61,8 +61,8 @@ never look the same. `make check` runs gofmt and vet; `make test` the suite.
 
 ## Why it exists
 
-The set is worked on one stage skill at a time, so the tool starts there: the first screen is the
-four skills with what each one owns, and everything after it is scoped to the skill you picked.
+The set is worked on one stage skill at a time and the work is one loop — measure a wording, revise
+it, generalize it — so the TUI is that loop and nothing else: the door, the skill, the four steps.
 
 The sets grew faster than they got pruned, and the loop that measured them lived in two Python
 files that had to agree with the manager about slugs, splits and fixture dirs. So the rules live
@@ -76,360 +76,249 @@ checkable against what the old loop produced.
 
 ## TUI
 
-It opens on the skill list — one line per stage skill, the thing you actually work on — and the row
-under the cursor is spelled out underneath it:
+It walks one loop and asks one question at a time: **which optimization**, **which skill**, then the
+loop's four steps. There is no table to sort, no column to focus and no second menu — what used to be
+four tabs is now the rail at the top of every step, which is also the resume point.
 
 ```
-all skills                                                                    evalctl v0.6.0
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  SKILL                  CASES GRADED FIXT FILES TRIG+ TRIG- HEALTH
-▸ all skills                12   0/12   10    47    17    15 2 warnings
-  av-production              3    0/3    3    10     5     5 ok
-  learning-path              2    0/2    2    18     1     0 1 warning
-  slide-builder              5    0/5    5    19     6     5 1 warning
-  source-research            2    0/2    0     0     5     5 ok
+ what to optimize                                                                     evalctl v0.8.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  output is the other loop, and it is not built yet — the trigger loop comes first
 
-── slide-builder ─────────────────────────────────────────────────────────────
-5 cases · 0/5 graded · 0 assertions · 5 fixture dirs · 19 files · 11 trigger rows · 6 yes · 5 no
+▸ trigger optimization  built
+       does the right skill load? — tune the description until it does
 
-FINDINGS (1)
-! output #4 sb-4-agentskills
-  expected_output is empty: grading has nothing to check against
+  output optimization  not built
+       does the skill produce the right thing? — not built yet
 
- enter open  ·  j k move  ·  / filter  ·  L results  ·  ctrl+s save  ·  q quit        ? keys
-presentation-skill  ·  4 skill(s)                                     2 warnings  ·  1 / 5
+
+  the trigger loop, in four steps
+    1 train set        the queries the wording may learn from
+    2 validation set    the queries that judge it, held back until the end
+    3 iterate           run the train set, read the failures, revise, repeat
+    4 generalize        run the validation set for every iteration and compare
+
+
+
+
+
+
+enter open · q quit                                                                          ? keys 
+ the trigger loop is the one that is built                                                    1 / 2 
 ```
 
-The frame is always three bands — the bar, the body, and the two rows at the bottom — and it is the
-same frame on every screen:
+`enter` opens the trigger loop. `output` is the second optimization the tool will grow, and the door
+says plainly that it is not built rather than opening a "coming soon" screen.
 
-- **the bar** names what you are looking at on the left (the scope, then its tabs as chips with
-  their counts inside) and parks the build at the right edge, so a screenshot is always traceable
-  to a binary. The active tab is the one chip with a fill;
-- **the rule** under the bar is the heavy mark, the only line in the frame that separates chrome
-  from content. It is drawn from the palette's `line` role: brighter than a box edge because it is
-  structure you are meant to find, still well below the text it divides;
-- **the footer** is one band. The keys in your hand are the bright register, what they do is the
-  soft one, `? keys` sits in the same corner at every width, and the last row carries the state on
-  the left (path, how much of it you are seeing, the facets cutting it down, or whatever just
-  happened) and the fixed end on the right (selection, run, unsaved, health, position). The
-  position is the last thing on the line and never moves.
-
-`CASES` is the cases the skill owns, `GRADED` how many of them carry assertions, `FIXT`/`FILES` the
-fixture dirs they stage and what is in them, `TRIG+`/`TRIG-` the trigger rows that test its
-description, and `HEALTH` the validation findings that belong to this skill. The first row is
-`· all skills`, the unscoped two-lane view. Every number is counted from the tree in memory, so an
-unsaved edit shows up here before it is written.
-
-The block under the list is the row under the cursor said out loud: the counts spelled out, and the
-findings `HEALTH` collapses into "1 warning" — which is the only thing on this screen that was
-behind a number. `j`/`k` move it, and on a terminal too short for it the block gives way to the key
-line rather than pushing it off. Narrow terminals drop whole columns by importance (`FILES` first,
-then `FIXT`, then the should-trigger split) instead of clipping the row.
-
-`enter` opens a skill on its **trigger queries** tab. The tabs are ordered as the work is done — the
-**trigger queries** (does the description fire at all?) first, the **output cases** (does the skill
-produce the right thing?) second, and the **results** of the runs against them last, as a read-only
-view of its own. `· all skills` opens the lane `--lane` names (`trigger` by default) — the unscoped
-view is the one where the lane, not a skill, is what you came to read. Nothing else is in the list;
-`esc` goes back. `--skill` on the command line still honours `--lane` over the tab a scope starts on.
-
-### The tabs
-
-A scope — a skill, or `· all skills` — has three views, and `tab` / `shift+tab` walk them in both
-directions. They share the frame, the header, the status line and the keys that mean the same thing
-everywhere; only the body and the verbs in the footer change.
+### Which skill
 
 ```
-slide-builder │  ◎ trigger queries 11  │  ▤ output cases 5  │  ✓ results 3        evalctl v0.6.0
-                ↑ the filled chip       ↑ its count inside                ↑ a run in flight shows ⟳
+ trigger optimization · choose a skill                                                evalctl v0.8.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  the description loop is per skill — pick the one whose wording is being tuned
+
+  SKILL                 TRAIN  VALID  ITERS    STATE
+  ────────────────────────────────────────────────────────────────────────────────────────
+▸ slide-builder         2      2      0/5      set ready — nothing measured yet
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+j k move · enter open the loop · esc lanes                                                   ? keys 
+ 1 skill with a description to tune                                                           1 / 1 
 ```
 
-The chip carries the count, the icon says which view it is before you read the word, and a narrow
-window drops the icons first, then the words — never the counts. The three marks (`▤` cases, `◎`
-queries, `✓` results) are ordinary geometric characters, not private-use icons: on a terminal
-without the font they would be boxes, and `--glyphs ascii` draws `# o +` in the same cells.
+`TRAIN`/`VALID` are the query rows that name the skill, `ITERS` is where it stands against the five
+iterations the guide asks for, and `STATE` is what the loop would do next with it — one phrase, read
+off the ledger and the iterations on disk rather than remembered.
 
-| tab | what it is | writable |
-|---|---|---|
-| `trigger queries` | the rows that test its description | yes |
-| `output cases` | the cases the skill is graded on | yes |
-| `results` | the iterations measured against them | no — read, open, promote, run again |
+`enter` opens that skill's loop **at the step the disk says it is on**. No ledger yet: the wording in
+`SKILL.md` is adopted as candidate #1 and step 3 is where you start. A train set with no validation
+set: step 2. Every measured wording already validated: step 4. The baseline is never retyped — a
+paraphrase would measure a text nobody ships.
 
-Each tab keeps its own cursor, so switching away and back leaves you where you were. `L` is the
-results tab on the front door only; inside a scope `tab` is the one way across, and `l` is therefore
-never one keystroke away from meaning something else.
+### The four steps
 
-| key | action |
+```
+✓ 1 train set ─── ✓ 2 validation set ─── ▸ 3 iterate ─── 4 generalize · locked
+```
+
+`✓` done, `▸` current, `·` waiting, `locked` behind the gate. The number keys `1`–`4` jump, and a jump
+that is not allowed says why in the status row instead of doing nothing.
+
+**Steps 1 and 2 — the query set.** One table per split, edited in place:
+
+```
+ trigger optimization · slide-builder · train set   train set · 2 rows                evalctl v0.8.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ▸ 1 train set ─── ✓ 2 validation set ─── 3 iterate ─── 4 generalize · locked
+
+  train set — the queries the wording may learn from
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  ID    LABEL  QUERY                                              WHY
+▸ 1     yes    build me slides from this outline                  core ask                      
+  2     no     research the operator pattern for me               near miss                     
+
+
+
+
+
+
+
+
+
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  2 rows · 1 should trigger · 1 should not · 50% of the set (the guide asks ~60/40)
+
+enter to the validation set · n new · e edit · d delete · space label · esc skills           ? keys 
+ the wording may learn from these rows — nothing else shapes a revision                 step 1 of 4 
+```
+
+`n` new, `e` edit, `d` delete (confirmed), `space` flips the label. Every write goes to disk at the
+keystroke: the next run reads the file, so a change that only lived in memory would measure something
+nobody wrote. The id is the tool's business — a new row takes the next free one — and the split comes
+from the step, so a row added in step 1 cannot quietly be a validation row.
+
+The last two rows are the split's own facts — how many rows, both labels, its share of the whole set
+beside the guide's ~60/40 — and the one warning worth making: a split that carries a single label,
+rows without a `why`, or two rows that read the same. `enter` moves on: to the validation set from
+the train set, and to the loop from the validation set.
+
+**Step 3 — the iteration.** A ladder of the draft's four sub-steps, and the detail block of the one
+under the cursor, so the whole loop is one screenful:
+
+```
+ trigger optimization · slide-builder · iterate   iteration 1 of 5                    evalctl v0.8.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ✓ 1 train set ─── ✓ 2 validation set ─── ▸ 3 iterate ─── 4 generalize · locked
+
+  iteration 1 of 5 · candidate #1
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+▸ 1  training run     candidate #1 is waiting to be measured
+  2  training result  nothing to read yet
+  3  optimize         blocked — #1 is unmeasured
+  4  generalize       locked · 5 more iteration(s) · ctrl+g forces it
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Run the train set against one wording
+  The train run is the only measurement a revision may learn from. Validation is not run here — it
+  judges the wording in step 4, and measuring it now would let the loop learn from it.
+  candidate      #1 · 52 characters
+  scope          2 train queries × 3 runs per query = 6 agent calls
+  writes         trigger-workspace/trigger-1/
+
+  → enter  start the training run
+
+
+j k sub-step · enter do it · ctrl+g generalize early · esc skills                            ? keys 
+ candidate #1 is written but not measured                                               step 3 of 4 
+```
+
+A rung's state is computed, never stored: a wording that has been written but not measured is a
+candidate with no train measurement, and that single fact drives "run it", "nothing to read yet" and
+"do not revise over an unmeasured wording".
+
+| rung | what `enter` does |
 |---|---|
-| `j k ↑ ↓` `enter` | skill list: move / open a skill (`· all skills` = every skill) |
-| `tab` `shift+tab` | walk the scope's tabs — queries → cases → results, and back |
-| `esc` | one level up. The footer names the level: `esc table` (out of the pane), `esc clear column`, `esc clear selection`, `esc skills` — and esc does exactly that one thing |
-| `j k ↑ ↓` `home G` `ctrl+d ctrl+u` | in a tab: move / first / last / half page |
-| `space` | select row and advance — the trim gesture |
-| `a` / `A` | select all visible / clear selection |
-| `/` | search query, prompt, slug, why, assertion, skill (esc clears) |
-| `f` `F` | cycle skill filter forward / back (unscoped view only — inside a skill the scope is the skill and `esc` is how you change it) |
-| `s` `l` | cycle split / label filter (queries tab) |
-| `u` | show only near-duplicate rows — the trim shortlist |
-| `1`–`6` | focus a column of this tab (`0` / `esc` drops it) — see columns below |
-| `o` `g` | with a column focused: sort by it (asc → desc → file order) · group by it. `g` groups and nothing else — `home` is the first row |
-| `enter` | the focused row in the **pane** beside the table — the pane then takes the keys: `j k` scroll it, `g G` its ends, `e` edit it, `v` the whole record, `esc` back to the table |
-| `e` | edit the focused row |
-| `n` | new row in this tab's lane |
-| `d` `x` | delete selection (or the focused row); confirmation screen, `f` toggles deleting fixture dirs too |
-| `v` | the focused row in full, at the width of the window — the pane shows it already when it fits |
-| `ctrl+v` | the validation findings, scrollable |
-| `ctrl+s` | write both lanes (atomic; previous bytes in `.evalctl/backups/`) |
-| `R` | **run** what is selected (or the whole lane) — form, then `enter` |
-| `c` | **chain / reference**: promote a run's output into the next stage's fixture, or into the skill's own `references/` — form, then `enter` (cases and results tabs) |
-| `t` | **to trigger**: the focused case's prompt becomes a trigger query — written at once (cases tab) |
-| `P` | **profiles**: check the four sandboxes, `u` runs `ensure` on what fails |
-| `?` | help · `q` quit (asks once if there are unsaved changes or a run is going) |
+| `training run` | the run screen below: the train set against that candidate |
+| `training result` | one card per failing row — the ask, the `why`, what loaded instead, and whether the wording is too narrow or too broad. Validation is withheld here on purpose |
+| `optimize` | the revision: the parent's text with a caret, its failing rows beside it, the note, the 1024 counter, and the query words the draft has picked up |
+| `generalize` | step 4, if the gate is open |
 
-On the **results** tab the verbs are only the ones a read-only view can honour — `enter` (the
-report the iteration wrote, rendered; `a` inside it switches to that run's activity log), `c`
-(promote its output), `r` (re-read `results/` for iterations finished elsewhere), `R`, `tab`, `?`.
-There is no select, edit, new or delete there: results are what a run wrote, and the way to change
-them is to change the set and run again.
+A revision does not touch `SKILL.md`: it becomes the next candidate in the ledger, and the following
+training run is what writes it into the file — because the file is what the router reads, and a
+wording nobody has measured should not be in it.
 
-The bar carries the scope and both lanes of it, so the state is legible without a keystroke:
+**Step 4 — generalization.** The validation set is run once against every measured wording:
 
 ```
-slide-builder │  ▤ output cases 3  │  ◎ trigger queries 10                evalctl v0.6.0
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ trigger optimization · slide-builder · generalize   2 iterations measured            evalctl v0.8.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ✓ 1 train set ─── ✓ 2 validation set ─── ✓ 3 iterate ─── ▸ 4 generalize
+
+  generalization · every measured wording on the validation set
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  ITERATION  TRAIN         VALIDATION   GAP    CHARS   NOTE
+▸ 1          1/2 50%       2/2 100%     −50%   52      the description in SKILL.md when … ✓ in file
+  2          2/2 100%      1/2 50%      +50%   91      named the deck, not the file
+
+
+
+
+
+
+
+
+
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  ✓ best by validation  #1 · validation 100% · train 50%
+  validation is the ranking; train beside it is how much of that rate the wording learned rather
+j k move · enter what it failed · a apply · h holdout · esc skills                           ? keys 
+ candidate #1 adopted from slide-builder/SKILL.md                                       step 4 of 4 
 ```
+
+Each candidate is written into `SKILL.md` in turn (that is what the router reads), the validation
+queries are run against it, and the next candidate follows — one batch, one progress screen. The
+result list is the draft's own table: iteration, train, validation, the gap between them, the
+character count, and the note the revision carried.
+
+`✓ best by validation` is the guide's selection rule computed, with a tie going to the earlier wording
+— the one that got there with less text and fewer revisions. `enter` opens one iteration in full, `a`
+applies it to `SKILL.md` (frontmatter only, backed up, re-read through the parser, recorded in the
+ledger), and `h` then runs the fresh queries once, apart from every rate the loop tuned on.
+
+### The gate
+
+Five measured iterations is the guide's bar — below it a validation rate is a coin and the difference
+between two wordings is noise. Step 4 stays locked until then, and `ctrl+g` is the stated exception:
+it opens the step and the report says the rate is unproven.
+
+### A run
+
+Nothing is spent without a screen that says what it will cost:
+
+```
+  training run · candidate #4
+  scope          10 train queries of slide-builder, 3 runs each = 30 agent calls
+  budget         4m per run · profile eval-vcc-trigger
+  writes         trigger-workspace/trigger-11/
+  measures       candidate #4 — it is written into slide-builder/SKILL.md first
+  dry run        off
+  → enter  start it
+```
+
+`←`/`→` change the runs per query and `d` makes it a dry run: the exact commands, nothing written.
+While it runs, one row per query carries a mark per attempt (`·` pending, `⟳` running, `✓` done, `✗`
+failed) with the newest eight lines of the arm's own stream underneath — the frames `activity.log`
+gets. `x` cancels and keeps what finished, `v` opens the arm's log in full, and the live screen is the
+one place `esc` does not leave: a half-read table of a run that is still spending money is worse than
+the wait.
 
 ### The frame
 
-The view is anchored to the terminal, not to the data: the bar and its rule, the column head, the
-body, then the key band and the status line — and the status line is the **last row of the window**,
-whatever the list's length. Filtering down to two rows does not lift the footer up the screen; the
-empty rows below are the frame.
+The bar carries where you are — the scope, the step, the loop's counter — on the left, and the tool
+with its build on the right. The rail sits under it. The key band and the status row are the last two rows of the window,
+always; `esc` is one level up and the footer names the level. `--glyphs ascii` draws the same frame in
+`> - + ~`, and a narrow window cuts the hints before it cuts the `? keys` cap.
 
-Width is spent in the order the table asks for it: the columns the lane has, then a readable
-measure of the text column (capped at 96 cells — a query read across 200 columns is scanned, not
-read), then, **only while width is left over after both, a detail pane** on the right of a divider:
+### What the TUI does not do
 
-```
-ID SKILL            TRIG SPLIT      DUP QUERY                                    │ ROW 4 · source-research
-   1 source-research yes  train    -   New masterclass on Kubernetes operato…   │ ──────────────────────────
-▸  4 source-research yes  train    -   MC-kubernetes-operators already has a…  │ yes · train
-   5 source-research yes  validation - Scrap the solar-efficiency research, …   │
-                                                                               │ QUERY
-                                                                               │ MC-kubernetes-operators already
-                                                                               │ has a PS.md from last month. …
-                                                                               │ WHY
-                                                                               │ extend an existing PS.md, not
-                                                                               │ build a new one
-─────────────────────────────────────────────────────────────────────────────────────────────────────
-space select · enter detail · e edit · / search · tab next tab · ctrl+s save · ? keys · q quit   4 / 32
-```
-
-The pane follows the cursor and holds **the whole record**, not a summary of it: the text, the
-`expected_output`, the assertions numbered, the declared files, the fixture dir as it stands on
-disk, the preserved extra keys, the near-twin cluster — and anything validation says about that row,
-in the colour it said it. It is the same document `v` opens at the width of the window, from the
-same function, so the two cannot drift.
-
-`enter` moves the keys **into** the pane, and then it is a place, not a caption: `j k` scroll the
-record, `g G` its ends, `e` edits the row, `enter`/`v` open the whole of it, `esc` gives the table
-back. The seam between the two — the divider and the pane's title — takes the accent while the pane
-has them and stays faint while the table does, so "where do my keystrokes go" is answered by the
-frame rather than remembered. The title carries the window: `ROW 4 · slide-builder · 4–12/32`. Where
-the frame is too narrow to buy a pane at all, `enter` says so and names the keys that do the same
-job. There is no breakpoint constant: the pane appears where the table and the text measure stop
-needing the surplus, which is later for the six-column output lane than for the five-column trigger
-lane; below that width nothing is hidden — the text column takes the whole width and the pane simply
-does not exist.
-
-The results tab has the same pane, showing what an iteration measured (`lane`, `cases`, `runs`,
-`judged`, `pass`, `model`, `threshold`, `started`) and where it lives. It does not list the keys: the
-key line and `?` already answer that from one table, and a third copy is a copy that drifts. When it
-cuts, it cuts the path — the facts stay — and names `v`, which opens the report.
-
-The skill list has the same frame and the same split, turned the other way: it is five rows of table
-in a window four times that tall, so the detail (the selected skill's counts and findings) is a block
-**under** the list, where the emptiness is. A pane beside five short rows would have been a tall empty
-column.
-
-`R` in a skill's view runs that skill's lane: the selection, or every row of *that skill* — the
-list on screen is the filter, so the form says exactly what it will measure.
-
-### Editing a row
-
-`e` opens the row on a **paginated form**, cut by thought rather than by field count: for a case
-`id · skill · slug` (identity — where the collisions are), `prompt` (the ask), `expected` (the
-yardstick), `assertions · files` (the two lists); for a query `id · skill`, `label · split`, `query ·
-why`. The bar names the page and the count, and the rail under it names every page, with the number
-that jumps there and a `✓` on the pages that can already be left:
-
-```
-edit output #3 · slide-builder/evals/evals.json                                  page 2 of 4
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- 1 id · skill · slug ✓    2 prompt    3 expected ✓    4 assertions · files ✓
-```
-
-A page that carries one box gets the whole body; a page with two shares it, and the short one — the
-staging list, or a query's `why` — keeps three lines, so the paragraph beside it keeps the rows.
-
-`alt+1`–`alt+4` jump between them. Backwards is free; forwards walks the pages it skips and stops on
-the first that cannot be left, saying what it needs — `page 1 of 4 will not let you past: slug must be
-lowercase a-z, 0-9 and hyphens`. A jump that silently does nothing teaches nothing. `enter` and
-`shift+tab` still walk the fields, and crossing a page with them moves the rail. A save that is
-refused (a slug another skill owns, an id a sibling has) leaves the form open **on the page you were
-on**, with every value intact.
-
-The last row under the form is the page's own facts, read off the draft on every keystroke: the id
-and the next one free, an id or slug that another row already owns, the assertion and file counts,
-the fixture dir as it stands on disk. That is where the collision the store would refuse at save time
-is said — on the page the number is typed, not at the end of the form. `?` types a question mark
-inside a form (the prompts in this set are questions), so the key map is `alt+h`, and the band's cap
-says so.
-
-Nothing in the set files is written until `ctrl+s`. Inside a form `ctrl+s` is that same key one step
-earlier: it applies the draft and, if it holds, writes it — a refused draft writes nothing. Deleting
-a row leaves its fixture dir alone unless you toggle it in the confirmation screen, and every write
-first copies the old file to `.evalctl/backups/`. `esc` in a form is the one way to lose typing, so
-an edited form asks once before it goes (`esc again discards your edits`); an untouched one leaves at
-once. The status line reports what just happened and is cleared by the next move, so it is never a
-stale claim.
-
-`ctrl+s` on a row whose **id** moved asks first, in the same `y` dialog a delete uses, and prints
-the result dirs and reports that still cite the old number; anything but `y` hands the form back
-with every typed field intact and on the page it was on. Creating a row that takes an id history
-still cites asks the same question — a gap in the file is not a gap on disk.
-
-### Column functions
-
-The table is the query surface, so its columns are operable. `1`–`6` focus one (the header
-lights up, the footer says what it can do); the lane decides which:
-
-```
-trigger  id · skill · label · split · dupe · text
-output   id · skill · slug · assert · dupe · text
-```
-
-Scoped to one skill the `skill` column is dropped (the header already says it) and the remaining
-columns renumber with it — the number keys are read off the column list on screen, never a fixed
-map.
-
-| key | column function |
-|---|---|
-| `o` | sort by the focused column — ascending, descending, then back to file order |
-| `g` | group by the focused column — a section header with a count each, rows keep their order |
-| `/` | search only the focused column (`esc` clears the search and the scope) |
-| `0` `esc` | drop the focus; the sort and the grouping stay until you cycle them off |
-
-```
-── skill alpha · 2 ─────────────────────────────
-▸    1 alpha    yes  train      -  research the operator pattern …
-     2 alpha    no   train      -  paste the three numbers here …
-── skill beta · 2 ──────────────────────────────
-     3 beta     yes  validation -  turn the research into a teaching order …
-```
-
-The sections are drawn over the rows, not interleaved into the row space: `j` walks rows and never
-lands on a header.
-
-Sorting and grouping are the view only. The row key (`lane|skill|index`) never changes, so a
-selection, a delete, a chain or a run acts on the same rows in any order — the header's filter
-line (`sort=skill↑ group=split`) is the record of what you are looking at. A column the other
-lane does not have (`split`, `label`) is dropped on `tab` instead of being drawn empty.
-
-### The run form
-
-`R` opens a form prefilled from where you are: the selected rows, otherwise the whole lane (the
-list already has filters, so it is the selection UI). Nothing is ever run for you — `enter` starts,
-`esc` cancels, and with **dry run** on it only prints the exact `hermes` commands.
-
-Rows, `j k` to move and `← →`/`space` to change:
-
-| row | output lane | trigger lane |
-|---|---|---|
-| target | the selection, or every case in the lane (read-out) | same |
-| iteration | `0` = next free, else the number you pick | same |
-| arms | `both` / `with_skill only` / `without_skill only` | — |
-| resume / force | skip finished arms; force reruns them | skip finished queries |
-| verify | run the skill's own `scripts/ verify` per workspace | — |
-| isolate | temp run root, result copied back (on by default) | n/a — always a temp root |
-| dry run | print the commands, write nothing | same |
-| model | `-m` for `hermes chat` | same |
-| activity | `full` / `tools` / `off` — how much of the agent's stream is logged | same |
-| budget | seconds per run (1200 output, 240 trigger) | same |
-| split / runs / threshold / max turns | — | `all`/`train`/`validation`, N runs per query, pass threshold, `--max-turns` |
-
-### The run table
-
-A live table, one row per case and one mark per arm: `·` pending, `⟳` running, `✓` done, `✗` failed
-(non-zero exit, or a write outside the workspace). Counters and the last eight lines of the
-running arm's activity sit underneath. `esc` goes back to the list and **the run keeps going** —
-the header shows `⟳ run in progress`; `R` returns to the table, `x` cancels (finished arms are
-kept, `--resume` picks up), `v` opens the arm's full `activity.log` (it keeps following while the
-arm runs), and `o` opens the report once it is written.
-
-### Live activity
-
-An arm is opaque for as long as it takes — a twenty-minute run used to show one `⟳` and nothing
-else. The child already writes one JSON frame per event to `stream.jsonl`, so the runner tails
-that file every 250 ms and folds each frame into a line:
-
-```
-+  12.4s  │ I'll start by checking the workspace and loading the skill.
-+  13.1s  ▸ skill_view  slide-builder
-+  13.1s  ✓ skill_view  0.0s
-+  15.8s  ▸ terminal  go run . verify --root MC-kubernetes-operators
-+  18.2s  ✓ terminal  2.4s
-```
-
-`▸` is a tool call with the one input that matters (the command, the path, the query), `✓`/`✗` its
-result and cost, `│` the agent's own streamed prose — coalesced, because the stream is one frame
-per token. Every line carries `+seconds` since the arm started.
-
-The same lines are written to `activity.log` next to `stream.jsonl`, so a finished run can be read
-back: the results tab → `enter` → `a` shows every arm's log in one pane. The file is the evidence and the log is the
-narrative; nothing about how the arm launches changes, and a log that cannot be written never
-fails an arm.
-
-`activity` in the run form (or `--log full|tools|off`) decides how much gets through: `full` adds
-the prose, `tools` keeps only the calls, `off` writes no log and emits nothing.
-
-### Results, per skill
-
-The results **tab** shows the iterations of the scope you are in — the same rule as the case lanes,
-so there is never one list of everybody's runs to sort out by eye:
-
-```
-  RUN              LANE    CASES RUNS  PASS STARTED           │ slide-builder@iteration-5
-▸ iteration-5      output      5    2  100% 2026-10-24 11:02  │ ──────────────────────────────
-  trigger-7        trigger     1    3  100% 2026-10-24 09:41  │ lane        output
-  trigger-4        trigger    10    3   90% 2026-10-22 16:20  │ cases       5
-                                                             │ judged      5 of 5
-                                                             │ pass        100% (5/5 passed)
-                                                             │ PATH
-                                                             │ slide-builder-workspace/
-                                                             │   iteration-5
-```
-
-`enter` opens the `report.md` that iteration wrote, rendered and re-wrapped to the window (`a`
-inside it switches to the run's activity log — one run, two views). The pane is the iteration
-under the cursor read properly: what it measured, how it scored, where it lives.
-
-On the front door (`L`) it is the unscoped list of every iteration, with a `SKILL` column back in —
-the same tab, in the all-skills scope.
-
-The output lane needs no translation: an iteration lives in one skill's workspace. The trigger lane
-does — `trigger-workspace/` is bundle-level, so one iteration covers several skills at once. Each
-one is re-scored for the skill you are in, from the `skills` block `trigger.json` already carries:
-
-```
-all skills:  trigger-4 · 29/31 passed  (94%)
-slide-builder: trigger-4 · 10/10 passed (100%)
-```
-
-So `CASES` in a skill's view is that skill's queries in the iteration, and `PASS` is its own rate —
-an iteration that never ran the skill's queries is not in the list at all. `evalctl runs --skill`
-is the same filter on the command line, `--json` included.
+Browsing the set, sorting and grouping columns, multi-select, delete-by-filter, renumbering, moving a
+case between skills, and both promotions are **CLI verbs** (below). The TUI is the loop; the CLI is
+what you reach for when you want to look at the whole set at once.
 
 ## CLI
 
@@ -440,6 +329,7 @@ evalctl skills                              # the set by skill: cases, assertion
 evalctl skills --json
 evalctl ls --skill slide-builder            # one skill's rows, both lanes
 evalctl ls --lane trigger --skill slide-builder --label no --split train
+evalctl lab --skill slide-builder           # the description loop: candidates, rates, next move
 evalctl ls --dupes                           # rows with a near-twin
 evalctl ls --sort skill,id:desc              # any column of the lane, id:desc mixes directions
 evalctl ls --group split                     # sections with a count each (sort defaults to it)
@@ -490,7 +380,8 @@ evalctl run --arms without_skill            # one side of the comparison only
 evalctl trigger --list                                    # the query set, its labels and split
 evalctl trigger --split train                             # iterate here only
 evalctl trigger --query 1,6 --runs 1                      # cheap probe of two queries
-evalctl trigger                                           # full set, 3 runs per query
+evalctl trigger                                           # the loop set: train + validation, 3 runs each
+evalctl trigger --split holdout                           # the fresh set, measured once — never part of a run above
 ```
 
 Browsing and provisioning:
@@ -527,10 +418,8 @@ evalctl promote --from <run>/<case-slug>[/<arm>] --skill <skill> --slug <new-slu
 ```
 
 `--from` names one arm dir of one case of one iteration (`2/src-4-agentskills/with_skill`; the
-arm defaults to `with_skill`, the run may be `2` or `iteration-2`). In the TUI it is `c`: the form
-opens on the newest output iteration with the focused case already picked and the *next* stage as
-the target, and it previews the copy — every file that would land in the fixture, and everything
-deliberately left behind. What lands in the new fixture is **only** the `MC-[topic]/` workspace:
+arm defaults to `with_skill`, the run may be `2` or `iteration-2`). `--dry-run` previews the copy —
+every file that would land in the fixture, and everything deliberately left behind. What lands in the new fixture is **only** the `MC-[topic]/` workspace:
 the arm dir's own artifacts (`stream.jsonl`, `grading.json`, …) and `_archive/` stay behind, and so
 does the target stage's own output — the glob table in `internal/stage` (`LP-*.md`/`PO-Rev*-*.md`
 for learning-path, `SL-*.md`/`pages/` for slide-builder, …) is what gets dropped, because a fixture
@@ -546,10 +435,9 @@ whether a run was graded on a good input or a bad one, and whether the fixture w
 the fact. `--prompt` is required (the case has nothing to derive it from); `--expected` is optional
 and only draws the usual validate warning.
 
-The TUI form is the same operation, not a second implementation: it fills a `PromoteRequest` and
-the store does the rest. One difference from every other edit — it writes the case file itself
-instead of waiting for `ctrl+s`, because the fixture bytes are already on disk; it therefore
-refuses to run while there are unsaved edits in memory.
+It writes the case file itself instead of going through an editor, because the fixture bytes are
+already on disk; it therefore refuses while a run is going or while an unsaved edit is in memory (the
+write would carry it along).
 
 ### A run's output as the skill's own reference
 
@@ -580,9 +468,7 @@ with `SKILL.md` telling the agent to take its shape and never its content.
   name it in `SKILL.md`: the tool prints the line to paste, because a reference nothing names is a
   file the agent never opens.
 
-In the TUI it is the same form: `c`, then `destination` (`←`/`→`) from *next stage's fixture* to
-*this skill's references/*. The case rows (slug, id, prompt) give way to `file`, `as` and
-`workspace`, and the preview names a taken path before `enter` is pressed.
+`--dry-run` names a taken path, and `--as` on a directory must end in `/` when several files go in.
 
 ### Promoting a prompt into the trigger lane
 
@@ -607,15 +493,14 @@ loads, and two rows of the same text measure it once. The row records `promoted_
 `case`, `slug`), the same unknown key the fixture promotion writes, so `evalctl show t41` says
 where it came from and the row survives any `edit` untouched.
 
-In the TUI it is `t` on an output case: no form, since the row is entirely derived; it writes
-`trigger-evals.json` at once and refuses while a run is going (the run is reading that file) or
-edits are unsaved (the write would carry them along).
+It writes `trigger-evals.json` at once, and refuses while a run is going (the run is reading that
+file).
 
 ## Colour
 
 Views never name a colour, they name a role — `Text`, `Muted`, `Faint`, `Accent`, `Accent2`, `OK`,
 `Warn`, `Err`, `Border`, `Line`, `Sel`, `CodeBG`/`CodeFG` — and `internal/theme` decides what each
-role is. `Line` is the frame's dividers (the rule under the bar, the seam beside the pane): brighter
+role is. `Line` is the frame's dividers (the rule under the bar, the seams between table cells): brighter
 than a box edge, because it is structure you are meant to find, and well below the text it divides.
 Three palettes ship:
 
@@ -663,7 +548,14 @@ trigger-workspace/trigger-N/q01-<skill>/query.txt
 trigger-workspace/trigger-N/q01-<skill>/run-1/stream.jsonl activity.log trigger.json stderr.txt
 trigger-workspace/trigger-N/trigger.json                per-run records + the score
 trigger-workspace/trigger-N/report.md
+
+trigger/descriptions/<skill>.json                       the loop's candidates, their notes, the applied one
 ```
+
+The ledger is the only description state the tool owns, and it is committed with the set for the same
+reason a query carries a `why`: a wording nobody can explain is one the next change undoes. Its
+`applied.sha256` is what makes drift detectable — if `SKILL.md` no longer hashes to it, the file is
+ahead of the last measurement.
 
 `grading.json` carries the mechanical checks (containment, root guard, the skills the run actually
 loaded, the skill's own `verify` output) and the final response. Grading itself stays manual until
@@ -674,10 +566,11 @@ loaded, the skill's own `verify` output) and the final response. Grading itself 
 
 Errors — the tree would be rejected or could not be staged:
 
-- trigger `id` is a positive integer, unique; `split` ∈ {train, validation}; `query` non-empty
+- trigger `id` is a positive integer, unique; `split` ∈ {train, validation, holdout}; `query` non-empty
 - trigger `skill` must be a stage skill with an `evals/evals.json`
 - **each split must carry both labels** — deleting the last negative of a split is the classic
-  trim accident, so it is reported as an error rather than silently saved-and-forgotten
+  trim accident, so it is reported as an error rather than silently saved-and-forgotten; the
+  holdout is exempt, because it is a handful of fresh queries rather than a measuring instrument
 - output `slug` matches `^[a-z0-9][a-z0-9-]*$` and is unique **across skills**
 - output `id` unique inside its skill; `prompt` non-empty
 - an assertion is a non-empty string (an empty one can never be graded, so it is an error, not a
@@ -744,22 +637,26 @@ evalctl/
   internal/profile/  the four profiles: contract render, env, skills sync, scrub, cwd pin, check
   internal/cli/      ls, show, add, edit, rm, mv, promote, dupes, stats, validate, renumber, run,
                      trigger, runs, report, profiles
-  internal/tui/      skill list, scoped list, editor (huh), delete confirmation, viewer, run form,
-                     run table, results
+  internal/tui/      the loop: door, skill list, the four steps, the query form, the revision, the
+                     run screen, the documents, the frame
 ```
 
 ## Tests
 
 `go test ./...` covers byte-identical round trips, unknown-key preservation, fixture move on slug
-change, fixture survival on delete, the split-balance rule, dupe grouping, and the TUI's
-select → delete → save flow. The skill-first port adds: assertion round trips (written only when
+change, fixture survival on delete, the split-balance rule and dupe grouping. The loop's own tests
+hold the arithmetic: a candidate measured by two runs (train, then validation) is one iteration with
+both halves; the best iteration is the best validation, not the last one; the gate counts iterations
+and ctrl+g records that it was forced; `space` writes the label it flipped; `a` puts the winner into
+`SKILL.md`; and every screen draws exactly the height of the window at three widths. A smoke test
+opens a copy of the project's own tree and draws every step of every skill, so a real set with a
+shape the fixtures do not have still has to render. The skill-first port adds: assertion round trips (written only when
 present, a comma is content, an empty one is an error), the per-skill summary counts (including a
 trigger row whose skill is not in the tree), the list opening on the aggregate row, `enter`
 scoping both lanes to one skill, `esc` coming back to the list it left, the skill column dropping
-when scoped, and a new case taking its skill from the scope. The column functions add: sort keys with a stable tie-break, group
+when scoped, and a new case taking its skill from the scope. The column functions (CLI) add: sort keys with a stable tie-break, group
 order and counts (numeric columns numerically, an empty cell last), a search scoped to one
-column with a full-text fallback when the lane lacks it, and in the TUI that a number key, `o`,
-`g` and `/` move rows without losing the cursor or the selection. The runner adds: slug and
+column with a full-text fallback when the lane lacks it. The runner adds: slug and
 duplicate-slug refusal, staging escape
 refusal, prompt-only staging, containment, `changes.json`, the benchmark delta, the trigger pass
 rule (above/below threshold, unmeasured excluded), load evidence (prose is not a load), the folded

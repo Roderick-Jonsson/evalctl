@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// glyphSet is the marks the FRAME draws itself: the cursor, the rules, the seam between the table
-// and its pane, the state marks of a live run. Every one has an ASCII twin, so a terminal without
+// glyphSet is the marks the FRAME draws itself: the cursor, the rules, and the state marks of a live
+// run. Every one has an ASCII twin, so a terminal without
 // UTF-8 — a serial console, a CI log, a screen reader, $TERM=dumb — gets the same screen in plain
 // characters instead of a line of replacement boxes.
 //
@@ -16,37 +16,24 @@ import (
 // terminal that has not got the font. The data columns stay words.
 type glyphSet struct {
 	Name     string
-	Cursor   string // the row under the cursor
-	Selected string // a row in the selection
+	Cursor   string // the row, rung or step under the cursor
 	Running  string // a run in flight
-	Done     string // a finished arm
-	Failed   string // a failed arm
-	SortUp   string // sort direction in the filter line
-	SortDown string
-	Arrow    string // "this becomes that" in a hint
-	Shift    string // the ⇧ of a shifted binding
-	Seam     string // the divider between the table and its pane, and between two tabs
-	Rule     string // the rule under a head row, and the section rules
-	Heavy    string // the heavier rule under the tab bar, so the bar reads as a bar
+	Done     string // a finished run, a step that is done, a pass
+	Failed   string // a failed arm or query
+	Arrow    string // "this becomes that": the step screen's one action line
+	Rule     string // the thin rules inside a screen
+	Heavy    string // the rule under the bar, so the bar reads as a bar
 	Ellipsis string // what a fitted line ends with
-	// The tab bar's marks: one per view, so a tab is recognised before it is read. They are
-	// ordinary geometric characters on purpose — a private-use icon would be a box on every
-	// terminal that has not got the font, and a tab is not worth a row of replacements.
-	Cases   string // output cases — the table of what a skill is worked on for
-	Queries string // trigger queries — the target its description is measured against
-	Results string // results — what the runs came back with
 }
 
 var (
 	unicodeGlyphs = glyphSet{
-		Name: "unicode", Cursor: "▸ ", Selected: "▪ ", Running: "⟳", Done: "✓", Failed: "✗",
-		SortUp: "↑", SortDown: "↓", Arrow: "→", Shift: "⇧", Seam: "│", Rule: "─", Heavy: "━",
-		Ellipsis: "…", Cases: "▤", Queries: "◎", Results: "✓",
+		Name: "unicode", Cursor: "▸ ", Running: "⟳", Done: "✓", Failed: "✗",
+		Arrow: "→", Rule: "─", Heavy: "━", Ellipsis: "…",
 	}
 	asciiGlyphs = glyphSet{
-		Name: "ascii", Cursor: "> ", Selected: "* ", Running: "~", Done: "+", Failed: "x",
-		SortUp: "^", SortDown: "v", Arrow: ">", Shift: "^", Seam: "|", Rule: "-", Heavy: "=",
-		Ellipsis: "~", Cases: "#", Queries: "o", Results: "+",
+		Name: "ascii", Cursor: "> ", Running: "~", Done: "+", Failed: "x",
+		Arrow: ">", Rule: "-", Heavy: "=", Ellipsis: "~",
 	}
 )
 
@@ -57,7 +44,6 @@ var glyphs = unicodeGlyphs
 
 func setName(s glyphSet) {
 	glyphs = s
-	paneSep = " " + s.Seam + " "
 }
 
 // GlyphNames lists the profiles, for the CLI's usage line and its error message.

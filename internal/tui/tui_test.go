@@ -1,255 +1,474 @@
 package tui
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/x/ansi"
 
+	"evalctl/internal/runner"
 	"evalctl/internal/store"
 )
 
-func testStore(t *testing.T) *store.Store {
+// ---------------------------------------------------------------- fixture
+
+const skillMD = `---
+name: slide-builder
+description: Use this skill when an outline has to become slides.
+---
+
+# slide-builder
+
+Turns an outline into a deck.
+`
+
+const triggerSet = `{
+  "runs": 3,
+  "threshold": 0.5,
+  "queries": [
+    {"id": 1, "skill": "slide-builder", "should_trigger": true,  "split": "train",      "why": "core ask",   "query": "build me slides from this outline"},
+    {"id": 2, "skill": "slide-builder", "should_trigger": false, "split": "train",      "why": "near miss",  "query": "research the operator pattern for me"},
+    {"id": 3, "skill": "slide-builder", "should_trigger": true,  "split": "validation", "why": "held back",  "query": "turn PO-RevB into a deck"},
+    {"id": 4, "skill": "slide-builder", "should_trigger": false, "split": "validation", "why": "held back",  "query": "what is a controller loop"}
+  ]
+}`
+
+// fixture builds a tree with one skill, its description and a four-row trigger set, and returns a
+// sized model — sized because every screen here is a window and a zero-height model renders no frame.
+func fixture(t *testing.T) (*Model, string, *store.Store) {
 	t.Helper()
 	root := t.TempDir()
-	write := func(path, body string) {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write(filepath.Join(root, "trigger", "trigger-evals.json"), `{
-  "runs": 3,
-  "queries": [
-    {"id": 1, "skill": "alpha", "should_trigger": true, "split": "train", "why": "clear",
-     "query": "research the operator pattern and write the facts with links"},
-    {"id": 2, "skill": "alpha", "should_trigger": false, "split": "train", "why": "near miss",
-     "query": "paste the three numbers here in chat, no files"},
-    {"id": 3, "skill": "beta", "should_trigger": true, "split": "validation", "why": "v pos",
-     "query": "turn the research into a teaching order"},
-    {"id": 4, "skill": "beta", "should_trigger": false, "split": "validation", "why": "v neg",
-     "query": "render slide two as an image please"}
-  ]
-}
-`)
-	write(filepath.Join(root, "alpha", "evals", "evals.json"), `{
-  "skill_name": "alpha",
-  "evals": [{"id": 1, "slug": "a-1", "prompt": "do the alpha thing", "expected_output": "a thing", "files": []}]
-}
-`)
-	write(filepath.Join(root, "alpha", "evals", "files", "a-1", "in.md"), "x\n")
-	write(filepath.Join(root, "beta", "evals", "evals.json"), `{
-  "skill_name": "beta",
-  "evals": [{"id": 1, "slug": "b-1", "prompt": "do the beta thing", "expected_output": "another thing", "files": []}]
-}
-`)
+	write(t, filepath.Join(root, "trigger", "trigger-evals.json"), triggerSet)
+	write(t, filepath.Join(root, "slide-builder", "evals", "evals.json"), `{"skill_name":"slide-builder","evals":[]}`)
+	write(t, filepath.Join(root, "slide-builder", "SKILL.md"), skillMD)
 	s, err := store.Open(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s
+	m := newModel(s)
+	m.width, m.height = 110, 32
+	return m, root, s
 }
 
-func key(s string) tea.KeyMsg {
-	switch s {
-	case "ctrl+s":
-		return tea.KeyMsg{Type: tea.KeyCtrlS}
-	case "ctrl+c":
-		return tea.KeyMsg{Type: tea.KeyCtrlC}
-	case "esc":
-		return tea.KeyMsg{Type: tea.KeyEsc}
-	case "tab":
-		return tea.KeyMsg{Type: tea.KeyTab}
-	case "enter":
-		return tea.KeyMsg{Type: tea.KeyEnter}
-	case "shift+tab":
-		return tea.KeyMsg{Type: tea.KeyShiftTab}
-	case "up":
-		return tea.KeyMsg{Type: tea.KeyUp}
-	case "down":
-		return tea.KeyMsg{Type: tea.KeyDown}
+func write(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if strings.HasPrefix(s, "alt+") {
-		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.TrimPrefix(s, "alt+")), Alt: true}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 }
 
-func sized(m *Model, w, h int) *Model {
-	m.Update(tea.WindowSizeMsg{Width: w, Height: h})
-	return m
-}
-
-func TestListViewRenders(t *testing.T) {
-	m := sized(newModel(testStore(t), store.LaneTrigger), 120, 30)
-	view := m.View()
-	for _, want := range []string{"evalctl", "all skills", "trigger queries 4", "4 of 4", "TRIG", "SPLIT",
-		"research the operator pattern"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("view missing %q:\n%s", want, view)
+// stripMarks removes the SGR sequences a styled line carries, so a test can assert on the text.
+func stripMarks(s string) string {
+	var out strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == 0x1b {
+			for i < len(s) && !(s[i] >= 'a' && s[i] <= 'z') && s[i] != 'm' {
+				i++
+			}
+			i++
+			continue
 		}
+		out.WriteByte(s[i])
 	}
-	// The header draws both lanes of the scope, so the other lane is a tab you can see, not a key
-	// you have to know; switching to it must bring its columns with it.
-	if !strings.Contains(view, "output cases 2") {
-		t.Fatalf("header does not name the other lane:\n%s", view)
-	}
-	// tab walks the scope's three views in workflow order: queries → cases → results → queries.
-	m.Update(key("tab"))
-	after := m.View()
-	if !strings.Contains(ansi.Strip(after), "output cases 2") || !strings.Contains(after, "PROMPT") {
-		t.Fatalf("tab did not walk forward to the cases lane:\n%s", after)
-	}
-	// The view on screen is the FILLED chip: the tab bar says where you are by fill, and tab
-	// has to move the fill with the body.
-	if !strings.Contains(after, tabActive.Render(" "+glyphs.Cases+" output cases 2 ")) {
-		t.Fatalf("the cases tab is not the filled one after tab:\n%s", after)
-	}
-	m.Update(key("tab"))
-	view = m.View()
-	if !strings.Contains(view, tabActive.Render(" "+glyphs.Results+" results")) {
-		t.Fatalf("tab did not reach the results view:\n%s", view)
-	}
-	// And one more step wraps to the first tab, the queries lane.
-	m.Update(key("tab"))
-	if !strings.Contains(m.View(), tabActive.Render(" "+glyphs.Queries+" trigger queries 4")) {
-		t.Fatalf("tab did not wrap back to the queries view:\n%s", m.View())
-	}
+	return out.String()
 }
 
-// TestHeaderNamesTheBuild: the header carries the version, so a screenshot or a session is always
-// traceable to a build without running `evalctl version` in another pane.
-func TestHeaderNamesTheBuild(t *testing.T) {
-	m := sized(newModel(testStore(t), store.LaneTrigger), 120, 30)
-	if !strings.HasPrefix(m.ver, "v") {
-		t.Fatalf("model version = %q", m.ver)
+func press(m *Model, key string) tea.Cmd {
+	var msg tea.KeyMsg
+	switch key {
+	case "enter":
+		msg = tea.KeyMsg{Type: tea.KeyEnter}
+	case "esc":
+		msg = tea.KeyMsg{Type: tea.KeyEsc}
+	case "space":
+		msg = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")}
+	case "ctrl+g":
+		msg = tea.KeyMsg{Type: tea.KeyCtrlG}
+	case "down":
+		msg = tea.KeyMsg{Type: tea.KeyDown}
+	case "up":
+		msg = tea.KeyMsg{Type: tea.KeyUp}
+	default:
+		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
 	}
-	if !strings.Contains(m.View(), "evalctl ") || !strings.Contains(ansi.Strip(m.View()), "evalctl "+m.ver) {
-		t.Fatalf("header does not name the build:\n%s", m.View())
-	}
+	_, cmd := m.Update(msg)
+	return cmd
 }
 
-func TestFilterAndSelectAll(t *testing.T) {
-	m := sized(newModel(testStore(t), store.LaneTrigger), 120, 30)
-	m.filter.Label = "no"
-	m.refresh()
-	if len(m.rows) != 2 {
-		t.Fatalf("label filter kept %d rows, want 2", len(m.rows))
+// row is one scored query: hit says the run's verdict was the one the label asked for.
+func row(id int, split string, should, hit bool) runner.ScoreRow {
+	passed := hit
+	rate := 0.0
+	if hit {
+		rate = 1
 	}
-	m.Update(key("u"))
-	if len(m.rows) != 0 || !m.onlyDup {
-		t.Fatalf("dupes filter should hide every distinct row, got %d", len(m.rows))
+	triggers := 0
+	if hit {
+		triggers = 3
 	}
-	m.Update(key("u"))
-	m.filter.Label = ""
-	m.refresh()
-	m.Update(key("a"))
-	if len(m.chosen) != 4 {
-		t.Fatalf("select-all chose %d rows, want 4", len(m.chosen))
-	}
-	m.Update(key("A"))
-	if len(m.chosen) != 0 {
-		t.Fatalf("clear left %d chosen", len(m.chosen))
-	}
+	return runner.ScoreRow{ID: id, Skill: "slide-builder", Split: split, ShouldTrigger: should,
+		Runs: 3, ValidRuns: 3, Triggers: triggers, Rate: &rate, Passed: &passed}
 }
 
-func TestDeleteSelectionThenSave(t *testing.T) {
-	s := testStore(t)
-	m := sized(newModel(s, store.LaneTrigger), 120, 30)
-	m.Update(key("down")) // move to #2
-	m.Update(key(" "))    // select #2, advance to #3
-	m.Update(key("d"))    // ask to delete the selection
-	if m.mode != screenConfirm {
-		t.Fatalf("d did not open the confirm screen (mode %v)", m.mode)
-	}
-	if !strings.Contains(m.View(), "delete 1 row") {
-		t.Fatalf("confirm screen does not state the count:\n%s", m.View())
-	}
-	m.Update(key("y"))
-	if len(m.store.Trigger.Queries) != 3 {
-		t.Fatalf("store has %d queries, want 3", len(m.store.Trigger.Queries))
-	}
-	if !m.dirty {
-		t.Fatal("delete did not mark the model dirty")
-	}
-	m.Update(key("ctrl+s"))
-	if m.dirty {
-		t.Fatal("save did not clear the dirty flag")
-	}
-	raw, err := os.ReadFile(s.TriggerPath)
+// iterationDir fabricates one finished trigger iteration — the description it ran and its score —
+// so the loop can be tested without spending agent time.
+func iterationDir(t *testing.T, root, description string, iteration int, rows []runner.ScoreRow) {
+	t.Helper()
+	dir := filepath.Join(root, "trigger-workspace", fmt.Sprintf("trigger-%d", iteration))
+	meta := fmt.Sprintf(`{"iteration":%d,"lane":"trigger","started":"2026-10-30T10:0%d:00+0100","runs":3,"threshold":0.5,
+  "provenance":{"descriptions":{%q:{"chars":%d,"description":%q}}}}`,
+		iteration, iteration%10, "slide-builder", len([]rune(description)), description)
+	write(t, filepath.Join(dir, "meta.json"), meta)
+	score := runner.TriggerScore{Threshold: 0.5, Runs: 3, Rows: rows,
+		Skills: map[string]runner.SkillScore{}, Splits: map[string]runner.Tally{}, Overall: runner.Tally{}}
+	blob, err := json.Marshal(map[string]any{"score": score})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), `"id": 2`) {
-		t.Fatalf("deleted row is still on disk:\n%s", raw)
+	write(t, filepath.Join(dir, "trigger.json"), string(blob))
+}
+
+// measured builds a model whose skill has one measured iteration: candidate #1, measured on train.
+func measured(t *testing.T, rows []runner.ScoreRow) (*Model, string) {
+	t.Helper()
+	m, root, s := fixture(t)
+	desc := s.SkillDescription("slide-builder")
+	iterationDir(t, root, desc, 1, rows)
+	m.openSkill("slide-builder")
+	return m, root
+}
+
+// ---------------------------------------------------------------- the door
+
+func TestFrontDoorOffersBothLanes(t *testing.T) {
+	m, _, _ := fixture(t)
+	view := m.laneBody(20)
+	joined := strings.Join(view, "\n")
+	if !strings.Contains(joined, "trigger optimization") || !strings.Contains(joined, "output optimization") {
+		t.Fatalf("the door must name both optimizations:\n%s", joined)
 	}
-	if !strings.Contains(string(raw), `"id": 3`) {
-		t.Fatalf("survivor missing from disk:\n%s", raw)
+	if !strings.Contains(joined, "not built") {
+		t.Fatalf("output is not built and the door must say so:\n%s", joined)
+	}
+	// Down to output, then enter: the door stays put and says why.
+	press(m, "j")
+	press(m, "enter")
+	if m.mode != screenLane {
+		t.Fatalf("output opened a screen: mode = %v", m.mode)
+	}
+	if !strings.Contains(m.status, "not built") {
+		t.Fatalf("status = %q", m.status)
 	}
 }
 
-func TestCancelDeleteTouchesNothing(t *testing.T) {
-	m := sized(newModel(testStore(t), store.LaneTrigger), 120, 30)
-	m.Update(key("d")) // focused row, no selection
-	if m.mode != screenConfirm {
-		t.Fatal("delete did not ask for confirmation")
+func TestTriggerLaneOpensTheSkillList(t *testing.T) {
+	m, _, _ := fixture(t)
+	press(m, "enter")
+	if m.mode != screenSkill {
+		t.Fatalf("mode = %v, want the skill list", m.mode)
 	}
-	m.Update(key("esc"))
-	if m.mode != screenList || m.dirty {
-		t.Fatalf("cancel left mode=%v dirty=%v", m.mode, m.dirty)
+	m.loadSkills()
+	if len(m.skills.rows) != 1 || m.skills.rows[0].name != "slide-builder" {
+		t.Fatalf("rows = %+v", m.skills.rows)
 	}
-	if len(m.store.Trigger.Queries) != 4 {
-		t.Fatal("cancel removed a row anyway")
+	if !strings.Contains(m.skills.rows[0].state, "measured") {
+		t.Fatalf("a skill with no measurements must say where the loop stands: %q", m.skills.rows[0].state)
 	}
-}
-
-func TestEditorAppliesEditAndKeepsExtras(t *testing.T) {
-	s := testStore(t)
-	m := sized(newModel(s, store.LaneTrigger), 120, 30)
-	e, _ := m.focused()
-	m.openEditor(e, false)
-	if m.mode != screenEditor || m.editor == nil {
-		t.Fatal("editor did not open")
-	}
-	m.editor.d.query = "research the operator pattern and cite every claim"
-	m.editor.d.label = "should not trigger"
-	m.editor.d.split = "validation"
-	m.editor.apply(m)
-	if m.mode != screenList {
-		t.Fatalf("apply left the editor open (err %q)", m.editor.errMsg)
-	}
-	q := s.Trigger.Queries[0]
-	if q.Query != "research the operator pattern and cite every claim" {
-		t.Fatalf("query not saved: %q", q.Query)
-	}
-	if q.ShouldTrigger || q.Split != "validation" {
-		t.Fatalf("label/split not saved: %+v", q)
-	}
-	if !m.dirty {
-		t.Fatal("edit did not mark dirty")
+	press(m, "enter")
+	if m.mode != screenFlow || m.skill != "slide-builder" {
+		t.Fatalf("mode = %v skill = %q", m.mode, m.skill)
 	}
 }
 
-func TestEditorRejectsBadSlugWithoutLosingText(t *testing.T) {
-	s := testStore(t)
-	m := sized(newModel(s, store.LaneOutput), 120, 30)
-	e, _ := m.focused()
-	m.openEditor(e, false)
-	m.editor.d.slug = "Not A Slug"
-	m.editor.d.prompt = "typed text worth keeping"
-	m.editor.apply(m)
-	if m.mode != screenEditor {
-		t.Fatal("bad slug was accepted")
+// ---------------------------------------------------------------- the loop's state
+
+func TestResumeLandsOnTheStepTheDiskIsAt(t *testing.T) {
+	m, _, _ := fixture(t)
+	m.openSkill("slide-builder")
+	if m.flow.step != StepIterate {
+		t.Fatalf("step = %d, want the loop: both splits are defined and nothing is measured", m.flow.step)
 	}
-	if m.editor.d.prompt != "typed text worth keeping" {
-		t.Fatal("apply wiped the prompt on error")
+	if m.flow.sub != subRun {
+		t.Fatalf("rung = %d, want the training run", m.flow.sub)
 	}
-	if s.Skill("alpha").Output.Evals[0].Slug != "a-1" {
-		t.Fatal("store changed despite the error")
+	if len(m.flow.lab.Candidates) != 1 {
+		t.Fatalf("candidates = %d, want the baseline adopted from SKILL.md", len(m.flow.lab.Candidates))
+	}
+}
+
+func TestIterationJoinsTheTwoSplitsByDescription(t *testing.T) {
+	m, root, s := fixture(t)
+	desc := s.SkillDescription("slide-builder")
+	// The iteration runs the train set…
+	iterationDir(t, root, desc, 1, []runner.ScoreRow{
+		row(1, "train", true, true),
+		row(2, "train", false, false),
+	})
+	// …and generalization runs the validation set against the same wording.
+	iterationDir(t, root, desc, 2, []runner.ScoreRow{
+		row(3, "validation", true, true),
+		row(4, "validation", false, true),
+	})
+	m.openSkill("slide-builder")
+	if len(m.flow.iters) != 1 {
+		t.Fatalf("iterations = %d, want one wording measured twice", len(m.flow.iters))
+	}
+	it := m.flow.iters[0]
+	if it.Train == nil || it.Train.Iteration != 1 {
+		t.Fatalf("train measure = %+v", it.Train)
+	}
+	if it.Valid == nil || it.Valid.Iteration != 2 {
+		t.Fatalf("validation measure = %+v, want the later run", it.Valid)
+	}
+	if got := pct(it.Train.Train.Passed, it.Train.Train.Judged); got != "50%" {
+		t.Fatalf("train = %s", got)
+	}
+	if got := pct(it.Valid.Validation.Passed, it.Valid.Validation.Judged); got != "100%" {
+		t.Fatalf("validation = %s", got)
+	}
+}
+
+func TestGateHoldsUntilFiveIterations(t *testing.T) {
+	m, _ := measured(t, []runner.ScoreRow{row(1, "train", true, true), row(2, "train", false, true)})
+	if len(m.flow.iters) != 1 {
+		t.Fatalf("iterations = %d", len(m.flow.iters))
+	}
+	// The number key is a jump, and the gate refuses it.
+	press(m, "4")
+	if m.flow.step != StepIterate {
+		t.Fatalf("step = %d, want the loop to hold", m.flow.step)
+	}
+	if !strings.Contains(m.status, "ctrl+g") {
+		t.Fatalf("status = %q, want the way out named", m.status)
+	}
+	// ctrl+g is the stated exception.
+	press(m, "ctrl+g")
+	if m.flow.step != StepGeneralize {
+		t.Fatalf("step = %d, want generalization forced", m.flow.step)
+	}
+	if !m.flow.gateOpen() {
+		t.Fatal("the gate must record that it was forced")
+	}
+}
+
+// ---------------------------------------------------------------- steps 1 and 2
+
+func TestSpaceFlipsTheLabelAndWritesTheFile(t *testing.T) {
+	m, _, _ := fixture(t)
+	m.openSkill("slide-builder")
+	m.gotoStep(StepTrain)
+	if len(m.flow.rows) != 2 {
+		t.Fatalf("train rows = %d", len(m.flow.rows))
+	}
+	before := m.flow.rows[0].Label
+	press(m, "space")
+	after := m.flow.rows[0].Label
+	if before == after {
+		t.Fatalf("label did not move (%q)", before)
+	}
+	blob, err := os.ReadFile(filepath.Join(m.store.Root, "trigger", "trigger-evals.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"should_trigger": false`
+	if before == "no" {
+		want = `"should_trigger": true`
+	}
+	if !strings.Contains(string(blob), want) {
+		t.Fatalf("the file was not written:\n%s", blob)
+	}
+}
+
+func TestEnterFromTheLastQuerySetOpensTheLoop(t *testing.T) {
+	m, _, _ := fixture(t)
+	m.openSkill("slide-builder")
+	m.gotoStep(StepValidation)
+	press(m, "enter")
+	if m.flow.step != StepIterate {
+		t.Fatalf("step = %d, want the iteration", m.flow.step)
+	}
+}
+
+// ---------------------------------------------------------------- step 4
+
+func TestTheBestIterationIsTheBestValidation(t *testing.T) {
+	m, root, s := fixture(t)
+	// The baseline is adopted first, exactly as the flow does it, so the two wordings below are
+	// candidates #1 and #2 of one ledger.
+	m.openSkill("slide-builder")
+	first := s.SkillDescription("slide-builder")
+	second := "Use this skill when an outline has to become slides — even when the user calls them a deck."
+	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", second, "named the deck", 1); err != nil {
+		t.Fatal(err)
+	}
+	// #1 is perfect on train and poor on validation; #2 the other way round.
+	iterationDir(t, root, first, 1, []runner.ScoreRow{
+		row(1, "train", true, true), row(2, "train", false, true),
+		row(3, "validation", true, false), row(4, "validation", false, true),
+	})
+	iterationDir(t, root, second, 2, []runner.ScoreRow{
+		row(1, "train", true, false), row(2, "train", false, true),
+		row(3, "validation", true, true), row(4, "validation", false, true),
+	})
+	m.reload()
+	if len(m.flow.iters) != 2 {
+		t.Fatalf("iterations = %d", len(m.flow.iters))
+	}
+	best := bestIteration(m.flow)
+	if best == nil || best.Cand.ID != 2 {
+		t.Fatalf("best = %+v, want candidate #2 on validation", best)
+	}
+	if m.flow.gateOpen() {
+		t.Fatal("two measured iterations opened the gate — it counts iterations, not validation runs")
+	}
+}
+
+func TestResultListShowsTrainValidationAndTheGap(t *testing.T) {
+	m, root, s := fixture(t)
+	first := s.SkillDescription("slide-builder")
+	iterationDir(t, root, first, 1, []runner.ScoreRow{
+		row(1, "train", true, true), row(2, "train", false, true),
+		row(3, "validation", true, true), row(4, "validation", false, true),
+	})
+	m.openSkill("slide-builder")
+	m.flow.step = StepGeneralize
+	body := strings.Join(m.resultBody(24), "\n")
+	for _, want := range []string{"ITERATION", "TRAIN", "VALIDATION", "GAP", "best by validation"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("result list is missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestApplyWritesTheWinnerIntoSkillMD(t *testing.T) {
+	m, root, s := fixture(t)
+	first := s.SkillDescription("slide-builder")
+	iterationDir(t, root, first, 1, []runner.ScoreRow{
+		row(1, "train", true, true), row(2, "train", false, true),
+	})
+	m.openSkill("slide-builder")
+	m.flow.forced = true
+	m.flow.step = StepGeneralize
+	m.askApply(m.flow.iters[0])
+	if m.mode != screenAsk {
+		t.Fatalf("mode = %v, want the confirmation", m.mode)
+	}
+	press(m, "y")
+	if got := s.SkillDescription("slide-builder"); got != strings.Join(strings.Fields(first), " ") {
+		t.Fatalf("SKILL.md = %q, want the applied wording %q", got, first)
+	}
+	if lab, err := runner.New(s).DescriptionLab("slide-builder"); err != nil || lab.Applied == nil {
+		t.Fatalf("the ledger did not record the application: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------- the frame
+
+// TestEveryScreenFitsTheWindow is the one property no screen may break: the view is the height of
+// the terminal, whatever it holds, and the status line is its last row.
+func TestEveryScreenFitsTheWindow(t *testing.T) {
+	m, _, _ := fixture(t)
+	screens := []struct {
+		name string
+		open func()
+	}{
+		{"door", func() { m.mode = screenLane }},
+		{"skills", func() { m.mode = screenSkill; m.loadSkills() }},
+		{"train set", func() { m.openSkill("slide-builder"); m.flow.step = StepTrain; m.reload() }},
+		{"validation set", func() { m.flow.step = StepValidation; m.reload() }},
+		{"iteration", func() { m.flow.step = StepIterate }},
+		{"generalize locked", func() { m.flow.step = StepGeneralize; m.flow.forced = false }},
+		{"help", func() { m.mode = screenHelp }},
+		{"document", func() { m.mode = screenDoc; m.doc = &docState{title: "t", lines: []string{"a", "b"}} }},
+	}
+	for _, sc := range screens {
+		sc.open()
+		for _, size := range [][2]int{{110, 32}, {80, 24}, {60, 16}} {
+			m.width, m.height = size[0], size[1]
+			view := m.View()
+			if got := len(strings.Split(view, "\n")); got != size[1] {
+				t.Fatalf("%s at %dx%d: %d rows", sc.name, size[0], size[1], got)
+			}
+			for _, line := range strings.Split(view, "\n") {
+				if w := len([]rune(line)); w > size[0] {
+					t.Fatalf("%s at %dx%d: a line is %d cells wide:\n%s", sc.name, size[0], size[1], w, line)
+				}
+			}
+		}
+	}
+}
+
+// TestAValidatedOnlyWordingIsStillPending: a description that has only been through the validation
+// set is not an iteration — the loop's unit is a train run — and it must not fall between the two
+// states the ladder reads.
+func TestAValidatedOnlyWordingIsStillPending(t *testing.T) {
+	m, root, s := fixture(t)
+	desc := s.SkillDescription("slide-builder")
+	iterationDir(t, root, desc, 1, []runner.ScoreRow{
+		row(3, "validation", true, true),
+		row(4, "validation", false, true),
+	})
+	m.openSkill("slide-builder")
+	if len(m.flow.iters) != 0 {
+		t.Fatalf("iterations = %d, want none: no train run has happened", len(m.flow.iters))
+	}
+	if m.flow.pending() == nil {
+		t.Fatal("a wording with no train measurement must read as pending, not as measured")
+	}
+	if got := m.iterHeadline(); !strings.Contains(got, "#1") {
+		t.Fatalf("headline = %q, want candidate #1", got)
+	}
+}
+
+// TestTheASCIIProfileDrawsOnlyASCII is the promise `--glyphs ascii` makes: a terminal without UTF-8
+// gets the same frame in plain characters, not a row of replacement boxes. Only the frame's own
+// marks are covered — the queries, descriptions and notes are the set's text and are not ours to
+// transliterate.
+func TestTheASCIIProfileDrawsOnlyASCII(t *testing.T) {
+	defer setName(unicodeGlyphs)
+	setName(asciiGlyphs)
+	v := reflect.ValueOf(asciiGlyphs)
+	for i := 0; i < v.NumField(); i++ {
+		mark := v.Field(i).String()
+		for _, r := range mark {
+			if r > 127 {
+				t.Fatalf("the ascii profile carries %q in %s", mark, v.Type().Field(i).Name)
+			}
+		}
+	}
+	m, _, _ := fixture(t)
+	m.width, m.height = 100, 30
+	m.openSkill("slide-builder")
+	for _, line := range strings.Split(m.View(), "\n") {
+		if strings.ContainsAny(line, "▸✓✗⟳…") {
+			t.Fatalf("an ascii frame drew a unicode mark:\n%s", line)
+		}
+	}
+}
+
+// TestTheBarNamesTheToolAtTheRightEdge: the row that tells you where you are ends with the tool and
+// the build, so a screenshot names its own binary from the corner, and the left edge is free for the
+// scope. The marks are stripped first because the assertions are about what a person reads.
+func TestTheBarNamesTheToolAtTheRightEdge(t *testing.T) {
+	m, _, _ := fixture(t)
+	m.width, m.height = 100, 30
+	m.openSkill("slide-builder")
+	plain := stripMarks(strings.Split(m.View(), "\n")[0])
+	if !strings.HasSuffix(plain, "evalctl "+m.ver) {
+		t.Fatalf("the bar must end with the tool and its build:\n%s", plain)
+	}
+	if strings.HasPrefix(plain, "evalctl") {
+		t.Fatalf("the tool still opens the bar:\n%s", plain)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(plain), "trigger optimization") {
+		t.Fatalf("the left edge must name the scope:\n%s", plain)
 	}
 }
