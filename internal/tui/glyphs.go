@@ -20,6 +20,7 @@ type glyphSet struct {
 	Running  string // a run in flight
 	Done     string // a finished run, a step that is done, a pass
 	Failed   string // a failed arm or query
+	Seam     string // the divider between a list and the pane beside it
 	Arrow    string // "this becomes that": the step screen's one action line
 	Rule     string // the thin rules inside a screen
 	Heavy    string // the rule under the bar, so the bar reads as a bar
@@ -28,11 +29,11 @@ type glyphSet struct {
 
 var (
 	unicodeGlyphs = glyphSet{
-		Name: "unicode", Cursor: "▶ ", Running: "⟳", Done: "✓", Failed: "✗",
+		Name: "unicode", Cursor: "▶ ", Running: "⟳", Done: "✓", Failed: "✗", Seam: "│",
 		Arrow: "→", Rule: "─", Heavy: "━", Ellipsis: "…",
 	}
 	asciiGlyphs = glyphSet{
-		Name: "ascii", Cursor: "> ", Running: "~", Done: "+", Failed: "x",
+		Name: "ascii", Cursor: "> ", Running: "~", Done: "+", Failed: "x", Seam: "|",
 		Arrow: ">", Rule: "-", Heavy: "=", Ellipsis: "~",
 	}
 )

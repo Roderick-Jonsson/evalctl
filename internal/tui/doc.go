@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // The documents the loop reads: the train failures, a report, an activity log.
@@ -62,16 +63,37 @@ func (d *docState) position() string {
 // docWriter is the shape every step screen's prose takes: a title in the step's own words, the one
 // rule the step exists for, a rule, labelled facts, and a single action line. Keeping it in one type
 // is what makes the four steps read as one flow rather than four opinions about where a label goes.
+//
+// Its width is the width of the column it is drawn into, indents included — the two spaces in front
+// of every line are part of the budget, not a detail a caller adds afterwards. A writer that wraps
+// to w and then indents by two produces lines the pane cuts mid-word, which is exactly the kind of
+// quiet overflow the frame's last-line trim then hides.
 type docWriter struct {
 	lines []string
-	w     int
+	w     int // the column's width, indents included
+	label int // fact label column; 0 means 14
+}
+
+// body is the width available to prose once the two-space indent is spent.
+func (d *docWriter) body() int {
+	if d.w <= 4 {
+		return max(1, d.w)
+	}
+	return d.w - 2
+}
+
+func (d *docWriter) labelW() int {
+	if d.label > 0 {
+		return d.label
+	}
+	return 14
 }
 
 func (d *docWriter) blank() { d.lines = append(d.lines, "") }
 
 func (d *docWriter) title(text string) {
 	d.blank()
-	for _, line := range wrapPlain(text, d.w) {
+	for _, line := range wrapPlain(text, d.body()) {
 		d.lines = append(d.lines, "  "+titleStyle.Render(line))
 	}
 }
@@ -86,38 +108,53 @@ func (d *docWriter) lead(text string) {
 	if text == "" {
 		return
 	}
-	for _, line := range wrapPlain(text, d.w) {
+	for _, line := range wrapPlain(text, d.body()) {
 		d.lines = append(d.lines, "  "+dimStyle.Render(line))
 	}
 }
 
 func (d *docWriter) rule() {
-	d.lines = append(d.lines, "  "+dimStyle.Render(strings.Repeat(glyphs.Rule, min(64, max(10, d.w)))))
+	d.lines = append(d.lines, "  "+dimStyle.Render(strings.Repeat(glyphs.Rule, min(64, max(10, d.body())))))
 }
 
 // fact is one labelled value. The label column is fixed, so four facts read as a table and not as
-// four sentences.
+// four sentences. A value too long for the line is cut with the ellipsis mark rather than left to
+// the frame's trim: the trim is width-invisible, the mark is not.
 func (d *docWriter) fact(label, value string) {
-	d.lines = append(d.lines, fmt.Sprintf("  %-14s %s", label, value))
+	lw := d.labelW()
+	room := max(10, d.body()-lw-1)
+	lines := wrapPlain(value, room)
+	d.lines = append(d.lines, fmt.Sprintf("  %-*s %s", lw, label, lines[0]))
+	for _, line := range lines[1:] {
+		d.lines = append(d.lines, strings.Repeat(" ", lw+3)+line)
+	}
 }
 
 // note is an aside that belongs to the fact above it.
 func (d *docWriter) note(text string) {
-	for _, line := range wrapPlain(text, d.w-8) {
+	for _, line := range wrapPlain(text, max(8, d.body()-6)) {
 		d.lines = append(d.lines, "      "+dimStyle.Render(line))
 	}
 }
 
 // para is the guide's own advice, where a step uses it.
 func (d *docWriter) para(text string) {
-	for _, line := range wrapPlain(text, d.w) {
+	for _, line := range wrapPlain(text, d.body()) {
 		d.lines = append(d.lines, "  "+dimStyle.Render(line))
 	}
 }
 
 // action is the last line before the key bar and the only line that says what to press. Every step
-// has exactly one.
+// has exactly one. A long action wraps under its own indent, because a line the frame trims would
+// lose the end of the sentence that says what happens next.
 func (d *docWriter) action(key, text string) {
 	d.blank()
-	d.lines = append(d.lines, "  "+cursorMark.Render(glyphs.Arrow)+" "+titleStyle.Render(key)+"  "+text)
+	indent := "  " + glyphs.Arrow + " " + key + "  "
+	for i, line := range wrapPlain(text, max(12, d.body()-lipgloss.Width(indent))) {
+		if i == 0 {
+			d.lines = append(d.lines, "  "+cursorMark.Render(glyphs.Arrow)+" "+titleStyle.Render(key)+"  "+line)
+			continue
+		}
+		d.lines = append(d.lines, strings.Repeat(" ", lipgloss.Width(indent))+line)
+	}
 }

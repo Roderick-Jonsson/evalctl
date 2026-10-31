@@ -378,7 +378,7 @@ func (m *Model) contextLine(w int) string {
 	}
 	switch m.mode {
 	case screenLane:
-		return dimStyle.Render("  output is the other loop, and it is not built yet — the trigger loop comes first")
+		return dimStyle.Render("  two questions about one skill: does it get loaded, and does the work come out right")
 	case screenSkill:
 		return dimStyle.Render("  the description loop is per skill — pick the one whose wording is being tuned")
 	case screenForm:
@@ -519,7 +519,9 @@ func (m *Model) statusRow() string {
 func (m *Model) stateText() string {
 	switch m.mode {
 	case screenLane:
-		return "the trigger loop is the one that is built"
+		// Nothing has happened yet: the status row is for what just happened, and the door has not
+		// done anything. The pane beside the list is where the explanation lives.
+		return ""
 	case screenSkill:
 		return plural(len(m.skillNames()), "skill") + " with a description to tune"
 	case screenFlow:

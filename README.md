@@ -91,32 +91,38 @@ already are.
 ```
  what to optimize                                                                     evalctl v0.8.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  output is the other loop, and it is not built yet — the trigger loop comes first
-
-▶ trigger optimization  built
-       does the right skill load? — tune the description until it does
-
-  output optimization  not built
-       does the skill produce the right thing? — not built yet
-
-
-  the trigger loop, in four steps
-    1 train set        the queries the wording may learn from
-    2 validation set    the queries that judge it, held back until the end
-    3 iterate           run the train set, read the failures, revise, repeat
-    4 generalize        run the validation set for every iteration and compare
-
-
-
-
-
-
+  two questions about one skill: does it get loaded, and does the work come out right
+                                  │ 
+                                  │   TRIGGER OPTIMIZATION
+▶ trigger optimization  built     │   built · the description loop
+                                  │   ──────────────────────────────────────────────────────────────
+  output optimization  not built  │   A skill only helps if it gets loaded, and the description is
+                                  │   the whole of the input — an agent decides from that one
+                                  │   paragraph. This lane measures the wording, revises it on what
+                                  │   the train set failed, and generalizes on a split no revision
+                                  │   could read.
+                                  │ 
+                                  │   The loop
+                                  │   1 train set    the queries the wording may learn from
+                                  │   2 validation   the queries that judge it, held back until the
+                                  │                  end
+                                  │   3 iterate      run, read the failures, revise, repeat
+                                  │   4 generalize   validation for every measured wording, then
+                                  │                  rank
+                                  │ 
+                                  │   → enter  pick the skill whose wording gets tuned
+                                  │ 
+                                  │ 
 enter open · q quit                                                                          ? keys 
- the trigger loop is the one that is built                                                    1 / 2 
+                                                                                              1 / 2 
 ```
 
-`enter` opens the trigger loop. `output` is the second optimization the tool will grow, and the door
-says plainly that it is not built rather than opening a "coming soon" screen.
+The two rows are the whole choice, and the pane beside them explains the one under the cursor: what
+the lane asks, what it does step by step, and what it leaves on disk. `j`/`k` move the pane with the
+cursor; `enter` opens the trigger loop. `output` is the second optimization the tool will grow, and the
+door says plainly that it is not built rather than opening a "coming soon" screen. Below the width
+that buys a pane, the selected row carries its own one-line explanation instead — nothing is hidden
+behind a divider that is not there.
 
 ### Which skill
 
@@ -128,6 +134,8 @@ says plainly that it is not built rather than opening a "coming soon" screen.
   SKILL                 TRAIN  VALID  ITERS    STATE
   ────────────────────────────────────────────────────────────────────────────────────────
 ▶ slide-builder         2      2      0/5      set ready — nothing measured yet
+
+
 
 
 
@@ -187,6 +195,8 @@ that is not allowed says why in the status row instead of doing nothing.
 
 
 
+
+
   ────────────────────────────────────────────────────────────────────────────────────────────────
   2 rows · 1 should trigger · 1 should not · 50% of the set (the guide asks ~60/40)
 
@@ -221,13 +231,15 @@ under the cursor, so the whole loop is one screenful:
   ────────────────────────────────────────────────────────────────────────────────────────────────
 
   Run the train set against one wording
-  The train run is the only measurement a revision may learn from. Validation is not run here — it
-  judges the wording in step 4, and measuring it now would let the loop learn from it.
+  The train run is the only measurement a revision may learn from. Validation is not run here —
+  it judges the wording in step 4, and measuring it now would let the loop learn from it.
   candidate      #1 · 52 characters
   scope          2 train queries × 3 runs per query = 6 agent calls
   writes         trigger-workspace/trigger-1/
 
   → enter  start the training run
+
+
 
 
 j k sub-step · enter do it · ctrl+g generalize early · esc skills                            ? keys 
@@ -261,6 +273,8 @@ wording nobody has measured should not be in it.
   ITERATION  TRAIN         VALIDATION   GAP    CHARS   NOTE
 ▶ 1          1/2 50%       2/2 100%     −50%   52      the description in SKILL.md when … ✓ in file
   2          2/2 100%      1/2 50%      +50%   91      named the deck, not the file
+
+
 
 
 

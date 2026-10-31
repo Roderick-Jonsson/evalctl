@@ -32,8 +32,42 @@ var laneRows = []struct {
 	{store.LaneOutput, "output optimization", "does the skill produce the right thing? — not built yet", false},
 }
 
+// The door: two selectors on the left, the one under the cursor explained on the right.
+//
+// It used to be two rows with a paragraph under each and, below them, the loop described again in
+// four more lines — three blocks of prose competing for one screen, and the loop explained twice. A
+// selector wants a list small enough to see whole, and a pane that answers "what is this" for the row
+// you are on; that is the shape every other screen here uses, something on the left and its detail on
+// the right.
 func (m *Model) laneBody(h int) []string {
-	lines := []string{""}
+	// The list takes a third of the width, the pane takes the rest up to a readable measure. A list
+	// wide enough for "output optimization  not built" and no wider: the pane is where the detail is,
+	// and a pane squeezed to pay for empty list cells explains nothing.
+	listW := min(36, max(26, m.width/3))
+	paneW := min(96, m.width-listW-3)
+	if paneW < 38 {
+		return m.laneNarrow(h)
+	}
+	left, right := m.laneList(), m.lanePreview(paneW, h)
+	seam := dimStyle.Render(glyphs.Seam)
+	out := make([]string, h)
+	for i := range out {
+		var l, r string
+		if i < len(left) {
+			l = left[i]
+		}
+		if i < len(right) {
+			r = right[i]
+		}
+		out[i] = fitTo(l, listW) + " " + seam + " " + fitWidth(r, paneW)
+	}
+	return out
+}
+
+// laneList is the whole choice: two rows, the one under the cursor marked, and whether the lane is
+// built. Nothing else belongs here — a description under a row is what the pane is for.
+func (m *Model) laneList() []string {
+	lines := []string{"", ""}
 	for i, row := range laneRows {
 		mark := "  "
 		if i == m.lanes.cursor {
@@ -43,19 +77,107 @@ func (m *Model) laneBody(h int) []string {
 		if !row.built {
 			state = dimStyle.Render("not built")
 		}
-		lines = append(lines, mark+titleStyle.Render(row.title)+"  "+state)
-		for _, line := range wrapPlain(row.blurb, max(20, m.width-10)) {
-			lines = append(lines, "       "+dimStyle.Render(line))
+		lines = append(lines, mark+titleStyle.Render(row.title)+"  "+state, "")
+	}
+	return lines
+}
+
+// lanePreview is the row under the cursor, said properly: what the lane asks, what it does, and what
+// it leaves on disk. The words are the guide's, not a summary of the screen behind it.
+//
+// It is assembled out of blocks and laid out from the top down, with the action line reserved first:
+// the pane is a column of a known height, and the last thing on it must be the key you press, not a
+// sentence cut in half by the frame. A block that does not fit is dropped whole — the run's paths go
+// before the loop does.
+func (m *Model) lanePreview(w, h int) []string {
+	row := laneRows[m.lanes.cursor]
+	d := &docWriter{w: w, label: 14}
+	var blocks [][]string
+	from := len(d.lines)
+	block := func() {
+		blocks = append(blocks, append([]string(nil), d.lines[from:]...))
+		from = len(d.lines)
+	}
+
+	d.title(strings.ToUpper(row.title))
+	if row.built {
+		d.lead("built · the description loop")
+	} else {
+		d.lead("not built yet")
+	}
+	d.rule()
+	block()
+
+	if row.built {
+		d.para("A skill only helps if it gets loaded, and the description is the whole of the input — an agent decides from that one paragraph. This lane measures the wording, revises it on what the train set failed, and generalizes on a split no revision could read.")
+		block()
+		d.card("The loop")
+		d.fact("1 train set", "the queries the wording may learn from")
+		d.fact("2 validation", "the queries that judge it, held back until the end")
+		d.fact("3 iterate", "run, read the failures, revise, repeat")
+		d.fact("4 generalize", "validation for every measured wording, then rank")
+		block()
+		d.card("It writes")
+		d.fact("the set", "trigger/trigger-evals.json")
+		d.fact("wordings", "trigger/descriptions/<skill>.json")
+		d.fact("the winner", "SKILL.md — the frontmatter key, nothing else")
+		block()
+	} else {
+		d.para("The other half of the question: with the skill loaded, does the work come out right? Each case runs twice — with the skill and without it — and what came back is read against the case's expected output and its assertions.")
+		block()
+		d.card("What it will hold")
+		d.fact("cases", "the ask, and the fixture each one stages")
+		d.fact("assertions", "the checks a run is graded on")
+		d.fact("fixtures", "evals/files/<slug>/ — the inputs, never the answers")
+		d.fact("iterations", "the runs, their reports and their scores")
+		block()
+		d.para("Not built: the trigger loop came first, because a skill that never loads produces nothing worth grading.")
+		block()
+	}
+
+	// The action, reserved before anything above it is placed.
+	actDoc := &docWriter{w: w}
+	if row.built {
+		actDoc.action("enter", "pick the skill whose wording gets tuned")
+	} else {
+		actDoc.blank()
+		for _, line := range wrapPlain("not available yet — the trigger loop is the one that is built", actDoc.body()) {
+			actDoc.lines = append(actDoc.lines, "  "+dimStyle.Render(line))
+		}
+	}
+	act := actDoc.lines
+	room := h - len(act)
+	var out []string
+	for _, b := range blocks {
+		if len(out)+len(b) > room {
+			break
+		}
+		out = append(out, b...)
+	}
+	return fitRows(append(out, act...), h)
+}
+
+// laneNarrow is the door without its pane. Below the width that buys one, the row under the cursor
+// carries its one-line explanation and nothing is hidden behind a divider that is not there.
+func (m *Model) laneNarrow(h int) []string {
+	lines := []string{""}
+	for i, row := range laneRows {
+		mark := "  "
+		if i == m.lanes.cursor {
+			mark = cursorMark.Render(glyphs.Cursor)
+		}
+		state := "built"
+		if !row.built {
+			state = "not built"
+		}
+		lines = append(lines, mark+titleStyle.Render(row.title)+"  "+dimStyle.Render(state))
+		if i == m.lanes.cursor {
+			for _, l := range wrapPlain(row.blurb, max(20, m.width-8)) {
+				lines = append(lines, "    "+dimStyle.Render(l))
+			}
 		}
 		lines = append(lines, "")
 	}
-	lines = append(lines, "",
-		"  "+titleStyle.Render("the trigger loop, in four steps"),
-		dimStyle.Render("    1 train set        the queries the wording may learn from"),
-		dimStyle.Render("    2 validation set    the queries that judge it, held back until the end"),
-		dimStyle.Render("    3 iterate           run the train set, read the failures, revise, repeat"),
-		dimStyle.Render("    4 generalize        run the validation set for every iteration and compare"),
-	)
 	return fitRows(lines, h)
 }
 

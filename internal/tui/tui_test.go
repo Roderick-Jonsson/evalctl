@@ -499,3 +499,36 @@ func TestTheBarIsAPathNotASentence(t *testing.T) {
 		t.Fatalf("the build left the bar:\n%s", got)
 	}
 }
+
+// TestTheDoorIsASelectorWithAPane: the door is two rows and the one under the cursor explained beside
+// them. The pane follows the cursor, and below the width that buys a pane the row carries its own
+// one-line explanation instead — nothing is hidden behind a divider that is not there.
+func TestTheDoorIsASelectorWithAPane(t *testing.T) {
+	m, _, _ := fixture(t)
+	m.width, m.height = 120, 32
+	body := strings.Join(m.laneBody(m.bodyHeight()), "\n")
+	if !strings.Contains(body, glyphs.Seam) {
+		t.Fatalf("the door has no pane:\n%s", body)
+	}
+	for _, want := range []string{"TRIGGER OPTIMIZATION", "The loop", "It writes", "pick the skill"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the trigger pane is missing %q:\n%s", want, body)
+		}
+	}
+	press(m, "j")
+	body = strings.Join(m.laneBody(m.bodyHeight()), "\n")
+	if !strings.Contains(body, "OUTPUT OPTIMIZATION") || !strings.Contains(body, "not built") {
+		t.Fatalf("the pane did not follow the cursor:\n%s", body)
+	}
+	if strings.Contains(body, "The loop") {
+		t.Fatalf("the pane still explains the row above the cursor:\n%s", body)
+	}
+	m.width = 60
+	narrow := strings.Join(m.laneBody(m.bodyHeight()), "\n")
+	if strings.Contains(narrow, glyphs.Seam) {
+		t.Fatalf("a narrow door drew a pane it has no room for:\n%s", narrow)
+	}
+	if !strings.Contains(narrow, "does the skill produce") {
+		t.Fatalf("a narrow door hid the explanation entirely:\n%s", narrow)
+	}
+}
