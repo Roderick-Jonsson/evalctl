@@ -426,11 +426,11 @@ func (f *flowState) hints(m *Model) []hint {
 			act = "revise"
 		}
 		return []hint{{"enter", act}, {"R", "run again"}, {"n", "new"}, {"e", "edit"},
-			{"d", "delete"}, {"space", "label"}, {"esc", "sections"}}
+			{"d", "delete"}, {"space", "should trigger"}, {"esc", "sections"}}
 	}
 	if f.step == 1 {
 		return []hint{{"enter", "to validate"}, {"n", "new"}, {"e", "edit"}, {"d", "delete"},
-			{"space", "label"}, {"esc", "sections"}}
+			{"space", "should trigger"}, {"esc", "sections"}}
 	}
 	if f.step == 2 {
 		switch {

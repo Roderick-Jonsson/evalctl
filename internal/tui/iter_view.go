@@ -39,7 +39,7 @@ func (m *Model) iterBody(h int) []string {
 // iterSet is the train set: the same table the set step used, cut to the column this screen has.
 func (m *Model) iterSet(w, h int) []string {
 	f := m.flow
-	const idW, labelW = 4, 5
+	const idW, labelW = 4, 7
 	withWhy := w >= 64
 	whyW := 0
 	if withWhy {
@@ -47,7 +47,7 @@ func (m *Model) iterSet(w, h int) []string {
 	}
 	queryW := max(16, w-2-3-idW-2-labelW-2-whyW)
 	head := "  " + dimStyle.Render(padCell("ID", idW, true)) + "   " +
-		dimStyle.Render(padCell("LABEL", labelW, false)) + "  " +
+		dimStyle.Render(padCell("TRIGGER", labelW, false)) + "  " +
 		dimStyle.Render(padCell("QUERY", queryW, false))
 	if withWhy {
 		head += "  " + dimStyle.Render("WHY")

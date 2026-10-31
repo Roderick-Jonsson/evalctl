@@ -636,7 +636,7 @@ func (m *Model) helpLines() []string {
 			"  n          new query in this split",
 			"  e          edit the row under the cursor",
 			"  d          delete the row under the cursor (asks first)",
-			"  space      flip the label: should trigger / should not",
+			"  space      flip should-trigger: the row asks the router yes or no",
 			"  j k g G    move; first and last row",
 		},
 		head("the two sections"),
@@ -647,7 +647,7 @@ func (m *Model) helpLines() []string {
 		head("iteration — the workbench"),
 		[]string{
 			"  n e d      new, edit, delete a query in the set",
-			"  space      flip the label: should trigger / should not",
+			"  space      flip should-trigger: the row asks the router yes or no",
 			"  enter      the loop's next thing: run the unmeasured wording, else revise",
 			"  R          run the train set again against the same wording",
 			"  f          the failures as full cards",

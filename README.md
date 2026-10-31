@@ -129,7 +129,7 @@ door says plainly that it is not built rather than opening a "coming soon" scree
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                                            │ 
   SKILL                TRAIN VALID   ITERS │   SLIDE-BUILDER
-▶ slide-builder            2     2     0/5 │   iteration · step 2 of 1,
+▶ slide-builder            2     2     0/5 │   iteration · step 1 of 1, the loop
                                            │   ─────────────────────────────────────────────────────
                                            │   set ready — nothing measured yet
                                            │ 
@@ -147,7 +147,7 @@ door says plainly that it is not built rather than opening a "coming soon" scree
                                            │   warning      no cases: the runner will have nothing t
                                            │                measure for this stage
                                            │ 
-                                           │   → enter  open at iteration ·
+                                           │   → enter  open at iteration · the loop
                                            │ 
 j k move · enter open the loop · esc lanes                                                   ? keys 
  1 skill with a description to tune                                                           1 / 1 
@@ -218,9 +218,9 @@ revise once it has been measured.
  iteration 1 of 5 · 1 of 2 pass (50%)
                                                         │ 
   TRAIN SET  2 queries                                  │   THE WORDING
-    ID   LABEL  QUERY                                   │   #1 · 52 characters · in SKILL.md
-▶    1   yes    build me slides from this outline       │   ────────────────────────────────────────
-     2   no     research the operator pattern for me    │   Use this skill when an outline has to
+    ID   TRIGGER  QUERY                                 │   #1 · 52 characters · in SKILL.md
+▶    1   yes      build me slides from this outline     │   ────────────────────────────────────────
+     2   no       research the operator pattern for …   │   Use this skill when an outline has to
                                                         │   become slides.
                                                         │ 
                                                         │   THE LAST RUN
@@ -237,20 +237,20 @@ revise once it has been measured.
   2 rows · 1 should trigger · 1 should not · 50% of     │ 
   the set (the guide asks ~60/40)                       │ 
                                                         │ 
-enter revise · R run again · n new · e edit · d delete · space label · esc sections          ? keys 
+enter revise · R run again · n new · e edit · d delete · space should trigger · esc sectio…  ? keys 
  the wording may learn from these rows — nothing else shapes a revision                             
 ```
 
 | on the screen | what it is |
 |---|---|
-| **train set** (left) | the queries the wording may learn from, edited in place: `n` new, `e` edit, `d` delete (confirmed), `space` flips the label. Every write goes to disk at the keystroke, because the next run reads the file |
+| **train set** (left) | the queries the wording may learn from, edited in place: `n` new, `e` edit, `d` delete (confirmed), `space` flips `TRIGGER` — the column is what the row asks the router, not a judgement about it. Every write goes to disk at the keystroke, because the next run reads the file |
 | **the wording** | the candidate under test, its length, and whether `SKILL.md` currently holds it |
 | **the last run** | which iteration and trigger run measured it, the train rate, and what the revision before it fixed or broke |
 | **failures** | the rows that failed and which way the wording is wrong — too narrow, too broad, unstable. `f` opens them as full cards: the ask, the `why`, and what loaded instead |
 
 The pane's action line says what `enter` does right now, so the loop is one key: run, read, revise,
 run. `R` runs again on purpose (a re-measurement of the same wording), and the train set's own facts —
-both labels, its share of the whole set — sit under the table with the one warning worth making.
+both answers to `TRIGGER`, its share of the whole set — sit under the table with the one warning worth making.
 
 A revision does not touch `SKILL.md`: it becomes the next candidate in the ledger, and the following
 training run is what writes it into the file, because the file is what the router reads and a wording

@@ -44,7 +44,7 @@ func (m *Model) setBody(h int) []string {
 		return fitRows(lines, h)
 	}
 	f.clampSet(room)
-	head := "  " + headerFocus.Render(fitTo("ID", 4)) + "  " + headerFocus.Render(fitTo("LABEL", 5)) + "  " +
+	head := "  " + headerFocus.Render(fitTo("ID", 4)) + "  " + headerFocus.Render(fitTo("TRIGGER", 7)) + "  " +
 		headerFocus.Render(fitTo("QUERY", max(20, m.width-4-4-5-6-2-30))) + "  " +
 		headerFocus.Render("WHY")
 	lines = append(lines, head)
@@ -64,7 +64,7 @@ func (m *Model) setBody(h int) []string {
 	return fitRows(lines, h)
 }
 
-// setRow is one query: the id, the label it must not lie about, the text, and the reason it is in
+// setRow is one query: the id, whether it should trigger, the text, and the reason it is in
 // the set — which is the field the ladder reads back to you when the row fails.
 func (m *Model) setRow(i, w int) string {
 	f := m.flow
@@ -73,11 +73,11 @@ func (m *Model) setRow(i, w int) string {
 	if i == f.sel {
 		mark = cursorMark.Render(glyphs.Cursor)
 	}
-	label := colYes.Render(fitTo("yes", 5))
+	label := colYes.Render(fitTo("yes", 7))
 	if e.Label == "no" {
-		label = colNo.Render(fitTo("no", 5))
+		label = colNo.Render(fitTo("no", 7))
 	}
-	queryW := max(20, w-4-4-5-6-2-30)
+	queryW := max(20, w-4-4-7-6-2-30)
 	why := e.Why
 	if why == "" {
 		why = "—"
