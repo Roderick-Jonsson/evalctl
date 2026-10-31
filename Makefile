@@ -15,7 +15,10 @@ GOBIN   := $(or $(shell go env GOBIN),$(shell go env GOPATH)/bin)
 GITDIR  := $(shell git rev-parse --absolute-git-dir 2>/dev/null)
 HOOKS   := $(GITDIR)/hooks
 COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null)
-DIRTY   := $(shell git diff --quiet 2>/dev/null && echo false || echo true)
+# Dirty means THIS tool's sources, not the repository: a commit elsewhere in the tree (an eval set,
+# a skill reference) does not change what the binary measured, and the `+` in the header is a claim
+# about the harness. Both halves are checked, so a staged edit counts as dirty too.
+DIRTY   := $(shell git diff --quiet -- . 2>/dev/null && git diff --cached --quiet -- . 2>/dev/null && echo false || echo true)
 BUILT   := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X $(MODULE).Commit=$(COMMIT) -X $(MODULE).BuiltAt=$(BUILT) -X $(MODULE).Modified=$(DIRTY)
 

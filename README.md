@@ -48,7 +48,7 @@ The number lives in `internal/version/version.go` and is hand-edited: bump it wh
 store rules, the profiles or the case format change, because an iteration measured by a different
 harness is not comparable with the last one. It is also the first thing in the artifact:
 
-- the TUI header carries `v0.5.0` (a `+` means the binary came from a dirty tree);
+- the TUI header carries `v0.8.0` (a `+` means the tool's own sources were dirty at build time);
 - `<skill>-workspace/iteration-N/meta.json` and `trigger-workspace/trigger-N/meta.json` record `provenance.tool`
   (version, commit, dirty, `built_at`);
 - both `report.md` files name the build that generated them, and a run's start line prints it.
