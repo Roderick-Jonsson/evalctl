@@ -38,8 +38,8 @@ a stale-binary warning — never a failed commit. It is per-clone: run it once a
 inside the repo just works, installed or not.
 
 `--glyphs auto|unicode|ascii` (`$EVALCTL_GLYPHS` as the default) picks the marks the frame draws
-itself: the cursor, the rule under the bar, the rail's marks for a step that is done, current or
-locked, and a run in flight. `auto` follows the locale. The ASCII profile draws the same frame in `> | - + x` for a
+itself: the cursor, the rule under the bar, and a run in flight. The rail does not use marks: its
+state is a word (see below), because a breadcrumb has to be readable before it is pretty. `auto` follows the locale. The ASCII profile draws the same frame in `> | - + x` for a
 terminal without UTF-8 — same widths, same columns, and a test that no frame mark escapes it.
 
 ## Version
@@ -85,7 +85,7 @@ four tabs is now the rail at the top of every step, which is also the resume poi
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   output is the other loop, and it is not built yet — the trigger loop comes first
 
-▸ trigger optimization  built
+▶ trigger optimization  built
        does the right skill load? — tune the description until it does
 
   output optimization  not built
@@ -119,7 +119,7 @@ says plainly that it is not built rather than opening a "coming soon" screen.
 
   SKILL                 TRAIN  VALID  ITERS    STATE
   ────────────────────────────────────────────────────────────────────────────────────────
-▸ slide-builder         2      2      0/5      set ready — nothing measured yet
+▶ slide-builder         2      2      0/5      set ready — nothing measured yet
 
 
 
@@ -151,23 +151,28 @@ paraphrase would measure a text nobody ships.
 ### The four steps
 
 ```
-✓ 1 train set ─── ✓ 2 validation set ─── ▸ 3 iterate ─── 4 generalize · locked
+LOOP  1 TRAIN SET DONE > 2 VALIDATION SET DONE > 3 ITERATE NOW > 4 GENERALIZE LOCKED
 ```
 
-`✓` done, `▸` current, `·` waiting, `locked` behind the gate. The number keys `1`–`4` jump, and a jump
-that is not allowed says why in the status row instead of doing nothing.
+Every step is spelled out in a word — `DONE`, `NOW`, `TO DO`, `LOCKED` — because a one-cell tick or
+triangle is a speck at a glance, and the state has to survive a monochrome terminal, a font without
+the glyph and a screenshot. The step you are in is reversed (accent fill, dark text) as well, and
+`LOOP` in front says the row is navigation and not content — a narrow window gives that label up
+first, then the long names (`VALIDATION SET` → `VALIDATE`), and never the state words. The number
+keys `1`–`4` jump, and a jump that is not allowed says why in the status row instead of doing
+nothing.
 
 **Steps 1 and 2 — the query set.** One table per split, edited in place:
 
 ```
  trigger optimization · slide-builder · train set   train set · 2 rows                evalctl v0.8.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- ▸ 1 train set ─── ✓ 2 validation set ─── 3 iterate ─── 4 generalize · locked
+ LOOP  1 TRAIN SET NOW > 2 VALIDATION SET DONE > 3 ITERATE TO DO > 4 GENERALIZE LOCKED
 
   train set — the queries the wording may learn from
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ID    LABEL  QUERY                                              WHY
-▸ 1     yes    build me slides from this outline                  core ask                      
+▶ 1     yes    build me slides from this outline                  core ask                      
   2     no     research the operator pattern for me               near miss                     
 
 
@@ -202,11 +207,11 @@ under the cursor, so the whole loop is one screenful:
 ```
  trigger optimization · slide-builder · iterate   iteration 1 of 5                    evalctl v0.8.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- ✓ 1 train set ─── ✓ 2 validation set ─── ▸ 3 iterate ─── 4 generalize · locked
+ LOOP  1 TRAIN SET DONE > 2 VALIDATION SET DONE > 3 ITERATE NOW > 4 GENERALIZE LOCKED
 
   iteration 1 of 5 · candidate #1
   ────────────────────────────────────────────────────────────────────────────────────────────────
-▸ 1  training run     candidate #1 is waiting to be measured
+▶ 1  training run     candidate #1 is waiting to be measured
   2  training result  nothing to read yet
   3  optimize         blocked — #1 is unmeasured
   4  generalize       locked · 5 more iteration(s) · ctrl+g forces it
@@ -246,12 +251,12 @@ wording nobody has measured should not be in it.
 ```
  trigger optimization · slide-builder · generalize   2 iterations measured            evalctl v0.8.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- ✓ 1 train set ─── ✓ 2 validation set ─── ✓ 3 iterate ─── ▸ 4 generalize
+ LOOP  1 TRAIN SET DONE > 2 VALIDATION SET DONE > 3 ITERATE DONE > 4 GENERALIZE NOW
 
   generalization · every measured wording on the validation set
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ITERATION  TRAIN         VALIDATION   GAP    CHARS   NOTE
-▸ 1          1/2 50%       2/2 100%     −50%   52      the description in SKILL.md when … ✓ in file
+▶ 1          1/2 50%       2/2 100%     −50%   52      the description in SKILL.md when … ✓ in file
   2          2/2 100%      1/2 50%      +50%   91      named the deck, not the file
 
 

@@ -472,3 +472,27 @@ func TestTheBarNamesTheToolAtTheRightEdge(t *testing.T) {
 		t.Fatalf("the left edge must name the scope:\n%s", plain)
 	}
 }
+
+// TestTheRailIsSpelledOut: the breadcrumb states each step in a word. A mark is a speck on a
+// terminal, and the state has to be readable without colour, so DONE / NOW / LOCKED are words.
+func TestTheRailIsSpelledOut(t *testing.T) {
+	m, _, _ := fixture(t)
+	m.width, m.height = 120, 30
+	m.openSkill("slide-builder")
+	rail := stripMarks(m.flow.rail(120))
+	for _, want := range []string{"1 TRAIN SET DONE", "2 VALIDATION SET DONE", "3 ITERATE NOW", "4 GENERALIZE LOCKED"} {
+		if !strings.Contains(rail, want) {
+			t.Fatalf("the rail must say %q:\n%s", want, rail)
+		}
+	}
+	// A narrow window shortens the names and keeps the words: the state is what the row is for.
+	narrow := stripMarks(m.flow.rail(74))
+	if !strings.Contains(narrow, "NOW") || !strings.Contains(narrow, "LOCKED") {
+		t.Fatalf("a narrow rail lost its state words:\n%s", narrow)
+	}
+	// Forcing the gate is what turns LOCKED into NOW, so the word tracks the rule and not the layout.
+	m.flow.forced = true
+	if forced := stripMarks(m.flow.rail(120)); strings.Contains(forced, "LOCKED") {
+		t.Fatalf("a forced gate still reads locked:\n%s", forced)
+	}
+}

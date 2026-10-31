@@ -28,7 +28,7 @@ type glyphSet struct {
 
 var (
 	unicodeGlyphs = glyphSet{
-		Name: "unicode", Cursor: "▸ ", Running: "⟳", Done: "✓", Failed: "✗",
+		Name: "unicode", Cursor: "▶ ", Running: "⟳", Done: "✓", Failed: "✗",
 		Arrow: "→", Rule: "─", Heavy: "━", Ellipsis: "…",
 	}
 	asciiGlyphs = glyphSet{

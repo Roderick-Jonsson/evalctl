@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"evalctl/internal/runner"
 	"evalctl/internal/store"
@@ -257,27 +258,78 @@ func (f *flowState) stepState(step int) subState {
 	return stateWaiting
 }
 
-// rail is the navigation: four steps, what state each one is in, and the one gate in the flow.
+// rail is the navigation, and it is spelled out.
+//
+// It used to be marks: a tick, a triangle, and three-cell rules between them. At one cell a mark is
+// a speck — at a glance the tick and the triangle are the same grey speck — and the rule between two
+// segments reads as punctuation rather than as a sequence. So the state is a word: DONE, NOW, TO DO,
+// LOCKED. A word survives a monochrome terminal, a font without the glyphs, a small window and a
+// screenshot; a mark survives none of those with certainty.
+//
+// The current step is still reversed — the accent fill, dark text — because a filled block is the
+// fastest thing on the row to find, and the word is what keeps it true when the colour is gone.
+
 func (f *flowState) rail(w int) string {
-	var b strings.Builder
-	b.WriteString(" ")
-	for i, step := range stepOrder {
-		if i > 0 {
-			b.WriteString(dimStyle.Render(" " + strings.Repeat(glyphs.Rule, 3) + " "))
-		}
-		label := fmt.Sprintf("%d %s", step, stepNames[step])
-		switch f.stepState(step) {
-		case stateCurrent:
-			b.WriteString(cursorMark.Render(glyphs.Cursor + label))
-		case stateDone:
-			b.WriteString(styleOn.Render(glyphs.Done + " " + label))
-		case stateLocked:
-			b.WriteString(dimStyle.Render(label + " · locked"))
-		default:
-			b.WriteString(dimStyle.Render(label))
+	// Three tiers, each a whole rendering: the long names with the strip's label, the short names
+	// with it, then the short names on their own. The state words are never what gets dropped — a
+	// rail that says "1 > 2 > 3 > 4" has stopped being a rail.
+	tiers := []struct {
+		label bool
+		names map[int]string
+	}{
+		{true, railNamesFull},
+		{true, railNamesCompact},
+		{false, railNamesCompact},
+	}
+	for _, t := range tiers {
+		line := f.railLine(t.names, t.label)
+		if lipgloss.Width(line) <= w {
+			return line
 		}
 	}
-	return ellipsis(b.String(), w)
+	return ellipsis(f.railLine(railNamesCompact, false), w)
+}
+
+var railNamesFull = map[int]string{
+	StepTrain:      "TRAIN SET",
+	StepValidation: "VALIDATION SET",
+	StepIterate:    "ITERATE",
+	StepGeneralize: "GENERALIZE",
+}
+
+var railNamesCompact = map[int]string{
+	StepTrain:      "TRAIN",
+	StepValidation: "VALIDATE",
+	StepIterate:    "ITERATE",
+	StepGeneralize: "GENERALIZE",
+}
+
+func (f *flowState) railLine(names map[int]string, label bool) string {
+	var b strings.Builder
+	// The word in front is what makes the row read as a strip of navigation rather than a line of
+	// content: four segments and three arrows could otherwise be anything. It is the first thing
+	// a narrow window gives up, because the segments still say what they are.
+	b.WriteString(" ")
+	if label {
+		b.WriteString(dimStyle.Render("LOOP") + "  ")
+	}
+	for i, step := range stepOrder {
+		if i > 0 {
+			b.WriteString(dimStyle.Render(" > "))
+		}
+		label := fmt.Sprintf("%d %s", step, names[step])
+		switch f.stepState(step) {
+		case stateCurrent:
+			b.WriteString(brandName.Render(label + " NOW"))
+		case stateDone:
+			b.WriteString(styleOn.Render(label + " DONE"))
+		case stateLocked:
+			b.WriteString(dimStyle.Render(label + " LOCKED"))
+		default:
+			b.WriteString(dimStyle.Render(label + " TO DO"))
+		}
+	}
+	return b.String()
 }
 
 // stateLine is the fact pair the bar carries beside the scope: where the loop is, in numbers.
