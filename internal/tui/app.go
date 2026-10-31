@@ -31,15 +31,16 @@ import (
 type screen int
 
 const (
-	screenLane    screen = iota // the front door: the two optimizations
-	screenSkill                 // which skill, with where each one is in the loop
-	screenFlow                  // the loop's four steps, one filling the body
-	screenForm                  // a query's own fields
-	screenDraft                 // the description being revised
-	screenAsk                   // a yes/no question
-	screenDoc                   // a scrollable document (failures, a report, a log)
-	screenRunAsk                // what a run will do, before it does it
-	screenRunLive               // the run, while it runs
+	screenLane     screen = iota // the front door: the two optimizations
+	screenSkill                  // which skill, with where each one is in the loop
+	screenSections               // iteration or generalization
+	screenFlow                   // the section's steps, one filling the body
+	screenForm                   // a query's own fields
+	screenDraft                  // the description being revised
+	screenAsk                    // a yes/no question
+	screenDoc                    // a scrollable document (failures, a report, a log)
+	screenRunAsk                 // what a run will do, before it does it
+	screenRunLive                // the run, while it runs
 	screenHelp
 )
 
@@ -55,15 +56,16 @@ type Model struct {
 	statusErr     bool
 	quitArmed     bool
 
-	lanes  laneState
-	skills skillState
-	flow   *flowState
-	form   *formState
-	draft  *draftState
-	ask    *askState
-	doc    *docState
-	run    *runState
-	help   int
+	lanes    laneState
+	skills   skillState
+	sections sectionState
+	flow     *flowState
+	form     *formState
+	draft    *draftState
+	ask      *askState
+	doc      *docState
+	run      *runState
+	help     int
 
 	// backTo is where a screen opened off a step returns to, so a form or a document always hands
 	// the flow back the way it left it.
@@ -192,6 +194,8 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.updateLane(msg)
 	case screenSkill:
 		return m, m.updateSkills(msg)
+	case screenSections:
+		return m, m.updateSections(msg)
 	case screenFlow:
 		return m, m.updateFlow(msg)
 	case screenAsk:
@@ -223,6 +227,8 @@ func (m *Model) escUp() tea.Cmd {
 		m.skill, m.flow = "", nil
 		m.mode = screenLane
 	case screenFlow:
+		m.mode = screenSections
+	case screenSections:
 		m.skill, m.flow = "", nil
 		m.mode = screenSkill
 	case screenForm:
@@ -320,7 +326,7 @@ func (m *Model) pathSegments() []string {
 	switch m.mode {
 	case screenFlow:
 		if m.flow != nil {
-			segs = append(segs, stepNames[m.flow.step])
+			segs = append(segs, m.flow.sectionName(), m.flow.stepName())
 		}
 	case screenForm:
 		segs = append(segs, "query")
@@ -396,7 +402,7 @@ func (m *Model) contextLine(w int) string {
 		if m.run != nil {
 			return dimStyle.Render("  " + m.run.hint)
 		}
-	case screenDoc, screenAsk:
+	case screenSections, screenDoc, screenAsk:
 		return ""
 	}
 	return ""
@@ -408,6 +414,8 @@ func (m *Model) bodyLines(h int) []string {
 		return m.laneBody(h)
 	case screenSkill:
 		return m.skillBody(h)
+	case screenSections:
+		return m.sectionsBody(h)
 	case screenFlow:
 		if m.flow != nil {
 			return m.flow.body(m, h)
@@ -473,6 +481,8 @@ func (m *Model) hints() []hint {
 		return []hint{{"enter", "open"}, {"q", "quit"}}
 	case screenSkill:
 		return []hint{{"j k", "move"}, {"enter", "open the loop"}, {"esc", "lanes"}}
+	case screenSections:
+		return []hint{{"j k", "move"}, {"enter", "open"}, {"esc", "skills"}}
 	case screenFlow:
 		if m.flow != nil {
 			return m.flow.hints(m)
@@ -529,6 +539,8 @@ func (m *Model) stateText() string {
 		return ""
 	case screenSkill:
 		return plural(len(m.skillNames()), "skill") + " with a description to tune"
+	case screenSections:
+		return "iteration works the train set; generalization judges the wording on the validation set"
 	case screenFlow:
 		if m.flow != nil {
 			return m.flow.stateText()
@@ -555,8 +567,10 @@ func (m *Model) position() string {
 	switch m.mode {
 	case screenFlow:
 		if m.flow != nil {
-			return fmt.Sprintf("step %d of 4", m.flow.step)
+			return fmt.Sprintf("step %d of %d", m.flow.step, m.flow.stepCount())
 		}
+	case screenSections:
+		return fmt.Sprintf("%d / 2", m.sections.cursor+1)
 	case screenSkill:
 		return fmt.Sprintf("%d / %d", m.skills.cursor+1, max(1, len(m.skillNames())))
 	case screenLane:
@@ -617,17 +631,23 @@ func (m *Model) helpLines() []string {
 			"  space      flip the label: should trigger / should not",
 			"  j k g G    move; first and last row",
 		},
-		head("step 3 — the iteration"),
+		head("the two sections"),
 		[]string{
-			"  j k        pick a sub-step of the loop",
-			"  enter      do it: run the train set, read the failures, or revise",
-			"  ctrl+g     generalize before five iterations, with the warning",
+			"  j k        iteration or generalization, on the skill's section screen",
+			"  esc        one level back: a step to its section, a section to the skills",
 		},
-		head("step 4 — generalization"),
+		head("iteration — the train set"),
 		[]string{
-			"  enter      run the validation set for every measured iteration",
-			"  a          apply the iteration under the cursor to SKILL.md",
+			"  n e d      new, edit, delete a query in the split",
+			"  space      flip the label: should trigger / should not",
+			"  j k enter  pick a rung of the ladder: run, read the failures, revise",
+		},
+		head("generalization — the validation set"),
+		[]string{
+			"  enter      run the validation set for every measured wording",
+			"  a          apply the wording under the cursor to SKILL.md",
 			"  h          run the fresh queries (holdout) once, after applying",
+			"  ctrl+g     validate before five iterations, with the warning",
 		},
 		head("a run"),
 		[]string{

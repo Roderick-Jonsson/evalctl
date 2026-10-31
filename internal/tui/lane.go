@@ -49,20 +49,7 @@ func (m *Model) laneBody(h int) []string {
 	if paneW < 38 {
 		return m.laneNarrow(h)
 	}
-	left, right := m.laneList(), m.lanePreview(paneW, h)
-	seam := dimStyle.Render(glyphs.Seam)
-	out := make([]string, h)
-	for i := range out {
-		var l, r string
-		if i < len(left) {
-			l = left[i]
-		}
-		if i < len(right) {
-			r = right[i]
-		}
-		out[i] = fitTo(l, listW) + " " + seam + " " + fitWidth(r, paneW)
-	}
-	return out
+	return m.splitBody(h, listW, paneW, m.laneList(), m.lanePreview(paneW, h))
 }
 
 // laneList is the whole choice: two rows, the one under the cursor marked, and whether the lane is
@@ -112,11 +99,9 @@ func (m *Model) lanePreview(w, h int) []string {
 	if row.built {
 		d.para("A skill only helps if it gets loaded, and the description is the whole of the input — an agent decides from that one paragraph. This lane measures the wording, revises it on what the train set failed, and generalizes on a split no revision could read.")
 		block()
-		d.card("The loop")
-		d.fact("1 train set", "the queries the wording may learn from")
-		d.fact("2 validation", "the queries that judge it, held back until the end")
-		d.fact("3 iterate", "run, read the failures, revise, repeat")
-		d.fact("4 generalize", "validation for every measured wording, then rank")
+		d.card("The two activities")
+		d.fact("iteration", "the train set: run it, read the failures, revise the wording")
+		d.fact("generalization", "the validation set: run every wording against it, then rank")
 		block()
 		d.card("It writes")
 		d.fact("the set", "trigger/trigger-evals.json")
@@ -231,12 +216,13 @@ type skillRow struct {
 	cands             int
 	applied           int
 	chars             int
-	step              int // the step the loop opens at
+	sec               int // the section the loop opens in
+	step              int // the step inside it
 }
 
 func (m *Model) skillNames() []string { return m.store.KnownSkills() }
 
-// openSkill enters one skill's loop at the step the disk says it is on, and never at step 1 for the
+// openSkill enters one skill's loop at the section the disk says the work is in, and never at the
 // sake of starting there: the loop is resumable, so the tool reads where the work stopped.
 func (m *Model) openSkill(name string) {
 	if m.store.Skill(name) == nil {
@@ -244,7 +230,7 @@ func (m *Model) openSkill(name string) {
 		return
 	}
 	m.skill = name
-	m.flow = &flowState{step: StepTrain}
+	m.flow = &flowState{sec: secIteration}
 	m.reload()
 	// A skill with no ledger yet starts the loop from the wording SKILL.md already carries, copied
 	// verbatim and recorded as candidate #1. Retyping your own description is the one step of the
@@ -257,8 +243,11 @@ func (m *Model) openSkill(name string) {
 			m.setStatus("candidate #1 adopted from "+name+"/SKILL.md", false)
 		}
 	}
-	m.flow.resume(m)
-	m.mode = screenFlow
+	// The skill opens on the choice between its two activities, with the cursor on the one the disk
+	// says the work is waiting in.
+	sec, _ := loopOpen(m.flow.lab)
+	m.sections = sectionState{cursor: sec}
+	m.mode = screenSections
 }
 
 // loadSkills fills the list. Each row needs the loop's own state, so this walks every skill's
@@ -287,7 +276,7 @@ func (m *Model) loadSkills() {
 			if lab.Applied != nil {
 				row.applied = lab.Applied.Candidate
 			}
-			row.step = loopStep(lab)
+			row.sec, row.step = loopOpen(lab)
 		}
 		for _, e := range m.store.Rows(store.LaneTrigger, store.Filter{Skill: name, Split: store.SplitTrain}) {
 			if e.Label == "yes" {
@@ -314,9 +303,9 @@ func loopState(lab *runner.Lab, iters int) string {
 	case lab == nil:
 		return "—"
 	case lab.TrainRows == 0:
-		return "no train queries — step 1"
+		return "no train queries — iteration"
 	case lab.ValidationRows == 0:
-		return "no validation queries — step 2"
+		return "no validation queries — generalization"
 	case iters == 0:
 		return "set ready — nothing measured yet"
 	case lab.Applied != nil && noCandidateLeft(lab):
@@ -365,20 +354,7 @@ func (m *Model) skillSplit(h, paneW int) []string {
 	for i := m.skills.top; i < len(m.skills.rows) && i < m.skills.top+room; i++ {
 		left = append(left, m.skillTableRow(i, false))
 	}
-	right := m.skillPane(paneW, h)
-	seam := dimStyle.Render(glyphs.Seam)
-	out := make([]string, h)
-	for i := range out {
-		var l, r string
-		if i < len(left) {
-			l = left[i]
-		}
-		if i < len(right) {
-			r = right[i]
-		}
-		out[i] = fitTo(l, skillTableW) + " " + seam + " " + fitWidth(r, paneW)
-	}
-	return out
+	return m.splitBody(h, skillTableW, paneW, left, m.skillPane(paneW, h))
 }
 
 // skillStacked is the chooser without a pane: the whole table, and the row under the cursor spelled
@@ -474,7 +450,7 @@ func (m *Model) skillPane(w, h int) []string {
 	}
 
 	d.title(strings.ToUpper(r.name))
-	d.lead(fmt.Sprintf("step %d of %d · %s measured", r.step, len(stepOrder), plural(r.iters, "iteration")))
+	d.lead(fmt.Sprintf("%s · step %d of %d, %s", secNames[r.sec], r.step, len(stepsOf(r.sec)), stepNameAt(r.sec, r.step)))
 	d.rule()
 	block()
 
@@ -510,7 +486,7 @@ func (m *Model) skillPane(w, h int) []string {
 	}
 
 	actDoc := &docWriter{w: w}
-	actDoc.action("enter", fmt.Sprintf("open at step %d — %s", r.step, stepNames[r.step]))
+	actDoc.action("enter", fmt.Sprintf("open at %s · %s", secNames[r.sec], stepNameAt(r.sec, r.step)))
 	room := h - len(actDoc.lines)
 	var out []string
 	for _, b := range blocks {

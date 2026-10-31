@@ -148,6 +148,25 @@ func fitWidth(s string, w int) string {
 	return lipgloss.NewStyle().MaxWidth(w).Render(s)
 }
 
+// splitBody lays a choice and its pane side by side: the list at listW, a seam, and the pane filling
+// the rest. Three screens use it — the door, the skill chooser and the section screen — because a
+// layout that is only mostly the same is a layout you have to look at twice.
+func (m *Model) splitBody(h, listW, paneW int, left, right []string) []string {
+	seam := dimStyle.Render(glyphs.Seam)
+	out := make([]string, h)
+	for i := range out {
+		var l, r string
+		if i < len(left) {
+			l = left[i]
+		}
+		if i < len(right) {
+			r = right[i]
+		}
+		out[i] = fitTo(l, listW) + " " + seam + " " + fitWidth(r, paneW)
+	}
+	return out
+}
+
 // pct is a rate as the screens print it: a judged count, never an average of averages.
 func pct(passed, judged int) string { return format.Pct(passed, judged) }
 

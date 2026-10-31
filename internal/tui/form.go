@@ -14,7 +14,7 @@ import (
 //
 // A query is the ask, who it asks for, and the reason it is in the set — the third field is the one
 // this tool reads back to you when the row fails, which is why it is a field and not a comment. The
-// id and the split are not editable here: the step assigns both, so a form filled in inside step 1
+// id and the split are not editable here: the section's first step assigns both, so a form filled in there
 // cannot quietly write a validation row.
 //
 // It is a huh form and not a hand-rolled editor because huh already owns the caret, the
@@ -57,7 +57,7 @@ func (f *formState) build() {
 				Title("why").
 				Value(&f.why).
 				Lines(3).
-				Description("the reason this row is in the set — step 3 reads this line when the row fails"),
+				Description("the reason this row is in the set — read back when the row fails"),
 		),
 	).
 		WithWidth(max(40, f.width-6)).

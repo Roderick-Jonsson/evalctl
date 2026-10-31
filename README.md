@@ -64,7 +64,7 @@ never look the same. `make check` runs gofmt and vet; `make test` the suite.
 ## Why it exists
 
 The set is worked on one stage skill at a time and the work is one loop — measure a wording, revise
-it, generalize it — so the TUI is that loop and nothing else: the door, the skill, the four steps.
+it, generalize it — so the TUI is that loop and nothing else: the door, the skill, its two sections.
 
 The sets grew faster than they got pruned, and the loop that measured them lived in two Python
 files that had to agree with the manager about slugs, splits and fixture dirs. So the rules live
@@ -78,13 +78,13 @@ checkable against what the old loop produced.
 
 ## TUI
 
-It walks one loop and asks one question at a time: **which optimization**, **which skill**, then the
-loop's four steps. There is no table to sort, no column to focus and no second menu — what used to be
-four tabs is now the rail at the top of every step, which is also the resume point.
+It walks one loop and asks one question at a time: **which optimization**, **which skill**, **which
+of the skill's two activities**, then the steps of that activity. There is no table to sort, no column
+to focus and no second menu — what used to be four tabs is the rail at the top of every step, which is
+also the resume point.
 
-The top row is a path, not a sentence: `trigger optimization > slide-builder > iterate`. A middot
-between three words reads as prose, and with the loop's numbers tacked on after another middot the
-row stopped looking like anywhere at all — so the segments are separated with `>`, the last one is
+The top row is a path, not a sentence: `trigger optimization > slide-builder > iteration > iterate`. A
+middot between three words reads as prose — so the segments are separated with `>`, the last one is
 the one you are looking at, and the numbers moved to the right end of the rail's row, where the steps
 already are.
 
@@ -101,16 +101,18 @@ already are.
                                   │   the train set failed, and generalizes on a split no revision
                                   │   could read.
                                   │ 
-                                  │   The loop
-                                  │   1 train set    the queries the wording may learn from
-                                  │   2 validation   the queries that judge it, held back until the
-                                  │                  end
-                                  │   3 iterate      run, read the failures, revise, repeat
-                                  │   4 generalize   validation for every measured wording, then
-                                  │                  rank
+                                  │   The two activities
+                                  │   iteration      the train set: run it, read the failures,
+                                  │                  revise the wording
+                                  │   generalization the validation set: run every wording against
+                                  │                  it, then rank
+                                  │ 
+                                  │   It writes
+                                  │   the set        trigger/trigger-evals.json
+                                  │   wordings       trigger/descriptions/<skill>.json
+                                  │   the winner     SKILL.md — the frontmatter key, nothing else
                                   │ 
                                   │   → enter  pick the skill whose wording gets tuned
-                                  │ 
 enter open · q quit                                                                          ? keys 
                                                                                               1 / 2 
 ```
@@ -118,9 +120,7 @@ enter open · q quit                                                            
 The two rows are the whole choice, and the pane beside them explains the one under the cursor: what
 the lane asks, what it does step by step, and what it leaves on disk. `j`/`k` move the pane with the
 cursor; `enter` opens the trigger loop. `output` is the second optimization the tool will grow, and the
-door says plainly that it is not built rather than opening a "coming soon" screen. Below the width
-that buys a pane, the selected row carries its own one-line explanation instead — nothing is hidden
-behind a divider that is not there.
+door says plainly that it is not built rather than opening a "coming soon" screen.
 
 ### Which skill
 
@@ -129,7 +129,7 @@ behind a divider that is not there.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                                            │ 
   SKILL                TRAIN VALID   ITERS │   SLIDE-BUILDER
-▶ slide-builder            2     2     0/5 │   step 3 of 4 · 0 iterations measured
+▶ slide-builder            2     2     0/5 │   iteration · step 2 of 2, iterate
                                            │   ─────────────────────────────────────────────────────
                                            │   set ready — nothing measured yet
                                            │ 
@@ -143,9 +143,11 @@ behind a divider that is not there.
                                            │   applied      none yet
                                            │   in SKILL.md  52 characters
                                            │ 
-                                           │   → enter  open at step 3 — iterate
+                                           │   Findings
+                                           │   warning      no cases: the runner will have nothing t
+                                           │                measure for this stage
                                            │ 
-                                           │ 
+                                           │   → enter  open at iteration · iterate
                                            │ 
 j k move · enter open the loop · esc lanes                                                   ? keys 
  1 skill with a description to tune                                                           1 / 1 
@@ -157,34 +159,64 @@ off the ledger and the iterations on disk rather than remembered.
 
 The table is the shape the eval tables had: a two-cell gutter where the cursor lives, fixed columns,
 counts right-aligned so 1 and 47 end on one edge, a quiet header and no rule under it. Beside it, the
-pane the door uses says what the row under the cursor is — the step its loop opens at, what both
-splits hold (queries, and how many should trigger), how many wordings the ledger carries, which one
+pane says what the row under the cursor is — the activity and step its loop opens in, what both splits
+hold (queries, and how many should trigger), how many wordings the ledger carries, which one
 `SKILL.md` was given, and that skill's validation findings.
 
-`STATE` is the column that gives way first: the pane already says it in words, so the table drops it
-rather than spending the pane's room on the same thing twice. Below the width that buys a pane, the
-row under the cursor is spelled out in a block under the table instead — same facts, one column.
+`STATE` is the column that gives way first: the pane already says it in words. Below the width that
+buys a pane, the row under the cursor is spelled out in a block under the table instead — same facts,
+one column.
 
-`enter` opens that skill's loop **at the step the disk says it is on**. No ledger yet: the wording in
-`SKILL.md` is adopted as candidate #1 and step 3 is where you start. A train set with no validation
-set: step 2. Every measured wording already validated: step 4. The baseline is never retyped — a
-paraphrase would measure a text nobody ships.
-
-### The four steps
+### The two sections
 
 ```
-✓ 1 train set ─── ✓ 2 validation set ─── ▸ 3 iterate ─── 4 generalize · locked
-```
-
-`✓` done, `▸` current, `·` waiting, `locked` behind the gate. The number keys `1`–`4` jump, and a jump
-that is not allowed says why in the status row instead of doing nothing.
-
-**Steps 1 and 2 — the query set.** One table per split, edited in place:
-
-```
- trigger optimization > slide-builder > train set                                     evalctl v0.8.0
+ trigger optimization > slide-builder                                                 evalctl v0.8.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- ▶ 1 train set ─── ✓ 2 validation set ─── 3 iterate ─── 4 generalize · locked                2 rows 
+                                  │ 
+                                  │   ITERATION
+▶ iteration  0 of 5               │   0 of 5 iterations measured
+                                  │   ──────────────────────────────────────────────────────────────
+  generalization  gated           │   The train set is the only measurement a revision may learn
+                                  │   from. Here the wording is run against it, the failures are
+                                  │   read one by one, and the next candidate is written from them —
+                                  │   the validation set is never opened, so nothing the revision
+                                  │   learns can come from it.
+                                  │ 
+                                  │   Its steps
+                                  │   1 train set  the queries the wording may learn from
+                                  │   2 iterate    run them, read the failures, revise the wording
+                                  │ 
+                                  │   The ledger
+                                  │   wordings     1 candidate
+                                  │   applied      none yet
+                                  │ 
+                                  │   → enter  open at step 2 — iterate
+                                  │ 
+                                  │ 
+                                  │ 
+j k move · enter open · esc skills                                                           ? keys 
+ candidate #1 adopted from slide-builder/SKILL.md                                             1 / 2 
+```
+
+The loop is two activities, not four steps in a row, because the two sets are used for opposite
+things. **Iteration** works the train set — the only measurement a revision may learn from.
+**Generalization** works the validation set — the instrument that judges a wording and must never shape
+one. Each owns its query set and its own steps, so the rail inside a section only ever lists the work
+that belongs to it, and `esc` goes up one level: a step back to its section, a section back to the
+skills.
+
+### Iteration — the train set
+
+```
+ ✓ 1 train set ─── ▶ 2 iterate
+```
+
+**Step 1 — the train set.** The queries the wording may learn from, edited in place:
+
+```
+ trigger optimization > slide-builder > iteration > train set                         evalctl v0.8.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ▶ 1 train set ─── 2 iterate                                                                 2 rows 
 
   train set — the queries the wording may learn from
   ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -201,42 +233,39 @@ that is not allowed says why in the status row instead of doing nothing.
 
 
 
+
+
   ────────────────────────────────────────────────────────────────────────────────────────────────
   2 rows · 1 should trigger · 1 should not · 50% of the set (the guide asks ~60/40)
 
-enter to the validation set · n new · e edit · d delete · space label · esc skills           ? keys 
- the wording may learn from these rows — nothing else shapes a revision                 step 1 of 4 
+enter to the loop · n new · e edit · d delete · space label · esc sections                   ? keys 
+ the wording may learn from these rows — nothing else shapes a revision                 step 1 of 2 
 ```
 
 `n` new, `e` edit, `d` delete (confirmed), `space` flips the label. Every write goes to disk at the
 keystroke: the next run reads the file, so a change that only lived in memory would measure something
-nobody wrote. The id is the tool's business — a new row takes the next free one — and the split comes
-from the step, so a row added in step 1 cannot quietly be a validation row.
+nobody wrote. The last two rows are the split's own facts — how many rows, both labels, its share of
+the whole set beside the guide's ~60/40 — and the one warning worth making: a split that carries a
+single label, rows without a `why`, or two rows that read the same.
 
-The last two rows are the split's own facts — how many rows, both labels, its share of the whole set
-beside the guide's ~60/40 — and the one warning worth making: a split that carries a single label,
-rows without a `why`, or two rows that read the same. `enter` moves on: to the validation set from
-the train set, and to the loop from the validation set.
-
-**Step 3 — the iteration.** A ladder of the draft's four sub-steps, and the detail block of the one
-under the cursor, so the whole loop is one screenful:
+**Step 2 — iterate.** The ladder: run, result, optimize, with the selected rung's detail underneath.
 
 ```
- trigger optimization > slide-builder > iterate                                       evalctl v0.8.0
+ trigger optimization > slide-builder > iteration > iterate                           evalctl v0.8.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- ✓ 1 train set ─── ✓ 2 validation set ─── ▶ 3 iterate ─── 4 generalize · locked
+ ✓ 1 train set ─── ▶ 2 iterate                                        iteration 1 of 5 (unmeasured) 
 
   iteration 1 of 5 · candidate #1
   ────────────────────────────────────────────────────────────────────────────────────────────────
 ▶ 1  training run     candidate #1 is waiting to be measured
   2  training result  nothing to read yet
   3  optimize         blocked — #1 is unmeasured
-  4  generalize       locked · 5 more iteration(s) · ctrl+g forces it
   ────────────────────────────────────────────────────────────────────────────────────────────────
 
   Run the train set against one wording
   The train run is the only measurement a revision may learn from. Validation is not run here —
-  it judges the wording in step 4, and measuring it now would let the loop learn from it.
+  it judges the wording in generalization, and measuring it now would let the loop learn from
+  it.
   candidate      #1 · 52 characters
   scope          2 train queries × 3 runs per query = 6 agent calls
   writes         trigger-workspace/trigger-1/
@@ -244,33 +273,76 @@ under the cursor, so the whole loop is one screenful:
   → enter  start the training run
 
 
-j k sub-step · enter do it · ctrl+g generalize early · esc skills                            ? keys 
- candidate #1 is written but not measured                                               step 3 of 4 
-```
 
-A rung's state is computed, never stored: a wording that has been written but not measured is a
-candidate with no train measurement, and that single fact drives "run it", "nothing to read yet" and
-"do not revise over an unmeasured wording".
+
+j k rung · enter do it · esc sections                                                        ? keys 
+ candidate #1 is written but not measured                                               step 2 of 2 
+```
 
 | rung | what `enter` does |
 |---|---|
 | `training run` | the run screen below: the train set against that candidate |
-| `training result` | one card per failing row — the ask, the `why`, what loaded instead, and whether the wording is too narrow or too broad. Validation is withheld here on purpose |
+| `training result` | one card per failing row — the ask, the `why`, what loaded instead, and whether the wording is too narrow or too broad |
 | `optimize` | the revision: the parent's text with a caret, its failing rows beside it, the note, the 1024 counter, and the query words the draft has picked up |
-| `generalize` | step 4, if the gate is open |
 
-A revision does not touch `SKILL.md`: it becomes the next candidate in the ledger, and the following
-training run is what writes it into the file — because the file is what the router reads, and a
-wording nobody has measured should not be in it.
+A rung's state is computed, never stored: a wording that has been written but not measured is a
+candidate with no train measurement, and that single fact drives "run it", "nothing to read yet" and
+"do not revise over an unmeasured wording". A revision does not touch `SKILL.md` — it becomes the next
+candidate in the ledger, and the following training run is what writes it into the file, because the
+file is what the router reads and a wording nobody has measured should not be in it.
 
-**Step 4 — generalization.** The validation set is run once against every measured wording:
+### Generalization — the validation set
 
 ```
- trigger optimization > slide-builder > generalize                                    evalctl v0.8.0
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- ✓ 1 train set ─── ✓ 2 validation set ─── ✓ 3 iterate ─── ▶ 4 generalize      2 iterations measured 
+ ✓ 1 validation set ─── ▶ 2 validate ─── 3 results
+```
 
-  generalization · every measured wording on the validation set
+**Step 1 — the validation set.** The same table with the other job: these rows judge the wording and
+are never used to write one.
+
+**Step 2 — validate.** One run per measured wording, in the order the loop wrote them:
+
+```
+ trigger optimization > slide-builder > generalization > validate                     evalctl v0.8.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ✓ 1 validation set ─── ▶ 2 validate ─── 3 results                                 0 of 2 validated 
+
+  Run the validation set
+  Every measured wording has to see the validation set once, or the result list has nothing to
+  rank. This runs each candidate in turn: the wording is written into SKILL.md, the validation
+  queries are run against it, and the next candidate follows.
+  ────────────────────────────────────────────────────────────────
+  iteration 1    #1 · train 50% · validation to run
+  iteration 2    #2 · train 100% · validation to run
+  cost           2 validation queries × 3 runs × 2 iterations to run = 12 agent calls
+
+  SKILL.md is left holding the last candidate measured. Nothing is applied until you choose one
+  on the result list.
+
+  → enter  run the validation set for 2 iterations
+
+
+
+
+
+
+
+enter run the validation set · esc sections                                                  ? keys 
+ validation is run once per iteration, and it is the only thing that ranks them         step 2 of 3 
+```
+
+Each candidate is written into `SKILL.md` in turn (that is what the router reads), the validation
+queries are run against it, and the next candidate follows — one batch, one progress screen. `SKILL.md`
+is left holding the last candidate measured; nothing is applied until you choose one.
+
+**Step 3 — results.** The ranking, in the draft's own table:
+
+```
+ trigger optimization > slide-builder > generalization > results                      evalctl v0.8.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ✓ 1 validation set ─── ✓ 2 validate ─── ▶ 3 results                          2 iterations measured 
+
+  results · every measured wording, ranked by the validation set
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ITERATION  TRAIN         VALIDATION   GAP    CHARS   NOTE
 ▶ 1          1/2 50%       2/2 100%     −50%   52      the description in SKILL.md when … ✓ in file
@@ -285,17 +357,14 @@ wording nobody has measured should not be in it.
 
 
 
+
+
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ✓ best by validation  #1 · validation 100% · train 50%
   validation is the ranking; train beside it is how much of that rate the wording learned rather
-j k move · enter what it failed · a apply · h holdout · esc skills                           ? keys 
- candidate #1 adopted from slide-builder/SKILL.md                                       step 4 of 4 
+j k move · enter what it failed · a apply · h holdout · esc sections                         ? keys 
+ validation is run once per iteration, and it is the only thing that ranks them         step 3 of 3 
 ```
-
-Each candidate is written into `SKILL.md` in turn (that is what the router reads), the validation
-queries are run against it, and the next candidate follows — one batch, one progress screen. The
-result list is the draft's own table: iteration, train, validation, the gap between them, the
-character count, and the note the revision carried.
 
 `✓ best by validation` is the guide's selection rule computed, with a tie going to the earlier wording
 — the one that got there with less text and fewer revisions. `enter` opens one iteration in full, `a`
@@ -305,8 +374,9 @@ ledger), and `h` then runs the fresh queries once, apart from every rate the loo
 ### The gate
 
 Five measured iterations is the guide's bar — below it a validation rate is a coin and the difference
-between two wordings is noise. Step 4 stays locked until then, and `ctrl+g` is the stated exception:
-it opens the step and the report says the rate is unproven.
+between two wordings is noise. Generalization's run and results steps stay locked until then, and
+`ctrl+g` is the stated exception: it opens them and the report says the rate is unproven. The
+validation set itself can be written at any time; it is the run that waits.
 
 ### A run
 
@@ -659,8 +729,8 @@ evalctl/
   internal/profile/  the four profiles: contract render, env, skills sync, scrub, cwd pin, check
   internal/cli/      ls, show, add, edit, rm, mv, promote, dupes, stats, validate, renumber, run,
                      trigger, runs, report, profiles
-  internal/tui/      the loop: door, skill list, the four steps, the query form, the revision, the
-                     run screen, the documents, the frame
+  internal/tui/      the loop: door, skill chooser, the two sections and their steps, the query form,
+                     the revision, the run screen, the documents, the frame
 ```
 
 ## Tests

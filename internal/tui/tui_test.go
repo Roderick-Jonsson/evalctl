@@ -81,6 +81,13 @@ func stripMarks(s string) string {
 	return out.String()
 }
 
+// enterSection opens one half of the loop the way a person does: from the section screen.
+func enterSection(m *Model, sec int) {
+	m.mode = screenSections
+	m.sections.cursor = sec
+	press(m, "enter")
+}
+
 func press(m *Model, key string) tea.Cmd {
 	var msg tea.KeyMsg
 	switch key {
@@ -183,8 +190,8 @@ func TestTriggerLaneOpensTheSkillList(t *testing.T) {
 		t.Fatalf("a skill with no measurements must say where the loop stands: %q", m.skills.rows[0].state)
 	}
 	press(m, "enter")
-	if m.mode != screenFlow || m.skill != "slide-builder" {
-		t.Fatalf("mode = %v skill = %q", m.mode, m.skill)
+	if m.mode != screenSections || m.skill != "slide-builder" {
+		t.Fatalf("mode = %v skill = %q, want the section choice", m.mode, m.skill)
 	}
 }
 
@@ -193,8 +200,13 @@ func TestTriggerLaneOpensTheSkillList(t *testing.T) {
 func TestResumeLandsOnTheStepTheDiskIsAt(t *testing.T) {
 	m, _, _ := fixture(t)
 	m.openSkill("slide-builder")
-	if m.flow.step != StepIterate {
-		t.Fatalf("step = %d, want the loop: both splits are defined and nothing is measured", m.flow.step)
+	// The skill opens on the choice between its two activities, on the one the disk is waiting in.
+	if m.mode != screenSections || m.sections.cursor != secIteration {
+		t.Fatalf("mode = %v cursor = %d, want the section choice on iteration", m.mode, m.sections.cursor)
+	}
+	enterSection(m, secIteration)
+	if m.flow.sec != secIteration || m.flow.step != 2 {
+		t.Fatalf("section = %d step = %d, want the loop: the train set is defined and nothing is measured", m.flow.sec, m.flow.step)
 	}
 	if m.flow.sub != subRun {
 		t.Fatalf("rung = %d, want the training run", m.flow.sub)
@@ -241,18 +253,20 @@ func TestGateHoldsUntilFiveIterations(t *testing.T) {
 	if len(m.flow.iters) != 1 {
 		t.Fatalf("iterations = %d", len(m.flow.iters))
 	}
-	// The number key is a jump, and the gate refuses it.
-	press(m, "4")
-	if m.flow.step != StepIterate {
-		t.Fatalf("step = %d, want the loop to hold", m.flow.step)
+	// Generalization's run step is behind the gate, and the jump refuses it.
+	enterSection(m, secGeneralization)
+	m.jumpStep(1)
+	press(m, "2")
+	if m.flow.step != 1 {
+		t.Fatalf("step = %d, want the validation set to hold the section", m.flow.step)
 	}
 	if !strings.Contains(m.status, "ctrl+g") {
 		t.Fatalf("status = %q, want the way out named", m.status)
 	}
 	// ctrl+g is the stated exception.
 	press(m, "ctrl+g")
-	if m.flow.step != StepGeneralize {
-		t.Fatalf("step = %d, want generalization forced", m.flow.step)
+	if m.flow.sec != secGeneralization || m.flow.step != 2 {
+		t.Fatalf("section = %d step = %d, want validate forced", m.flow.sec, m.flow.step)
 	}
 	if !m.flow.gateOpen() {
 		t.Fatal("the gate must record that it was forced")
@@ -264,7 +278,8 @@ func TestGateHoldsUntilFiveIterations(t *testing.T) {
 func TestSpaceFlipsTheLabelAndWritesTheFile(t *testing.T) {
 	m, _, _ := fixture(t)
 	m.openSkill("slide-builder")
-	m.gotoStep(StepTrain)
+	enterSection(m, secIteration)
+	m.jumpStep(1)
 	if len(m.flow.rows) != 2 {
 		t.Fatalf("train rows = %d", len(m.flow.rows))
 	}
@@ -290,10 +305,10 @@ func TestSpaceFlipsTheLabelAndWritesTheFile(t *testing.T) {
 func TestEnterFromTheLastQuerySetOpensTheLoop(t *testing.T) {
 	m, _, _ := fixture(t)
 	m.openSkill("slide-builder")
-	m.gotoStep(StepValidation)
+	enterSection(m, secGeneralization)
 	press(m, "enter")
-	if m.flow.step != StepIterate {
-		t.Fatalf("step = %d, want the iteration", m.flow.step)
+	if m.flow.sec != secGeneralization || m.flow.step != 2 {
+		t.Fatalf("section = %d step = %d, want validate", m.flow.sec, m.flow.step)
 	}
 }
 
@@ -339,7 +354,7 @@ func TestResultListShowsTrainValidationAndTheGap(t *testing.T) {
 		row(3, "validation", true, true), row(4, "validation", false, true),
 	})
 	m.openSkill("slide-builder")
-	m.flow.step = StepGeneralize
+	m.flow.sec, m.flow.step = secGeneralization, 3
 	body := strings.Join(m.resultBody(24), "\n")
 	for _, want := range []string{"ITERATION", "TRAIN", "VALIDATION", "GAP", "best by validation"} {
 		if !strings.Contains(body, want) {
@@ -356,7 +371,7 @@ func TestApplyWritesTheWinnerIntoSkillMD(t *testing.T) {
 	})
 	m.openSkill("slide-builder")
 	m.flow.forced = true
-	m.flow.step = StepGeneralize
+	m.flow.sec, m.flow.step = secGeneralization, 3
 	m.askApply(m.flow.iters[0])
 	if m.mode != screenAsk {
 		t.Fatalf("mode = %v, want the confirmation", m.mode)
@@ -382,10 +397,17 @@ func TestEveryScreenFitsTheWindow(t *testing.T) {
 	}{
 		{"door", func() { m.mode = screenLane }},
 		{"skills", func() { m.mode = screenSkill; m.loadSkills() }},
-		{"train set", func() { m.openSkill("slide-builder"); m.flow.step = StepTrain; m.reload() }},
-		{"validation set", func() { m.flow.step = StepValidation; m.reload() }},
-		{"iteration", func() { m.flow.step = StepIterate }},
-		{"generalize locked", func() { m.flow.step = StepGeneralize; m.flow.forced = false }},
+		{"sections", func() { m.openSkill("slide-builder"); m.mode = screenSections }},
+		{"train set", func() {
+			m.flow.sec, m.flow.step = secIteration, 1
+			m.flow.forced = false
+			m.mode = screenFlow
+			m.reload()
+		}},
+		{"iteration ladder", func() { m.flow.sec, m.flow.step = secIteration, 2; m.mode = screenFlow }},
+		{"validation set", func() { m.flow.sec, m.flow.step = secGeneralization, 1; m.reload() }},
+		{"validate locked", func() { m.flow.sec, m.flow.step = secGeneralization, 2; m.flow.forced = false }},
+		{"results", func() { m.flow.forced = true; m.flow.sec, m.flow.step = secGeneralization, 3 }},
 		{"help", func() { m.mode = screenHelp }},
 		{"document", func() { m.mode = screenDoc; m.doc = &docState{title: "t", lines: []string{"a", "b"}} }},
 	}
@@ -481,9 +503,10 @@ func TestTheBarIsAPathNotASentence(t *testing.T) {
 	m, _, _ := fixture(t)
 	m.width, m.height = 120, 30
 	m.openSkill("slide-builder")
+	enterSection(m, secIteration)
 	lines := strings.Split(m.View(), "\n")
 	bar := stripMarks(lines[0])
-	if !strings.Contains(bar, "trigger optimization > slide-builder > iterate") {
+	if !strings.Contains(bar, "trigger optimization > slide-builder > iteration > iterate") {
 		t.Fatalf("the bar is not a path:\n%s", bar)
 	}
 	if strings.Contains(bar, " · ") {
@@ -510,7 +533,7 @@ func TestTheDoorIsASelectorWithAPane(t *testing.T) {
 	if !strings.Contains(body, glyphs.Seam) {
 		t.Fatalf("the door has no pane:\n%s", body)
 	}
-	for _, want := range []string{"TRIGGER OPTIMIZATION", "The loop", "It writes", "pick the skill"} {
+	for _, want := range []string{"TRIGGER OPTIMIZATION", "The two activities", "iteration", "generalization", "It writes", "pick the skill"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the trigger pane is missing %q:\n%s", want, body)
 		}
@@ -520,7 +543,7 @@ func TestTheDoorIsASelectorWithAPane(t *testing.T) {
 	if !strings.Contains(body, "OUTPUT OPTIMIZATION") || !strings.Contains(body, "not built") {
 		t.Fatalf("the pane did not follow the cursor:\n%s", body)
 	}
-	if strings.Contains(body, "The loop") {
+	if strings.Contains(body, "The two activities") {
 		t.Fatalf("the pane still explains the row above the cursor:\n%s", body)
 	}
 	m.width = 60

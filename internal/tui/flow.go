@@ -11,38 +11,39 @@ import (
 	"evalctl/internal/store"
 )
 
-// The loop's four steps, and the state every one of them reads.
+// A skill's loop is two activities, not four steps in a row.
 //
-// The steps are the draft's own: the train set, the validation set, the iteration (run → result →
-// revise), and generalization. What the screens need to know about a skill is derived from the
-// ledger and the trigger iterations on every reload, so there is no progress file to fall out of
-// step with the measurements — the disk is the progress, and the rail is a rendering of it.
+//   ITERATION       works the train set: define it, run the wording against it, read the failures,
+//                   revise. That is the half of the loop where the description is written.
+//   GENERALIZATION  works the validation set: define it, run it against every wording the iteration
+//                   produced, and rank them by it. That is the half where the wording is judged.
+//
+// The split matters because the two sets are used for opposite things — one is what a revision may
+// learn from, the other is what must never shape one — and a single four-step rail made them look
+// like consecutive chores instead of two instruments with different rules. Each section owns its set
+// and its own screens; the section screen is where a skill opens, and the rail inside a section only
+// ever lists that section's steps.
 
 const (
-	StepTrain = iota + 1
-	StepValidation
-	StepIterate
-	StepGeneralize
+	secIteration = iota
+	secGeneralization
 )
+
+var secNames = []string{"iteration", "generalization"}
+
+// The steps each section owns, in the order the work is done.
+var iterationSteps = []string{"train set", "iterate"}
+var generalizationSteps = []string{"validation set", "validate", "results"}
 
 // iterationsRequired is the guide's "if >= 5 iterations, ready to generalize": below five measured
 // wordings the validation rate is a coin and the comparison between iterations is noise.
 const iterationsRequired = 5
 
-var stepNames = map[int]string{
-	StepTrain:      "train set",
-	StepValidation: "validation set",
-	StepIterate:    "iterate",
-	StepGeneralize: "generalize",
-}
-
-var stepOrder = []int{StepTrain, StepValidation, StepIterate, StepGeneralize}
-
 // iteration is one measured wording: the candidate, its train measurement, and its validation
-// measurement when the generalization step has run.
+// measurement when generalization has run.
 //
-// A candidate is measured twice in the loop, and that is the point of it: the train run is what a
-// revision is allowed to learn from, and the validation run — later, and only in step 4 — is what
+// A candidate is measured twice, and that is the point of it: the train run is what a revision is
+// allowed to learn from, and the validation run — later, and only in the other section — is what
 // says whether the revision generalizes or memorized.
 type iteration struct {
 	N     int
@@ -60,12 +61,13 @@ func (it iteration) valid() *runner.LabTally {
 }
 
 type flowState struct {
-	step int
+	sec  int
+	step int // 1-based within the section
 	lab  *runner.Lab
-	// iters is the measured candidates in ledger order: the loop's own numbering, which is what
-	// step 4's result list is keyed on.
+	// iters is the measured candidates in ledger order: the loop's own numbering, which is what the
+	// result list is keyed on.
 	iters []iteration
-	// rows is the split the current step edits (steps 1 and 2); empty on the other steps.
+	// rows is the split the section's first step edits; empty on the other steps.
 	rows []store.Entry
 	sel  int
 	top  int
@@ -76,15 +78,48 @@ type flowState struct {
 	gen    *genState
 }
 
-// split is the split the current step edits, or "" for the steps that edit no rows.
+func stepsOf(sec int) []string {
+	if sec == secGeneralization {
+		return generalizationSteps
+	}
+	return iterationSteps
+}
+
+func (f *flowState) steps() []string { return stepsOf(f.sec) }
+
+func (f *flowState) stepCount() int { return len(f.steps()) }
+
+func (f *flowState) stepName() string { return stepNameAt(f.sec, f.step) }
+
+// stepNameAt is the name of a step in a section, for the screens that describe a section they are not
+// inside.
+func stepNameAt(sec, step int) string {
+	steps := iterationSteps
+	if sec == secGeneralization {
+		steps = generalizationSteps
+	}
+	if step < 1 || step > len(steps) {
+		return ""
+	}
+	return steps[step-1]
+}
+
+func (f *flowState) sectionName() string {
+	if f.sec == secGeneralization {
+		return secNames[secGeneralization]
+	}
+	return secNames[secIteration]
+}
+
+// split is the split the section's first step edits, or "" for the steps that edit no rows.
 func (f *flowState) split() string {
-	switch f.step {
-	case StepTrain:
-		return store.SplitTrain
-	case StepValidation:
+	if f.step != 1 {
+		return ""
+	}
+	if f.sec == secGeneralization {
 		return store.SplitValidation
 	}
-	return ""
+	return store.SplitTrain
 }
 
 // iterationsOf reads the loop out of a lab: a candidate becomes an iteration when it has a train
@@ -140,8 +175,7 @@ func (f *flowState) pending() *runner.LabCandidate {
 	return &f.lab.Candidates[len(f.lab.Candidates)-1]
 }
 
-// allValidated reports whether every measured wording has been through the validation set: the
-// gate on step 4's result list.
+// allValidated reports whether every measured wording has been through the validation set.
 func allValidated(lab *runner.Lab) bool {
 	it := iterationsOf(lab)
 	if len(it) == 0 {
@@ -165,33 +199,39 @@ func noCandidateLeft(lab *runner.Lab) bool {
 // gateOpen is the five-iteration rule, with ctrl+g as the stated exception.
 func (f *flowState) gateOpen() bool { return len(f.iters) >= iterationsRequired || f.forced }
 
-// loopStep is the step a skill's loop opens at, computed from the set and the ledger alone: the same
-// rule the flow uses to resume, so the chooser cannot promise a step the flow will not open.
-func loopStep(lab *runner.Lab) int {
+// loopOpen is where a skill's work opens: the section and the step inside it, computed from the set
+// and the ledger alone. The chooser and the flow both read it, so the chooser cannot promise a step
+// the flow will not open.
+func loopOpen(lab *runner.Lab) (sec, step int) {
 	switch {
 	case lab == nil || lab.TrainRows == 0:
-		return StepTrain
+		return secIteration, 1
+	case len(iterationsOf(lab)) == 0:
+		return secIteration, 2
 	case lab.ValidationRows == 0:
-		return StepValidation
-	case len(iterationsOf(lab)) > 0 && allValidated(lab):
-		return StepGeneralize
+		return secGeneralization, 1
+	case allValidated(lab):
+		return secGeneralization, 3
 	}
-	return StepIterate
+	return secGeneralization, 2
 }
 
-// resume puts the flow on the step the disk says the work is at.
-func (f *flowState) resume(m *Model) {
-	switch {
-	case f.lab == nil:
-		f.step = StepTrain
-	case f.lab.TrainRows == 0:
-		f.step = StepTrain
-	case f.lab.ValidationRows == 0:
-		f.step = StepValidation
-	case len(f.iters) > 0 && allValidated(f.lab):
-		f.step = StepGeneralize
-	default:
-		f.step = StepIterate
+// resumeIn puts the flow on the step inside this section the disk says the work is at.
+func (f *flowState) resumeIn(m *Model) {
+	if f.sec == secIteration {
+		f.step = 2
+		if f.lab == nil || f.lab.TrainRows == 0 {
+			f.step = 1
+		}
+	} else {
+		switch {
+		case f.lab == nil || f.lab.ValidationRows == 0:
+			f.step = 1
+		case len(f.iters) > 0 && allValidated(f.lab):
+			f.step = 3
+		default:
+			f.step = 2
+		}
 	}
 	f.sub, f.res, f.sel, f.top = 0, 0, 0, 0
 	f.enterStep(m)
@@ -200,32 +240,28 @@ func (f *flowState) resume(m *Model) {
 // enterStep resets the cursors a step owns, so arriving somewhere always shows its first row rather
 // than a cursor remembered from a previous visit to a different split.
 func (f *flowState) enterStep(m *Model) {
-	switch f.step {
-	case StepTrain, StepValidation:
+	switch {
+	case f.step == 1:
 		f.sel, f.top = 0, 0
 		m.reload()
-	case StepIterate:
+	case f.sec == secIteration && f.step == 2:
 		f.sub = f.defaultSub()
-	case StepGeneralize:
+	case f.sec == secGeneralization && f.step == 3:
 		f.res = 0
-		if f.gen == nil {
-			f.gen = &genState{}
-		}
 	}
 }
 
-// defaultSub is where the iteration step opens: the rung the loop is actually waiting on.
+// defaultSub is where the iteration ladder opens: the rung the loop is actually waiting on.
 func (f *flowState) defaultSub() int {
 	switch {
 	case f.pending() != nil:
-		return 0 // a wording is waiting to be measured
+		return subRun // a wording is waiting to be measured
 	case f.latest() == nil:
-		return 0
-	case !f.gateOpen():
-		return 2 // revise: the loop's next productive move
-	default:
-		return 3 // generalize
+		return subRun
+	case len(f.latest().Cand.FailedTrain()) > 0:
+		return subResult
 	}
+	return subOptimize
 }
 
 // ---------------------------------------------------------------- the rail
@@ -240,47 +276,58 @@ const (
 	stateLocked
 )
 
-func (f *flowState) stepState(step int) subState {
-	if step == f.step {
+func (f *flowState) stepState(i int) subState {
+	if i == f.step {
 		return stateCurrent
 	}
-	switch step {
-	case StepTrain:
-		if f.lab != nil && f.lab.TrainRows > 0 {
-			return stateDone
+	if f.sec == secIteration {
+		switch i {
+		case 1:
+			if f.lab != nil && f.lab.TrainRows > 0 {
+				return stateDone
+			}
+		case 2:
+			if len(f.iters) >= iterationsRequired {
+				return stateDone
+			}
 		}
-	case StepValidation:
+		return stateWaiting
+	}
+	// Generalization: its last two steps are behind the five-iteration gate.
+	switch i {
+	case 1:
 		if f.lab != nil && f.lab.ValidationRows > 0 {
 			return stateDone
 		}
-	case StepIterate:
-		if len(f.iters) >= iterationsRequired {
-			return stateDone
-		}
-		if len(f.iters) > 0 && f.step == StepGeneralize {
-			return stateDone
-		}
-	case StepGeneralize:
+	case 2:
 		if !f.gateOpen() {
 			return stateLocked
 		}
 		if f.lab != nil && len(f.iters) > 0 && allValidated(f.lab) {
 			return stateDone
 		}
+	case 3:
+		if !f.gateOpen() {
+			return stateLocked
+		}
+		if f.lab != nil && f.lab.Applied != nil {
+			return stateDone
+		}
 	}
 	return stateWaiting
 }
 
-// rail is the navigation: four steps, what state each one is in, and the one gate in the flow.
+// rail is the navigation inside a section: its steps, what state each one is in, and the one gate in
+// the flow. It lists only this section's steps — the other section is one screen up.
 func (f *flowState) rail(w int) string {
 	var b strings.Builder
 	b.WriteString(" ")
-	for i, step := range stepOrder {
+	for i, name := range f.steps() {
 		if i > 0 {
 			b.WriteString(dimStyle.Render(" " + strings.Repeat(glyphs.Rule, 3) + " "))
 		}
-		label := fmt.Sprintf("%d %s", step, stepNames[step])
-		switch f.stepState(step) {
+		label := fmt.Sprintf("%d %s", i+1, name)
+		switch f.stepState(i + 1) {
 		case stateCurrent:
 			b.WriteString(cursorMark.Render(glyphs.Cursor + label))
 		case stateDone:
@@ -301,23 +348,30 @@ func (f *flowState) stateLine() string {
 	if f.lab == nil {
 		return ""
 	}
-	switch f.step {
-	case StepTrain, StepValidation:
+	if f.step == 1 {
 		return plural(len(f.rows), "row")
-	case StepIterate:
+	}
+	if f.sec == secIteration {
 		n := max(1, len(f.iters)+boolInt(f.pending() != nil))
 		if it := f.latest(); it != nil && f.pending() == nil {
 			return fmt.Sprintf("iteration %d of %d (train %s)", n, iterationsRequired,
 				pct(it.Train.Train.Passed, it.Train.Train.Judged))
 		}
 		return fmt.Sprintf("iteration %d of %d (unmeasured)", n, iterationsRequired)
-	case StepGeneralize:
-		if len(f.iters) == 0 {
-			return "nothing measured yet"
-		}
-		return plural(len(f.iters), "iteration") + " measured"
 	}
-	return ""
+	if len(f.iters) == 0 {
+		return "nothing measured yet"
+	}
+	if f.step == 2 {
+		done := 0
+		for _, it := range f.iters {
+			if it.Valid != nil {
+				done++
+			}
+		}
+		return fmt.Sprintf("%d of %d validated", done, len(f.iters))
+	}
+	return plural(len(f.iters), "iteration") + " measured"
 }
 
 func boolInt(b bool) int {
@@ -330,80 +384,72 @@ func boolInt(b bool) int {
 // stateText is the status row's own line: the constraint the step is working under, which is the
 // thing a person forgets between sessions.
 func (f *flowState) stateText() string {
-	switch f.step {
-	case StepTrain:
+	if f.step == 1 {
+		if f.sec == secGeneralization {
+			return "these rows judge the wording; they are never used to write one"
+		}
 		return "the wording may learn from these rows — nothing else shapes a revision"
-	case StepValidation:
-		return "these rows judge the wording; they are never used to write one"
-	case StepIterate:
+	}
+	if f.sec == secIteration {
 		if f.pending() != nil {
 			return "candidate #" + fmt.Sprint(f.pending().ID) + " is written but not measured"
 		}
 		if it := f.latest(); it != nil {
 			return "train " + pct(it.Train.Train.Passed, it.Train.Train.Judged) +
-				" · validation stays withheld until step 4"
+				" · the validation set stays withheld until generalization"
 		}
 		return "nothing measured yet — rung 1 is the training run"
-	case StepGeneralize:
-		if f.lab != nil && f.lab.ValidationRows == 0 {
-			return "no validation queries — step 2 defines what judges the wording"
-		}
-		if len(f.iters) == 0 {
-			return "nothing has been measured — the loop starts in step 3"
-		}
-		if !f.gateOpen() {
-			return fmt.Sprintf("%d of %d iterations — ctrl+g generalizes early, unproven", len(f.iters), iterationsRequired)
-		}
-		return "validation is run once per iteration, and it is the only thing that ranks them"
 	}
-	return ""
+	if f.lab != nil && f.lab.ValidationRows == 0 {
+		return "no validation queries — step 1 defines what judges the wording"
+	}
+	if len(f.iters) == 0 {
+		return "nothing measured yet — iteration comes first"
+	}
+	if !f.gateOpen() {
+		return fmt.Sprintf("%d of %d iterations — ctrl+g validates early, unproven", len(f.iters), iterationsRequired)
+	}
+	return "validation is run once per iteration, and it is the only thing that ranks them"
 }
 
 func (f *flowState) body(m *Model, h int) []string {
-	switch f.step {
-	case StepTrain, StepValidation:
+	switch {
+	case f.step == 1:
 		return m.setBody(h)
-	case StepIterate:
+	case f.sec == secIteration:
 		return m.iterBody(h)
-	case StepGeneralize:
-		return m.genBody(h)
+	case f.step == 2:
+		return m.validateBody(h)
 	}
-	return nil
+	return m.resultBody(h)
 }
 
 func (f *flowState) hints(m *Model) []hint {
-	switch f.step {
-	case StepTrain, StepValidation:
+	if f.step == 1 {
 		h := []hint{{"enter", "next step"}, {"n", "new"}, {"e", "edit"}, {"d", "delete"},
-			{"space", "label"}, {"esc", "skills"}}
-		if f.step == StepTrain {
-			h[0].act = "to the validation set"
+			{"space", "label"}, {"esc", "sections"}}
+		if f.sec == secGeneralization {
+			h[0].act = "to validate"
 		} else {
 			h[0].act = "to the loop"
 		}
 		return h
-	case StepIterate:
-		h := []hint{{"j k", "sub-step"}, {"enter", "do it"}}
-		if !f.gateOpen() {
-			h = append(h, hint{"ctrl+g", "generalize early"})
-		}
-		return append(h, hint{"esc", "skills"})
-	case StepGeneralize:
-		if f.lab != nil && f.lab.ValidationRows == 0 {
-			return []hint{{"2", "validation set"}, {"esc", "skills"}}
-		}
-		if !f.gateOpen() {
-			return []hint{{"j k", "iterate"}, {"ctrl+g", "generalize early"}, {"esc", "skills"}}
-		}
-		if len(f.iters) == 0 {
-			return []hint{{"1", "back to the loop"}, {"esc", "skills"}}
-		}
-		if !allValidated(f.lab) {
-			return []hint{{"enter", "run the validation set"}, {"esc", "back"}}
-		}
-		return []hint{{"j k", "move"}, {"enter", "what it failed"}, {"a", "apply"}, {"h", "holdout"}, {"esc", "skills"}}
 	}
-	return nil
+	if f.sec == secIteration {
+		return []hint{{"j k", "rung"}, {"enter", "do it"}, {"esc", "sections"}}
+	}
+	if f.step == 2 {
+		switch {
+		case f.lab != nil && f.lab.ValidationRows == 0:
+			return []hint{{"1", "validation set"}, {"esc", "sections"}}
+		case !f.gateOpen():
+			return []hint{{"ctrl+g", "validate early, unproven"}, {"esc", "sections"}}
+		case m.needsValidation() == 0:
+			return []hint{{"enter", "open the results"}, {"esc", "sections"}}
+		}
+		return []hint{{"enter", "run the validation set"}, {"esc", "sections"}}
+	}
+	return []hint{{"j k", "move"}, {"enter", "what it failed"}, {"a", "apply"}, {"h", "holdout"}, {"esc", "sections"}}
 }
 
 // ---------------------------------------------------------------- update
@@ -414,53 +460,63 @@ func (m *Model) updateFlow(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	key := msg.String()
-	// The rail is also a jump: the number keys are the step numbers, and the gate is enforced here
-	// rather than only drawn.
-	if key >= "1" && key <= "4" {
-		step := int(key[0] - '0')
-		return m.gotoStep(step)
+	// The rail is also a jump: the number keys are this section's step numbers, and the gate is
+	// enforced here rather than only drawn.
+	if key >= "1" && key <= "9" {
+		return m.jumpStep(int(key[0] - '0'))
 	}
 	if key == "ctrl+g" {
-		if f.gateOpen() {
-			m.setStatus("already open — five iterations measured", false)
-			return nil
-		}
-		f.forced = true
-		m.setStatus(fmt.Sprintf("generalizing after %d of %d iterations — the validation rate is unproven",
-			len(f.iters), iterationsRequired), true)
-		return m.gotoStep(StepGeneralize)
+		return m.forceGeneralization()
 	}
-	switch f.step {
-	case StepTrain, StepValidation:
+	switch {
+	case f.step == 1:
 		return m.updateSet(msg)
-	case StepIterate:
+	case f.sec == secIteration:
 		return m.updateIter(msg)
-	case StepGeneralize:
-		return m.updateGen(msg)
+	case f.step == 2:
+		return m.updateValidate(msg)
 	}
+	return m.updateResults(msg)
+}
+
+// forceGeneralization is ctrl+g: the gate is a bar, not a wall, and using it says so.
+func (m *Model) forceGeneralization() tea.Cmd {
+	f := m.flow
+	if f.gateOpen() {
+		m.setStatus("already open — five iterations are measured", false)
+		return nil
+	}
+	f.forced = true
+	m.setStatus(fmt.Sprintf("generalizing after %d of %d iterations — the validation rate is unproven",
+		len(f.iters), iterationsRequired), true)
+	f.sec, f.step = secGeneralization, 2
+	f.enterStep(m)
 	return nil
 }
 
-// gotoStep enforces the two rules the rail draws: the gate on step 4, and a query set before the
-// loop that measures it.
-func (m *Model) gotoStep(step int) tea.Cmd {
+// jumpStep moves inside the section and refuses what the rules refuse: a step that needs a set it
+// does not have, and a generalization step behind a closed gate.
+func (m *Model) jumpStep(n int) tea.Cmd {
 	f := m.flow
-	if step == f.step {
+	if n < 1 || n > f.stepCount() || n == f.step {
 		return nil
 	}
-	switch {
-	case step >= StepIterate && f.lab != nil && f.lab.TrainRows == 0:
-		m.setStatus("the train set is empty — step 1 defines what the loop measures", true)
-		return nil
-	case step >= StepIterate && f.lab != nil && f.lab.ValidationRows == 0:
-		m.setStatus("the validation set is empty — step 2 defines what judges the wording", true)
-		return nil
-	case step == StepGeneralize && !f.gateOpen():
-		m.setStatus(fmt.Sprintf("%d of %d iterations — ctrl+g generalizes early, with the warning",
+	if f.lab != nil {
+		switch {
+		case n >= 2 && f.sec == secIteration && f.lab.TrainRows == 0:
+			m.setStatus("the train set is empty — the iteration section's first step defines it", true)
+			return nil
+		case n >= 2 && f.sec == secGeneralization && f.lab.ValidationRows == 0:
+			m.setStatus("the validation set is empty — the section's first step defines it", true)
+			return nil
+		}
+	}
+	if f.sec == secGeneralization && n >= 2 && !f.gateOpen() {
+		m.setStatus(fmt.Sprintf("%d of %d iterations — ctrl+g validates early, with the warning",
 			len(f.iters), iterationsRequired), true)
 		return nil
 	}
-	f.step = step
+	f.step = n
 	f.enterStep(m)
 	return nil
 }

@@ -21,13 +21,15 @@ import (
 // is a candidate with no train measurement, and that single fact drives rung 1 (run it), rung 2
 // (nothing to read yet) and rung 3 (do not revise over an unmeasured wording).
 
-var ladderRows = []string{"training run", "training result", "optimize", "generalize"}
+// The iteration ladder: the three things the iteration section does with one wording. Generalization
+// is not a rung — it is the other section, and a rung that leads out of the section made the rail and
+// the ladder disagree about what the work was.
+var ladderRows = []string{"training run", "training result", "optimize"}
 
 const (
 	subRun = iota
 	subResult
 	subOptimize
-	subGeneralize
 )
 
 func (m *Model) iterBody(h int) []string {
@@ -107,11 +109,6 @@ func (f *flowState) rungState(i int) string {
 			return fmt.Sprintf("revise #%d into the next candidate", it.Cand.ID)
 		}
 		return "nothing to revise yet"
-	case subGeneralize:
-		if !f.gateOpen() {
-			return fmt.Sprintf("locked · %d more iteration(s) · ctrl+g forces it", max(0, iterationsRequired-len(f.iters)))
-		}
-		return fmt.Sprintf("ready · %s measured", plural(len(f.iters), "iteration"))
 	}
 	return ""
 }
@@ -126,7 +123,7 @@ func (m *Model) rungDetail(i int) []string {
 	switch i {
 	case subRun:
 		d.title("Run the train set against one wording")
-		d.lead("The train run is the only measurement a revision may learn from. Validation is not run here — it judges the wording in step 4, and measuring it now would let the loop learn from it.")
+		d.lead("The train run is the only measurement a revision may learn from. Validation is not run here — it judges the wording in generalization, and measuring it now would let the loop learn from it.")
 		rows, runs := f.lab.TrainRows, f.lab.Runs
 		d.fact("candidate", fmt.Sprintf("#%d · %s", pendingID(pend, it), plural(charsOf(pend, it), "character")))
 		d.fact("scope", fmt.Sprintf("%s × %d runs per query = %d agent calls", pluralOf(rows, "train query", "train queries"), runs, rows*runs))
@@ -164,7 +161,7 @@ func (m *Model) rungDetail(i int) []string {
 			return d.lines
 		}
 		if it == nil {
-			d.fact("blocked", "nothing measured yet — step 3 starts with a training run")
+			d.fact("blocked", "nothing measured yet — rung 1 of this section starts with a training run")
 			return d.lines
 		}
 		d.fact("parent", fmt.Sprintf("#%d · %s · train %s", it.Cand.ID, plural(len([]rune(strings.TrimSpace(it.Cand.Text))), "character"),
@@ -174,26 +171,12 @@ func (m *Model) rungDetail(i int) []string {
 			d.fact("diff", fmt.Sprintf("fixed %s · broke %s", idListOf(it.Train.Fixed), idListOf(it.Train.Broke)))
 		}
 		d.action("enter", "open the wording — it becomes candidate #"+fmt.Sprint(it.Cand.ID+1))
-	case subGeneralize:
-		d.title("Generalize on the validation set")
-		d.lead("Five measured wordings is the guide's bar: below that the validation rate is a coin and the difference between two iterations is noise. Step 4 runs the validation set once against every measured wording and ranks them by it.")
-		d.fact("measured", fmt.Sprintf("%d of %d iterations", len(f.iters), iterationsRequired))
-		if m.needsValidation() > 0 {
-			d.fact("validation", fmt.Sprintf("%s to run", plural(m.needsValidation(), "iteration")))
-		} else if len(f.iters) > 0 {
-			d.fact("validation", "every measured iteration has been validated")
-		}
-		if f.gateOpen() {
-			d.action("enter", "open generalization")
-		} else {
-			d.action("ctrl+g", "generalize anyway — the rate is unproven")
-		}
 	}
 	return d.lines
 }
 
 // needsValidation counts the measured iterations whose validation run has not happened: the work
-// step 4 has to do before it can rank anything.
+// the validate step has to do before it can rank anything.
 func (m *Model) needsValidation() int {
 	if m.flow == nil {
 		return 0
@@ -326,8 +309,6 @@ func (m *Model) rungAction() tea.Cmd {
 			return nil
 		}
 		return m.openDraft()
-	case subGeneralize:
-		return m.gotoStep(StepGeneralize)
 	}
 	return nil
 }

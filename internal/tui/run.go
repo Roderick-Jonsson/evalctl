@@ -160,7 +160,7 @@ func askLead(k runKind) string {
 	case runHoldout:
 		return "The fresh queries are measured once, after the winner is applied. They are not part of the loop and never steer it: their only job is to say whether the shipped wording works on something nobody tuned against."
 	}
-	return "The train set is what a revision may learn from. Validation is not run here: it judges the wording in step 4, and measuring it now would let the loop learn from it."
+	return "The train set is what a revision may learn from. Validation is not run here: it judges the wording in generalization, and measuring it now would let the loop learn from it."
 }
 
 func (r *runState) askHints() []hint {
@@ -422,12 +422,11 @@ func (m *Model) leaveRun() tea.Cmd {
 	m.mode = screenFlow
 	switch {
 	case gen:
-		m.flow.step = StepGeneralize
-		m.flow.res = 0
+		m.flow.sec, m.flow.step, m.flow.res = secGeneralization, 3, 0
 	case kind == runTrain:
-		m.flow.step, m.flow.sub = StepIterate, subResult
+		m.flow.sec, m.flow.step, m.flow.sub = secIteration, 2, subResult
 	default:
-		m.flow.step = StepGeneralize
+		m.flow.sec, m.flow.step = secGeneralization, 3
 	}
 	return nil
 }
@@ -533,7 +532,7 @@ type genState struct {
 	done  int
 }
 
-// unvalidatedIDs is the work step 4 has to do before it can rank anything: measured candidates with
+// unvalidatedIDs is the work the validate step has to do before it can rank anything: measured candidates with
 // no validation measurement, in iteration order.
 func (m *Model) unvalidatedIDs() []int {
 	var out []int
@@ -547,7 +546,7 @@ func (m *Model) unvalidatedIDs() []int {
 
 func (m *Model) startGeneralization() tea.Cmd {
 	if m.flow.lab == nil || m.flow.lab.ValidationRows == 0 {
-		m.setStatus("no validation queries — step 2 defines what judges the wording", true)
+		m.setStatus("no validation queries — the section's first step defines them", true)
 		return nil
 	}
 	ids := m.unvalidatedIDs()

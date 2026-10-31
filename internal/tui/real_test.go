@@ -36,12 +36,17 @@ func TestOpensTheRealTree(t *testing.T) {
 		if m.flow == nil {
 			t.Fatalf("%s: no flow", name)
 		}
-		for step := StepTrain; step <= StepGeneralize; step++ {
-			m.flow.step = step
-			m.flow.forced = step == StepGeneralize
-			m.reload()
-			if got := len(strings.Split(m.View(), "\n")); got != m.height {
-				t.Fatalf("%s step %d: %d rows", name, step, got)
+		// Both sections, every step of each, plus the section screen itself.
+		m.mode = screenSections
+		for sec := secIteration; sec <= secGeneralization; sec++ {
+			for step := 1; step <= len(stepsOf(sec)); step++ {
+				m.mode = screenFlow
+				m.flow.sec, m.flow.step = sec, step
+				m.flow.forced = sec == secGeneralization && step >= 2
+				m.reload()
+				if got := len(strings.Split(m.View(), "\n")); got != m.height {
+					t.Fatalf("%s section %d step %d: %d rows", name, sec, step, got)
+				}
 			}
 		}
 	}

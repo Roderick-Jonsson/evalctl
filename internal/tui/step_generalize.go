@@ -21,18 +21,31 @@ import (
 // states what is about to be measured and what it costs; after, it is the result list, one line per
 // iteration, train beside validation and the gap between them.
 
-func (m *Model) genBody(h int) []string {
+// validateBody is the generalization section's second step: the gate, the empty set, or the batch.
+//
+// The validation set is the instrument the whole loop protects — read once, against every wording the
+// iteration produced, and the only thing that ranks them. So this screen says what is about to be
+// measured and what it costs before anything is spent, and it is where the five-iteration bar is
+// either satisfied or forced.
+func (m *Model) validateBody(h int) []string {
 	f := m.flow
 	if !f.gateOpen() {
 		return m.lockedBody(h)
 	}
-	if m.flow.lab != nil && m.flow.lab.ValidationRows == 0 {
+	if f.lab != nil && f.lab.ValidationRows == 0 {
 		return m.emptyValidationBody(h)
 	}
 	if m.needsValidation() > 0 {
 		return m.validationBody(h)
 	}
-	return m.resultBody(h)
+	// Everything has been validated: the step's work is done, and the results are the next step.
+	d := &docWriter{w: max(28, m.width-4)}
+	d.title("Every measured wording has been validated")
+	d.lead("Nothing is left to run against the validation set. The result list ranks the wordings by it, and there is where one gets applied.")
+	d.rule()
+	d.fact("iterations", plural(len(f.iters), "measured wording"))
+	d.action("enter", "open the results")
+	return fitRows(d.lines, h)
 }
 
 // emptyValidationBody is the state a loop reaches when the train set was built and the validation
@@ -47,10 +60,10 @@ func (m *Model) emptyValidationBody(h int) []string {
 	d.lead("Generalization runs the validation queries against every wording the loop produced. With none defined there is nothing to run, and a wording chosen without them is chosen on the train set alone — which is the thing the loop exists to avoid.")
 	d.rule()
 	d.fact("train", plural(rows, "row")+" of this skill's queries")
-	d.fact("validation", "none — step 2 defines them")
+	d.fact("validation", "none — the section's first step defines them")
 	d.blank()
 	d.para("Write queries the wording must not have seen: a few that should trigger and a few that should not, drawn from the same work as the train rows but not from the same asks.")
-	d.action("2", "go to the validation set")
+	d.action("1", "go to the validation set")
 	return fitRows(d.lines, h)
 }
 
@@ -59,7 +72,7 @@ func (m *Model) emptyValidationBody(h int) []string {
 func (m *Model) lockedBody(h int) []string {
 	f := m.flow
 	d := &docWriter{w: max(28, m.width-4)}
-	d.title("Generalization is locked")
+	d.title("Validation is locked until the loop has run")
 	d.lead("Five measured iterations is the guide's bar: below that the validation rate is a coin, and the difference between two iterations is noise. The gate exists so that a wording does not get picked because it was the third one tried.")
 	d.rule()
 	d.fact("measured", fmt.Sprintf("%d of %d iterations", len(f.iters), iterationsRequired))
@@ -67,7 +80,7 @@ func (m *Model) lockedBody(h int) []string {
 	d.fact("validation", fmt.Sprintf("%s held back, never read", pluralOf(f.lab.ValidationRows, "query", "queries")))
 	d.blank()
 	d.para("If the loop has stopped moving — the same failures for two revisions, or nothing to change — the answer is the query set, not the wording. ctrl+g forces generalization and says so in the report.")
-	d.action("ctrl+g", "generalize anyway — the rate is unproven")
+	d.action("ctrl+g", "validate anyway — the rate is unproven")
 	return fitRows(d.lines, h)
 }
 
@@ -119,7 +132,7 @@ func (m *Model) resultBody(h int) []string {
 	head := "  " + headerFocus.Render(fitTo("ITERATION", 10)) + " " + headerFocus.Render(fitTo("TRAIN", 12)) + "  " +
 		headerFocus.Render(fitTo("VALIDATION", 12)) + " " + headerFocus.Render(fitTo("GAP", 6)) + " " +
 		headerFocus.Render(fitTo("CHARS", 6)) + "  " + headerFocus.Render("NOTE")
-	lines := []string{"", "  " + titleStyle.Render("generalization · every measured wording on the validation set"),
+	lines := []string{"", "  " + titleStyle.Render("results · every measured wording, ranked by the validation set"),
 		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4)))), head}
 	room := max(1, h-len(lines)-3)
 	top := max(0, f.res-room+1)
@@ -205,17 +218,25 @@ func bestIteration(f *flowState) *iteration {
 	return best
 }
 
-func (m *Model) updateGen(msg tea.KeyMsg) tea.Cmd {
+// updateValidate is the batch step's one key: run, or move on when there is nothing left to run.
+func (m *Model) updateValidate(msg tea.KeyMsg) tea.Cmd {
 	f := m.flow
-	if !f.gateOpen() {
+	if !f.gateOpen() || f.lab == nil || f.lab.ValidationRows == 0 {
+		return nil
+	}
+	if msg.String() != "enter" {
 		return nil
 	}
 	if m.needsValidation() > 0 {
-		if msg.String() == "enter" {
-			return m.startGeneralization()
-		}
-		return nil
+		return m.startGeneralization()
 	}
+	return m.jumpStep(3)
+}
+
+// updateResults is the result list: pick a wording, read why it failed, apply it, or run the fresh
+// queries once it is in.
+func (m *Model) updateResults(msg tea.KeyMsg) tea.Cmd {
+	f := m.flow
 	switch msg.String() {
 	case "j", "down":
 		f.res = min(f.res+1, max(0, len(f.iters)-1))
@@ -306,7 +327,7 @@ func (m *Model) openIterationDoc(it iteration) tea.Cmd {
 	if valid != nil {
 		d.fact("validation", fmt.Sprintf("%s (%d of %d)", pct(valid.Passed, valid.Judged), valid.Passed, valid.Judged))
 	} else {
-		d.fact("validation", "not measured — step 4 runs it")
+		d.fact("validation", "not measured — validate runs it")
 	}
 	d.fact("gap", gapOf(&it.Train.Train, valid))
 	d.fact("chars", fmt.Sprint(it.Cand.Chars))

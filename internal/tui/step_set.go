@@ -23,7 +23,7 @@ import (
 
 func (m *Model) setBody(h int) []string {
 	f := m.flow
-	train := f.step == StepTrain
+	train := f.sec == secIteration
 	title := "train set — the queries the wording may learn from"
 	if !train {
 		title = "validation set — the queries that judge the wording, never shape it"
@@ -65,7 +65,7 @@ func (m *Model) setBody(h int) []string {
 }
 
 // setRow is one query: the id, the label it must not lie about, the text, and the reason it is in
-// the set — which is the field step 3 reads back to you when the row fails.
+// the set — which is the field the ladder reads back to you when the row fails.
 func (m *Model) setRow(i, w int) string {
 	f := m.flow
 	e := f.rows[i]
@@ -151,7 +151,7 @@ func (m *Model) setWarning(train bool) string {
 		out = append(out, fmt.Sprintf("this split carries only one label — a revision cannot learn from it"))
 	}
 	if noWhy > 0 {
-		out = append(out, fmt.Sprintf("%s without a why — step 3 reads that line when the row fails", plural(noWhy, "row")))
+		out = append(out, fmt.Sprintf("%s without a why — the ladder reads that line when the row fails", plural(noWhy, "row")))
 	}
 	if dupes > 0 {
 		out = append(out, fmt.Sprintf("%s read the same as another row", plural(dupes, "row")))
@@ -193,13 +193,13 @@ func (m *Model) updateSet(msg tea.KeyMsg) tea.Cmd {
 	case "enter":
 		return m.leaveSet()
 	case "n":
-		m.openForm(nil, f.step)
+		m.openForm(nil)
 	case "e":
 		if len(f.rows) == 0 {
 			return nil
 		}
 		e := f.rows[f.sel]
-		m.openForm(&e, f.step)
+		m.openForm(&e)
 	case " ", "space":
 		if len(f.rows) == 0 {
 			return nil
@@ -214,18 +214,15 @@ func (m *Model) updateSet(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// leaveSet is the forward move: the train set has to hold rows before the validation set is worth
-// defining, and the validation set has to hold rows before anything is measured against it.
+// leaveSet is the forward move inside a section: a set with no rows measures nothing, so the step
+// after it is refused rather than opened onto an empty run.
 func (m *Model) leaveSet() tea.Cmd {
 	f := m.flow
 	if len(f.rows) == 0 {
 		m.setStatus("this split is empty — add a query with n", true)
 		return nil
 	}
-	if f.step == StepTrain {
-		return m.gotoStep(StepValidation)
-	}
-	return m.gotoStep(StepIterate)
+	return m.jumpStep(2)
 }
 
 // toggleLabel flips the row's label and writes the file at once: the set is what the next run reads
@@ -262,7 +259,7 @@ func (m *Model) askDeleteRow() {
 	f := m.flow
 	e := f.rows[f.sel]
 	m.ask = &askState{
-		scope: stepNames[f.step],
+		scope: f.sectionName(),
 		title: fmt.Sprintf("delete q%d?", e.ID),
 		lines: []string{
 			oneLine(e.Text),
@@ -293,9 +290,9 @@ func (m *Model) askDeleteRow() {
 // openForm opens the query form on a row of the current split. A new row takes the next free id
 // without asking: ids are the tool's business, not the operator's, and the guided flow has no
 // second place to fix a collision.
-func (m *Model) openForm(e *store.Entry, step int) {
+func (m *Model) openForm(e *store.Entry) {
 	split := store.SplitTrain
-	if step == StepValidation {
+	if m.flow != nil && m.flow.split() == store.SplitValidation {
 		split = store.SplitValidation
 	}
 	f := &formState{split: split, width: m.width, height: m.bodyHeight()}
@@ -312,7 +309,7 @@ func (m *Model) openForm(e *store.Entry, step int) {
 	}
 	f.hint = "a query is a prompt a real user would type — the wording is what the router matches on"
 	if f.editing {
-		f.hint = "the why is read back to you in step 3 when this row fails"
+		f.hint = "the why is read back to you when this row fails"
 	}
 	f.build()
 	m.form = f
