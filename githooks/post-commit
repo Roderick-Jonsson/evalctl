@@ -11,8 +11,11 @@ root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 changed=$(git diff-tree --no-commit-id --name-only -r -m HEAD -- evalctl 2>/dev/null)
 printf '%s\n' "$changed" | grep -qE '(^|/)([^/]+\.go|go\.mod|go\.sum|Makefile)$' || exit 0
 
-echo "evalctl: commit touched the tool — reinstalling the copy on PATH"
-if ! make -C "$root/evalctl" install; then
-	echo "evalctl: reinstall failed; the binary on PATH is now stale" >&2
+echo "evalctl: commit touched the tool — rebuilding ./bin and reinstalling the copy on PATH"
+# Both copies, because both get run: `evalctl` from PATH is the installed one, and `./bin/evalctl`
+# is the one a person reaches for while working in this directory. Refreshing only PATH left ./bin
+# two commits behind, which is how a stale screen gets screenshotted.
+if ! make -C "$root/evalctl" build install; then
+	echo "evalctl: rebuild failed; the binaries are now stale" >&2
 fi
 exit 0

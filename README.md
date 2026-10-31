@@ -31,8 +31,10 @@ make uninstall                # take it back off PATH
 
 `make hooks` copies `githooks/post-commit` into `.git/hooks/` (refusing to overwrite a hook it did
 not write — merge by hand instead). It fires only when the commit touched Go sources, `go.mod`,
-`go.sum` or the Makefile, so commits to the eval sets stay fast, and a failed reinstall only prints
-a stale-binary warning — never a failed commit. It is per-clone: run it once after cloning.
+`go.sum` or the Makefile, so commits to the eval sets stay fast, and a failed rebuild only prints a
+stale-binary warning — never a failed commit. It rebuilds **both** copies: the one on PATH and
+`./bin/evalctl`, because both get run — refreshing only PATH is how `./bin/evalctl` ended up two
+commits behind the screen someone was looking at. It is per-clone: run it once after cloning.
 
 `--root` picks the tree (default: walk up for the eval tree, or `$EVALCTL_ROOT`). Running it from
 inside the repo just works, installed or not.
