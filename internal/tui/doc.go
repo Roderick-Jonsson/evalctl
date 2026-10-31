@@ -137,6 +137,17 @@ func (d *docWriter) note(text string) {
 	}
 }
 
+// bullet is one line of advice in a list: a dash and the sentence, wrapped under its own indent.
+func (d *docWriter) bullet(text string) {
+	for i, line := range wrapPlain(text, max(12, d.body()-4)) {
+		if i == 0 {
+			d.lines = append(d.lines, "  - "+dimStyle.Render(line))
+			continue
+		}
+		d.lines = append(d.lines, "    "+dimStyle.Render(line))
+	}
+}
+
 // para is the guide's own advice, where a step uses it.
 func (d *docWriter) para(text string) {
 	for _, line := range wrapPlain(text, d.body()) {

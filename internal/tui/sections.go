@@ -108,13 +108,13 @@ func (m *Model) sectionPreview(w, h int) []string {
 	block()
 
 	if row.sec == secIteration {
-		d.para("The train set is the only measurement a revision may learn from. Its four things are one screen — the queries you edit, the wording under test, what the last run said, and the revision written from the failures — because three of them are not steps: an action, its output, and an edit. The validation set is never opened here, so nothing a revision learns can come from it.")
+		d.para("The train set is the only measurement a revision may learn from, and the work is a comparison: one failed query read in full, the set's verdicts, the wording you change, and every rate the loop has scored so far. They share one screen — four quadrants, one decision. The validation set is never opened here, so nothing a revision learns can come from it.")
 		block()
 		d.card("On the screen")
-		d.fact("train set", "the queries, edited in place")
-		d.fact("the wording", "the candidate under test, and whether SKILL.md holds it")
-		d.fact("the last run", "what the train set said, and which rows failed")
-		d.fact("the revision", "the next candidate, written from those failures")
+		d.fact("failed query", "the row that failed, and what to change about it")
+		d.fact("train set", "the queries with their verdict, edited in place")
+		d.fact("description", "the wording itself, editable, in SKILL.md's field")
+		d.fact("iterations", "every run so far and what it scored")
 		block()
 		d.card("The ledger")
 		d.fact("wordings", plural(len(f.lab.Candidates), "candidate"))

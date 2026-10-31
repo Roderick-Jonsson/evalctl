@@ -61,7 +61,6 @@ type Model struct {
 	sections sectionState
 	flow     *flowState
 	form     *formState
-	draft    *draftState
 	ask      *askState
 	doc      *docState
 	run      *runState
@@ -166,8 +165,14 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == screenForm && m.form != nil {
 		return m, m.form.update(m, msg)
 	}
-	if m.mode == screenDraft && m.draft != nil {
-		return m, m.draft.update(m, msg)
+	// The description field owns its keystrokes: q, ? and the digits are characters first, and a
+	// "q" that quits while someone is writing a sentence is a bug, not a shortcut.
+	if m.typing() {
+		switch key {
+		case "ctrl+c":
+			return m, tea.Quit
+		}
+		return m, m.typingKey(msg)
 	}
 	switch key {
 	case "ctrl+c":
@@ -233,8 +238,6 @@ func (m *Model) escUp() tea.Cmd {
 		m.mode = screenSkill
 	case screenForm:
 		m.form, m.mode = nil, screenFlow
-	case screenDraft:
-		m.draft, m.mode = nil, screenFlow
 	case screenAsk:
 		m.ask, m.mode = nil, screenFlow
 	case screenDoc:
@@ -404,8 +407,6 @@ func (m *Model) contextLine(w int) string {
 		if m.form != nil {
 			return dimStyle.Render("  " + m.form.hint)
 		}
-	case screenDraft:
-		return dimStyle.Render("  the wording is the only thing the router sees before it decides whether to load the skill")
 	case screenRunAsk, screenRunLive:
 		if m.run != nil {
 			return dimStyle.Render("  " + m.run.hint)
@@ -431,10 +432,6 @@ func (m *Model) bodyLines(h int) []string {
 	case screenForm:
 		if m.form != nil {
 			return m.form.body(h)
-		}
-	case screenDraft:
-		if m.draft != nil {
-			return m.draft.body(m, h)
 		}
 	case screenAsk:
 		if m.ask != nil {
@@ -499,10 +496,6 @@ func (m *Model) hints() []hint {
 		if m.form != nil {
 			return m.form.hints()
 		}
-	case screenDraft:
-		if m.draft != nil {
-			return m.draft.hints()
-		}
 	case screenAsk:
 		if m.ask != nil {
 			return m.ask.hints()
@@ -563,10 +556,6 @@ func (m *Model) stateText() string {
 		if m.form != nil {
 			return m.form.facts()
 		}
-	case screenDraft:
-		if m.draft != nil {
-			return m.draft.stateText()
-		}
 	}
 	return ""
 }
@@ -576,6 +565,13 @@ func (m *Model) position() string {
 	case screenFlow:
 		if m.flow != nil && m.flow.stepCount() > 1 {
 			return fmt.Sprintf("step %d of %d", m.flow.step, m.flow.stepCount())
+		}
+		if m.flow != nil {
+			pos := focusNames[m.flow.focus]
+			if m.flow.draftChanged() {
+				pos += " · unsaved"
+			}
+			return pos
 		}
 	case screenSections:
 		return fmt.Sprintf("%d / 2", m.sections.cursor+1)

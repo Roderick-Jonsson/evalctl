@@ -4,216 +4,379 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+
+	"evalctl/internal/runner"
+	"evalctl/internal/store"
 )
 
-// The iteration workbench.
+// The iteration workbench: four things at once, because the loop is a comparison.
 //
-// Iteration is one activity with four things in it, and three of them are not steps: the set is what
-// you edit, the run is an action, the result is what the run returned, and the revision is an edit.
-// Splitting them into rungs made a screen you walk through to do one thing, and hid the set behind a
-// step you had already finished. So they are one screen:
+//	tl  THE FAILED QUERY   one failing row in full, and what the guide says to do about it
+//	tr  TRAIN SET          the queries with their verdict, edited in place
+//	bl  THE DESCRIPTION    SKILL.md's wording, editable — the thing you actually change
+//	br  ITERATIONS         every run so far, with the rate it scored
 //
-//	TRAIN SET (left)              the queries, edited in place
-//	THE WORDING (right)           the candidate under test, and whether SKILL.md holds it
-//	THE LAST RUN (right)          what the train set said about that wording
-//	FAILURES (right)              the rows that failed, and which way the wording is wrong
-//
-// One key does the loop's next thing — run while the wording is unmeasured, revise once it has been
-// measured — and `R` runs again on purpose. Everything else on the screen is a fact you need in order
-// to decide what to type into the description.
+// The four are one decision seen from four sides: the failure says what is wrong, the set says how
+// wrong (one row, or half of them), the iteration list says whether the last five changes bought
+// anything, and the description is where the answer is written. A rung-by-rung screen hid three of
+// those while you worked on the fourth.
 
-func (m *Model) iterBody(h int) []string {
-	// The set needs a readable measure; below that it takes the whole window and the pane's facts
-	// move under the table, because a query table squeezed into half a screen is a table you scan.
-	listW := min(74, max(40, m.width*55/100))
-	paneW := min(96, m.width-listW-3)
-	if paneW < 40 {
-		return m.iterStacked(h)
-	}
-	left := m.iterSet(listW, h)
-	right := m.iterPane(paneW, h)
-	return m.splitBody(h, listW, paneW, left, right)
+const (
+	focusSet = iota
+	focusWording
+	focusNote
+	focusCount
+)
+
+var focusNames = []string{"set", "wording", "note"}
+
+// iterDraft is the wording being edited, seeded from the candidate under test.
+type iterDraft struct {
+	parent   int    // the candidate this text was seeded from
+	loaded   string // the text it was seeded with, for "has anything changed"
+	loadedIn string // and its note
+	text     textarea.Model
+	note     textinput.Model
 }
 
-// iterSet is the train set: the same table the set step used, cut to the column this screen has.
-func (m *Model) iterSet(w, h int) []string {
-	f := m.flow
-	const idW, labelW = 4, 7
-	withWhy := w >= 64
-	whyW := 0
-	if withWhy {
-		whyW = 18
+func (m *Model) iterBody(h int) []string {
+	m.ensureDraft()
+	if m.width < 90 || h < 18 {
+		return m.iterStacked(h)
 	}
-	queryW := max(16, w-2-3-idW-2-labelW-2-whyW)
-	head := "  " + dimStyle.Render(padCell("ID", idW, true)) + "   " +
-		dimStyle.Render(padCell("TRIGGER", labelW, false)) + "  " +
-		dimStyle.Render(padCell("QUERY", queryW, false))
-	if withWhy {
-		head += "  " + dimStyle.Render("WHY")
-	}
-	lines := []string{"", "  " + dimStyle.Render("TRAIN SET") + "  " +
-		dimStyle.Render(pluralOf(len(f.rows), "query", "queries")), head}
+	leftW := min(96, max(44, m.width*40/100))
+	rightW := m.width - leftW - 3
+	topH := max(8, h/2-1)
+	botH := max(6, h-topH-1)
 
-	// The facts under the table: the split's balance, then the one warning worth making. Both wrap,
-	// because a count line cut in half is a count you cannot read.
-	var facts []string
-	for _, line := range wrapPlain(m.setFacts(true), max(20, w-4)) {
-		facts = append(facts, "  "+dimStyle.Render(line))
+	top := m.splitBody(topH, leftW, rightW, m.quadFailure(leftW, topH), m.quadSet(rightW, topH))
+	bot := m.splitBody(botH, leftW, rightW, m.quadWording(leftW, botH), m.quadIterations(rightW, botH))
+	rule := dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, m.width)))
+	return fitRows(append(append(top, rule), bot...), h)
+}
+
+// ---------------------------------------------------------------- quadrants
+
+// quadFailure is one failing row in full and what the guide says to do about that kind of failure.
+// Which row it is follows the cursor: if the row you are standing on failed, that is the one; if it
+// passed, the first failure is, because the quadrant is about what to fix.
+func (m *Model) quadFailure(w, h int) []string {
+	f := m.flow
+	row := f.failedRow()
+	build := func(full bool) []string {
+		d := &docWriter{w: w}
+		if row == nil {
+			d.title("FAILED QUERY")
+			switch {
+			case f.pending() != nil:
+				d.lead(fmt.Sprintf("candidate #%d has not been run yet", f.pending().ID))
+				d.para("Run the train set: the failures are what the next revision is written from, and there is nothing to read until one exists.")
+			case f.latest() != nil:
+				it := f.latest()
+				d.lead("nothing failed")
+				d.para(fmt.Sprintf("This wording passes all %d train queries. A revision now is a hunch — the loop has nothing to tell you, and generalization is where the next real answer is.", it.Train.Train.Judged))
+			default:
+				d.lead("nothing measured yet")
+				d.para("Run the train set against the wording in the description, and its failures appear here.")
+			}
+			return d.lines
+		}
+		d.title(fmt.Sprintf("FAILED QUERY · q%d", row.ID))
+		d.lead(fmt.Sprintf("should %s · fired %d of %d runs", triggerWord(row.ShouldTrigger), row.Triggers, row.Runs))
+		d.rule()
+		if row.Query != "" {
+			d.fact("the ask", row.Query)
+		}
+		if full && row.Why != "" {
+			d.fact("why it is here", row.Why)
+		}
+		if full {
+			d.fact("what loaded", loadedInstead(*row))
+		}
+		d.fact("verdict", verdictOf(*row))
+		d.card("What to adapt")
+		for _, line := range adaptHints(*row) {
+			d.bullet(line)
+		}
+		d.para("Never paste a query's words into the description: that teaches the wording the test, not the job.")
+		return d.lines
 	}
-	if warn := m.setWarning(true); warn != "" {
-		for _, line := range wrapPlain(warn, max(20, w-8)) {
-			facts = append(facts, "  "+badgeWarn.Render("!")+" "+dimStyle.Render(line))
+	lines := build(true)
+	// The advice is the quadrant's reason to exist: a short column loses the why and the loaded
+	// skill before it loses a line of what to do about it.
+	if len(lines) > h {
+		lines = build(false)
+	}
+	return fitRows(lines, h)
+}
+
+// adaptHints is the guide's advice, narrowed to the failure in front of you. It is deterministic on
+// purpose: the same failure always earns the same advice, so it stays checkable against the page it
+// came from instead of being an opinion at 2am.
+func adaptHints(row runner.ScoreRow) []string {
+	switch {
+	case row.ShouldTrigger && row.Triggers == 0:
+		return []string{
+			"Name this context: the ask is the skill's job and the wording never says so.",
+			"Err on the side of pushy — say it applies even when the user does not name it.",
+			"Describe the intent the user has, not the tool they happen to mention.",
+		}
+	case !row.ShouldTrigger && row.Triggers > 0:
+		return []string{
+			"Something in the wording overlaps work that is not this skill's.",
+			"Narrow it: say what this skill is for, and where it hands off.",
+			"Check which skill did load — that is the wording you are competing with.",
 		}
 	}
+	return []string{
+		"The wording is ambiguous here: it fires on some runs and not others.",
+		"Make the line between yes and no explicit — say what makes this a yes.",
+		"If it keeps happening, the row may be the problem, not the description.",
+	}
+}
+
+// quadSet is the train set with the verdict of the last run beside each row.
+func (m *Model) quadSet(w, h int) []string {
+	f := m.flow
+	const idW, trigW, resW = 4, 7, 6
+	queryW := max(12, w-2-3-idW-2-trigW-1-resW-2)
+	head := "  " + dimStyle.Render(padCell("ID", idW, true)) + "   " +
+		dimStyle.Render(padCell("TRIGGER", trigW, false)) + " " +
+		dimStyle.Render(padCell("RESULT", resW, false)) + "  " +
+		dimStyle.Render(padCell("QUERY", queryW, false))
+	lines := []string{"", m.quadTitle(w, "TRAIN SET", pluralOf(len(f.rows), "query", "queries")), head}
+
+	// The balance line is the one fact about the set as a whole; it goes under the table.
+	facts := wrapPlain(m.setFacts(true), max(20, w-6))
 	room := max(1, h-len(lines)-len(facts))
 	f.clampSet(room)
 	for i := f.top; i < len(f.rows) && i < f.top+room; i++ {
-		lines = append(lines, m.iterSetRow(i, idW, labelW, queryW, whyW))
+		lines = append(lines, m.quadSetRow(i, idW, trigW, resW, queryW))
 	}
-	for len(lines) < 2+room {
+	for len(lines) < h-len(facts) {
 		lines = append(lines, "")
 	}
-	return fitRows(append(lines, facts...), h)
+	for _, line := range facts {
+		lines = append(lines, "  "+dimStyle.Render(line))
+	}
+	return fitRows(lines, h)
 }
 
-func (m *Model) iterSetRow(i, idW, labelW, queryW, whyW int) string {
+func (m *Model) quadSetRow(i, idW, trigW, resW, queryW int) string {
 	f := m.flow
 	e := f.rows[i]
 	mark := "  "
 	if i == f.sel {
 		mark = cursorMark.Render(glyphs.Cursor)
 	}
-	label := colYes.Render(padCell("yes", labelW, false))
+	trig := colYes.Render(padCell("yes", trigW, false))
 	if e.Label == "no" {
-		label = colNo.Render(padCell("no", labelW, false))
+		trig = colNo.Render(padCell("no", trigW, false))
 	}
-	line := mark + colID.Render(padCell(fmt.Sprint(e.ID), idW, true)) + "   " + label + "  " +
-		colText.Render(padCell(oneLine(e.Text), queryW, false))
-	if whyW > 0 {
-		why := e.Why
-		if why == "" {
-			why = "—"
+	result := dimStyle.Render(padCell("—", resW, false))
+	if p := f.passOf(e.ID); p != nil {
+		if *p {
+			result = styleOn.Render(padCell("pass", resW, false))
+		} else {
+			result = statusBad.Render(padCell("FAIL", resW, false))
 		}
-		line += "  " + colSplit.Render(padCell(oneLine(why), whyW, false))
 	}
+	line := mark + colID.Render(padCell(fmt.Sprint(e.ID), idW, true)) + "   " + trig + " " +
+		result + "  " + colText.Render(padCell(oneLine(e.Text), queryW, false))
 	if i == f.sel {
 		line = selected(line)
 	}
 	return line
 }
 
-// iterPane is the other three: the wording under test, what the last run said about it, and the rows
-// that failed. The action line is what `enter` does right now, and it says which one it is.
-func (m *Model) iterPane(w, h int) []string {
+// quadWording is the description, editable in place: the loop ends here, with a caret, because a
+// revision is an edit and not a screen you navigate to.
+func (m *Model) quadWording(w, h int) []string {
 	f := m.flow
-	d := &docWriter{w: w, label: 11}
-	var blocks [][]string
-	from := len(d.lines)
-	block := func() {
-		blocks = append(blocks, append([]string(nil), d.lines[from:]...))
-		from = len(d.lines)
+	d := f.draft
+	d.text.SetWidth(max(20, w-4))
+	d.text.SetHeight(max(2, h-4))
+	n := len([]rune(strings.TrimSpace(d.text.Value())))
+	counter := fmt.Sprintf("%d / %d", n, store.DescriptionLimit)
+	style := dimStyle
+	if n > store.DescriptionLimit {
+		style = statusBad
+	} else if n > store.DescriptionLimit*4/5 {
+		style = badgeWarn
 	}
-
-	pend, it := f.pending(), f.latest()
-	cand := pend
-	if cand == nil && it != nil {
-		cand = &it.Cand
+	lines := []string{"", endsLine("  "+titleStyle.Render("THE DESCRIPTION"), style.Render(counter)+" ", w)}
+	for _, line := range strings.Split(strings.TrimRight(d.text.View(), "\n"), "\n") {
+		lines = append(lines, "  "+line)
 	}
-	d.title("THE WORDING")
-	if cand == nil {
-		d.lead("no candidate yet — the loop adopts SKILL.md's wording on the first open")
-	} else {
-		head := fmt.Sprintf("#%d · %s", cand.ID, plural(len([]rune(strings.TrimSpace(cand.Text))), "character"))
-		if cand.InFile {
-			head += " · in SKILL.md"
-		}
-		d.lead(head)
+	// The note is the reason this wording exists; the ledger keeps it beside the text.
+	label := dimStyle.Render("note")
+	if f.focus == focusNote {
+		label = cursorMark.Render("note")
 	}
-	d.rule()
-	if cand != nil {
-		for _, line := range wrapPlain(oneLine(cand.Text), max(20, d.body())) {
-			d.lines = append(d.lines, "  "+line)
-		}
-	}
-	block()
-
-	d.card("THE LAST RUN")
-	switch {
-	case pend != nil:
-		d.fact("candidate", fmt.Sprintf("#%d has not been run yet", pend.ID))
-	case it != nil:
-		d.fact("iteration", fmt.Sprintf("%d · trigger-%d · %s", it.N, it.Train.Iteration, shortWhen(it.Train.Started)))
-		d.fact("train", fmt.Sprintf("%d of %d pass (%s)", it.Train.Train.Passed, it.Train.Train.Judged,
-			pct(it.Train.Train.Passed, it.Train.Train.Judged)))
-		if len(it.Train.Fixed) > 0 || len(it.Train.Broke) > 0 {
-			d.fact("against parent", fmt.Sprintf("fixed %s · broke %s", idListOf(it.Train.Fixed), idListOf(it.Train.Broke)))
-		}
-	default:
-		d.fact("run", "nothing measured yet")
-	}
-	block()
-
-	// Failures are the screen's payload: the reason the next revision exists.
-	if it != nil && pend == nil {
-		fails := it.Cand.FailedTrain()
-		d.card("FAILURES")
-		if len(fails) == 0 {
-			d.fact("none", "this wording passes the train set")
-		}
-		for i, row := range fails {
-			if i == 3 {
-				d.fact("more", fmt.Sprintf("%s — f opens them all", plural(len(fails)-3, "row")))
-				break
-			}
-			d.fact(fmt.Sprintf("q%d", row.ID), fmt.Sprintf("%s · %s", labelWord(row.ShouldTrigger), verdictOf(row)))
-			if q := strings.TrimSpace(row.Query); q != "" {
-				d.note(clipText(q, max(20, d.body()-6)))
-			}
-		}
-		block()
-	}
-
-	// The action: run while the wording is unmeasured, revise once it has been measured.
-	actDoc := &docWriter{w: w}
-	if pend != nil || it == nil {
-		actDoc.action("enter", fmt.Sprintf("run the train set — %d queries × %d runs = %d calls",
-			len(f.rows), f.lab.Runs, len(f.rows)*f.lab.Runs))
-	} else {
-		actDoc.action("enter", fmt.Sprintf("revise #%d into #%d", it.Cand.ID, it.Cand.ID+1))
-	}
-	room := h - len(actDoc.lines)
-	var out []string
-	for _, b := range blocks {
-		if len(out)+len(b) > room {
-			break
-		}
-		out = append(out, b...)
-	}
-	return fitRows(append(out, actDoc.lines...), h)
+	lines = append(lines, "  "+label+"  "+d.note.View())
+	return fitRows(lines, h)
 }
 
-// iterStacked is the workbench without a pane: the set, then the facts that matter underneath it.
-func (m *Model) iterStacked(h int) []string {
+// quadIterations is the loop's own history: every run, and what it scored on the train set. It is
+// the only place you can see whether the last four revisions bought anything.
+func (m *Model) quadIterations(w, h int) []string {
 	f := m.flow
-	lines := m.iterSet(m.width, h-5)
-	pend, it := f.pending(), f.latest()
-	lines = append(lines, "")
-	switch {
-	case pend != nil || it == nil:
-		lines = append(lines, "  "+dimStyle.Render("nothing measured yet — enter runs the train set"))
-	case len(it.Cand.FailedTrain()) == 0:
-		lines = append(lines, "  "+styleOn.Render(glyphs.Done+" train "+pct(it.Train.Train.Passed, it.Train.Train.Judged)+" — nothing failing"))
-	default:
-		lines = append(lines, "  "+dimStyle.Render(fmt.Sprintf("train %s · %s — enter revises #%d",
-			pct(it.Train.Train.Passed, it.Train.Train.Judged), idList(it.Cand.FailedTrain()), it.Cand.ID)))
+	head := "  " + dimStyle.Render(padCell("ITER", 5, true)) + " " +
+		dimStyle.Render(padCell("TRAIN", 12, true)) + " " +
+		dimStyle.Render(padCell("CHARS", 6, true)) + "  " + dimStyle.Render("NOTE")
+	lines := []string{"", m.quadTitle(w, "ITERATIONS", fmt.Sprintf("%d of %d", len(f.iters), iterationsRequired)), head}
+	room := max(1, h-len(lines)-2)
+	start := max(0, len(f.iters)-room)
+	for i := start; i < len(f.iters); i++ {
+		it := f.iters[i]
+		rate := pct(it.Train.Train.Passed, it.Train.Train.Judged)
+		row := "  " + colID.Render(padCell(fmt.Sprint(it.N), 5, true)) + " " +
+			colText.Render(padCell(rate, 12, true)) + " " +
+			colSplit.Render(padCell(fmt.Sprint(it.Cand.Chars), 6, true)) + "  " +
+			colText.Render(ellipsis(oneLine(it.Cand.Note), max(6, w-32)))
+		if i == len(f.iters)-1 {
+			row = selected(row)
+		}
+		lines = append(lines, row)
+	}
+	if len(f.iters) == 0 {
+		lines = append(lines, "  "+dimStyle.Render("nothing measured yet"))
+	}
+	// The gate is the one thing the table is counting towards.
+	if !f.gateOpen() {
+		lines = append(lines, "  "+dimStyle.Render(fmt.Sprintf("%s to go before generalization",
+			plural(max(0, iterationsRequired-len(f.iters)), "iteration"))))
 	}
 	return fitRows(lines, h)
 }
 
+// quadTitle is a quadrant's head: the name, and the fact that belongs beside it on the right.
+func (m *Model) quadTitle(w int, name, right string) string {
+	left := "  " + titleStyle.Render(name)
+	if right == "" {
+		return left
+	}
+	return endsLine(left, dimStyle.Render(right)+" ", w)
+}
+
+// ---------------------------------------------------------------- the narrow fallback
+
+// iterStacked is the workbench without columns: the set with its verdicts, then the description.
+func (m *Model) iterStacked(h int) []string {
+	setH := max(6, h*55/100)
+	lines := m.quadSet(m.width, setH)
+	lines = append(lines, dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, m.width))))
+	lines = append(lines, m.quadWording(m.width, h-setH-1)...)
+	return fitRows(lines, h)
+}
+
+// ---------------------------------------------------------------- state
+
+// ensureDraft seeds the wording from the candidate under test the first time the section is opened.
+// A draft already being typed survives: leaving the section and coming back must not throw away the
+// sentences you were in the middle of writing.
+func (m *Model) ensureDraft() {
+	f := m.flow
+	if f == nil || f.lab == nil || f.draft != nil {
+		return
+	}
+	parent, text, note := 0, "", ""
+	if pend := f.pending(); pend != nil {
+		parent, text, note = pend.ID, pend.Text, pend.Note
+	} else if it := f.latest(); it != nil {
+		parent, text, note = it.Cand.ID, it.Cand.Text, it.Cand.Note
+	} else if n := len(f.lab.Candidates); n > 0 {
+		c := f.lab.Candidates[n-1]
+		parent, text, note = c.ID, c.Text, c.Note
+	}
+
+	ta := textarea.New()
+	ta.Prompt = ""
+	ta.ShowLineNumbers = false
+	ta.CharLimit = 0
+	ta.SetValue(text)
+	ta.SetWidth(max(20, m.width-6))
+	ta.SetHeight(6)
+
+	ni := textinput.New()
+	ni.Prompt = ""
+	ni.Placeholder = "why this change — one line"
+	ni.CharLimit = 240
+	ni.SetValue(note)
+
+	f.draft = &iterDraft{parent: parent, loaded: text, loadedIn: note, text: ta, note: ni}
+	f.applyFocus()
+}
+
+// draftChanged reports whether the wording or its note differs from what the draft was seeded from.
+func (f *flowState) draftChanged() bool {
+	if f.draft == nil {
+		return false
+	}
+	return strings.TrimSpace(f.draft.text.Value()) != strings.TrimSpace(f.draft.loaded) ||
+		strings.TrimSpace(f.draft.note.Value()) != strings.TrimSpace(f.draft.loadedIn)
+}
+
+// passOf is one query's verdict in the latest train run, or nil when there was no run.
+func (f *flowState) passOf(id int) *bool {
+	it := f.latest()
+	if it == nil || f.pending() != nil {
+		return nil
+	}
+	for _, row := range it.Train.Rows {
+		if row.ID == id {
+			return row.Passed
+		}
+	}
+	return nil
+}
+
+// failedRow is the row the failure quadrant shows: the one under the cursor when it failed,
+// otherwise the first failure, because the quadrant is about what to fix next.
+func (f *flowState) failedRow() *runner.ScoreRow {
+	it := f.latest()
+	if it == nil || f.pending() != nil {
+		return nil
+	}
+	fails := it.Cand.FailedTrain()
+	if len(fails) == 0 {
+		return nil
+	}
+	if f.sel < len(f.rows) {
+		want := f.rows[f.sel].ID
+		for i := range fails {
+			if fails[i].ID == want {
+				return &fails[i]
+			}
+		}
+	}
+	return &fails[0]
+}
+
+func triggerWord(yes bool) string {
+	if yes {
+		return "trigger"
+	}
+	return "not trigger"
+}
+
+// typing reports whether the iteration screen's keystrokes belong to a text field.
+func (m *Model) typing() bool {
+	return m.mode == screenFlow && m.flow != nil && m.flow.sec == secIteration && m.flow.focus != focusSet
+}
+
+// ---------------------------------------------------------------- keys
+
 func (m *Model) updateIter(msg tea.KeyMsg) tea.Cmd {
 	f := m.flow
 	switch msg.String() {
+	case "tab":
+		return m.cycleFocus(1)
+	case "shift+tab":
+		return m.cycleFocus(-1)
 	case "j", "down":
 		f.sel = min(f.sel+1, max(0, len(f.rows)-1))
 	case "k", "up":
@@ -244,11 +407,129 @@ func (m *Model) updateIter(msg tea.KeyMsg) tea.Cmd {
 			return m.openFailures(it)
 		}
 	case "enter":
-		// The one key that moves the loop: run the unmeasured wording, revise the measured one.
-		if f.pending() != nil || f.latest() == nil {
+		// The loop in one key: save the wording being written (if it changed), then measure it.
+		return m.runOrSave()
+	}
+	return nil
+}
+
+// typingKey sends a keystroke to the focused field. Only tab, ctrl+s and esc mean anything else here,
+// because every other character is one the description might need.
+func (m *Model) typingKey(msg tea.KeyMsg) tea.Cmd {
+	f := m.flow
+	switch msg.String() {
+	case "esc":
+		f.blur()
+		f.focus = focusSet
+		return nil
+	case "tab":
+		return m.cycleFocus(1)
+	case "shift+tab":
+		return m.cycleFocus(-1)
+	case "ctrl+s":
+		return m.saveDraft(false)
+	case "enter":
+		// In the note a newline is not a thing: enter saves and measures, like the set's enter.
+		if f.focus == focusNote {
+			return m.saveDraft(true)
+		}
+	}
+	var cmd tea.Cmd
+	if f.focus == focusWording {
+		f.draft.text, cmd = f.draft.text.Update(msg)
+	} else {
+		f.draft.note, cmd = f.draft.note.Update(msg)
+	}
+	return cmd
+}
+
+// cycleFocus walks the three panes. The set takes letters as commands, so a field that has the keys
+// has to say so: the footer changes, and the note's label turns into the caret.
+func (m *Model) cycleFocus(dir int) tea.Cmd {
+	f := m.flow
+	m.ensureDraft()
+	if f.draft == nil {
+		return nil
+	}
+	f.focus = (f.focus + dir + focusCount) % focusCount
+	f.applyFocus()
+	return nil
+}
+
+// applyFocus puts the caret where the focus says, and nowhere else.
+func (f *flowState) applyFocus() {
+	if f.draft == nil {
+		return
+	}
+	switch f.focus {
+	case focusWording:
+		f.draft.text.Focus()
+		f.draft.note.Blur()
+	case focusNote:
+		f.draft.text.Blur()
+		f.draft.note.Focus()
+	default:
+		f.blur()
+	}
+}
+
+func (f *flowState) blur() {
+	if f.draft != nil {
+		f.draft.text.Blur()
+		f.draft.note.Blur()
+	}
+}
+
+// runOrSave is the enter key on the set: write the wording you have been editing, then measure it.
+func (m *Model) runOrSave() tea.Cmd {
+	f := m.flow
+	if f.draftChanged() {
+		if cmd := m.saveDraft(true); cmd != nil || m.mode != screenFlow {
+			return cmd
+		}
+	}
+	return m.openRunAsk()
+}
+
+// saveDraft writes the wording into the ledger as the next candidate. It does not touch SKILL.md —
+// the run is what puts it there, because the file is what the router reads and a wording nobody has
+// measured should not be in it.
+func (m *Model) saveDraft(thenRun bool) tea.Cmd {
+	f := m.flow
+	if f.draft == nil {
+		return nil
+	}
+	text := strings.TrimSpace(f.draft.text.Value())
+	if text == "" {
+		m.setStatus("the description cannot be empty", true)
+		return nil
+	}
+	if len([]rune(text)) > store.DescriptionLimit {
+		m.setStatus(fmt.Sprintf("%d characters — the format's ceiling is %d",
+			len([]rune(text)), store.DescriptionLimit), true)
+		return nil
+	}
+	if !f.draftChanged() {
+		m.setStatus("the wording is unchanged — nothing to save", false)
+		if thenRun {
 			return m.openRunAsk()
 		}
-		return m.openDraft()
+		return nil
+	}
+	cand, err := runner.New(m.store).SaveDescriptionCandidate(m.skill, text,
+		strings.TrimSpace(f.draft.note.Value()), f.draft.parent)
+	if err != nil {
+		m.setStatus(err.Error(), true)
+		return nil
+	}
+	m.reload()
+	// Seed again from the candidate just written: the draft is clean, and the pane says which
+	// candidate the next run measures.
+	f.draft = nil
+	m.ensureDraft()
+	m.setStatus(fmt.Sprintf("candidate #%d saved — enter runs the train set against it", cand.ID), false)
+	if thenRun {
+		return m.openRunAsk()
 	}
 	return nil
 }

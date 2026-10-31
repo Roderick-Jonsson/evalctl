@@ -77,6 +77,11 @@ type flowState struct {
 	// forced remembers ctrl+g: generalization before five iterations, on purpose, said out loud.
 	forced bool
 	gen    *genState
+	// focus is which quadrant has the keys on the iteration screen, and draft is the wording being
+	// edited there — the one piece of state in the app that is not a rendering of a file, because a
+	// sentence half-typed is not a file yet.
+	focus int
+	draft *iterDraft
 }
 
 func stepsOf(sec int) []string {
@@ -247,7 +252,9 @@ func (f *flowState) enterStep(m *Model) {
 	switch {
 	case f.sec == secIteration, f.step == 1:
 		f.sel, f.top = 0, 0
+		f.focus = focusSet
 		m.reload()
+		m.ensureDraft()
 	case f.step == 3:
 		f.res = 0
 	}
@@ -385,6 +392,9 @@ func (f *flowState) stateText() string {
 		return "the wording may learn from these rows — nothing else shapes a revision"
 	}
 	if f.sec == secIteration {
+		if f.focus != focusSet {
+			return "editing the description — ctrl+s saves it as the next candidate, esc gives the set back"
+		}
 		if f.pending() != nil {
 			return "candidate #" + fmt.Sprint(f.pending().ID) + " is written but not measured"
 		}
@@ -392,7 +402,7 @@ func (f *flowState) stateText() string {
 			return "train " + pct(it.Train.Train.Passed, it.Train.Train.Judged) +
 				" · the validation set stays withheld until generalization"
 		}
-		return "nothing measured yet — rung 1 is the training run"
+		return "nothing measured yet — enter runs the train set"
 	}
 	if f.lab != nil && f.lab.ValidationRows == 0 {
 		return "no validation queries — step 1 defines what judges the wording"
@@ -421,12 +431,18 @@ func (f *flowState) body(m *Model, h int) []string {
 
 func (f *flowState) hints(m *Model) []hint {
 	if f.sec == secIteration {
-		act := "run"
-		if f.pending() == nil && f.latest() != nil {
-			act = "revise"
+		switch f.focus {
+		case focusWording:
+			return []hint{{"type", "the description"}, {"tab", "note"}, {"ctrl+s", "save"}, {"esc", "set"}}
+		case focusNote:
+			return []hint{{"type", "why this change"}, {"enter", "save & run"}, {"tab", "set"}, {"esc", "set"}}
 		}
-		return []hint{{"enter", act}, {"R", "run again"}, {"n", "new"}, {"e", "edit"},
-			{"d", "delete"}, {"space", "should trigger"}, {"esc", "sections"}}
+		act := "save & run"
+		if !f.draftChanged() {
+			act = "run the train set"
+		}
+		return []hint{{"enter", act}, {"tab", "the description"}, {"R", "run again"}, {"n", "new"},
+			{"e", "edit"}, {"d", "delete"}, {"space", "trigger"}, {"esc", "sections"}}
 	}
 	if f.step == 1 {
 		return []hint{{"enter", "to validate"}, {"n", "new"}, {"e", "edit"}, {"d", "delete"},
