@@ -180,7 +180,6 @@ func (d *draftState) save(m *Model) tea.Cmd {
 	}
 	m.draft, m.mode = nil, screenFlow
 	m.reload()
-	m.flow.sub = subRun
 	m.setStatus(fmt.Sprintf("candidate #%d saved — it becomes iteration %d after the run",
 		cand.ID, len(m.flow.iters)+1), false)
 	return nil

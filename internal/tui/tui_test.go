@@ -205,11 +205,8 @@ func TestResumeLandsOnTheStepTheDiskIsAt(t *testing.T) {
 		t.Fatalf("mode = %v cursor = %d, want the section choice on iteration", m.mode, m.sections.cursor)
 	}
 	enterSection(m, secIteration)
-	if m.flow.sec != secIteration || m.flow.step != 2 {
-		t.Fatalf("section = %d step = %d, want the loop: the train set is defined and nothing is measured", m.flow.sec, m.flow.step)
-	}
-	if m.flow.sub != subRun {
-		t.Fatalf("rung = %d, want the training run", m.flow.sub)
+	if m.flow.sec != secIteration || m.flow.step != 1 {
+		t.Fatalf("section = %d step = %d, want the one iteration screen", m.flow.sec, m.flow.step)
 	}
 	if len(m.flow.lab.Candidates) != 1 {
 		t.Fatalf("candidates = %d, want the baseline adopted from SKILL.md", len(m.flow.lab.Candidates))
@@ -306,6 +303,13 @@ func TestEnterFromTheLastQuerySetOpensTheLoop(t *testing.T) {
 	m, _, _ := fixture(t)
 	m.openSkill("slide-builder")
 	enterSection(m, secGeneralization)
+	// With the gate closed the set's forward move is refused, and it says why.
+	press(m, "enter")
+	if m.flow.step != 1 || !strings.Contains(m.status, "ctrl+g") {
+		t.Fatalf("step = %d status = %q, want the gate named", m.flow.step, m.status)
+	}
+	// Forced, the same key opens the run.
+	m.flow.forced = true
 	press(m, "enter")
 	if m.flow.sec != secGeneralization || m.flow.step != 2 {
 		t.Fatalf("section = %d step = %d, want validate", m.flow.sec, m.flow.step)
@@ -445,8 +449,8 @@ func TestAValidatedOnlyWordingIsStillPending(t *testing.T) {
 	if m.flow.pending() == nil {
 		t.Fatal("a wording with no train measurement must read as pending, not as measured")
 	}
-	if got := m.iterHeadline(); !strings.Contains(got, "#1") {
-		t.Fatalf("headline = %q, want candidate #1", got)
+	if got := m.flow.stateLine(); !strings.Contains(got, "iteration 1 of 5") {
+		t.Fatalf("state line = %q, want the loop's own counter", got)
 	}
 }
 
@@ -506,7 +510,7 @@ func TestTheBarIsAPathNotASentence(t *testing.T) {
 	enterSection(m, secIteration)
 	lines := strings.Split(m.View(), "\n")
 	bar := stripMarks(lines[0])
-	if !strings.Contains(bar, "trigger optimization > slide-builder > iteration > iterate") {
+	if !strings.Contains(bar, "trigger optimization > slide-builder > iteration") {
 		t.Fatalf("the bar is not a path:\n%s", bar)
 	}
 	if strings.Contains(bar, " · ") {

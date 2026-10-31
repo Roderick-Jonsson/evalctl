@@ -108,11 +108,13 @@ func (m *Model) sectionPreview(w, h int) []string {
 	block()
 
 	if row.sec == secIteration {
-		d.para("The train set is the only measurement a revision may learn from. Here the wording is run against it, the failures are read one by one, and the next candidate is written from them — the validation set is never opened, so nothing the revision learns can come from it.")
+		d.para("The train set is the only measurement a revision may learn from. Its four things are one screen — the queries you edit, the wording under test, what the last run said, and the revision written from the failures — because three of them are not steps: an action, its output, and an edit. The validation set is never opened here, so nothing a revision learns can come from it.")
 		block()
-		d.card("Its steps")
-		d.fact("1 train set", "the queries the wording may learn from")
-		d.fact("2 iterate", "run them, read the failures, revise the wording")
+		d.card("On the screen")
+		d.fact("train set", "the queries, edited in place")
+		d.fact("the wording", "the candidate under test, and whether SKILL.md holds it")
+		d.fact("the last run", "what the train set said, and which rows failed")
+		d.fact("the revision", "the next candidate, written from those failures")
 		block()
 		d.card("The ledger")
 		d.fact("wordings", plural(len(f.lab.Candidates), "candidate"))
@@ -139,17 +141,18 @@ func (m *Model) sectionPreview(w, h int) []string {
 	}
 
 	actDoc := &docWriter{w: w}
-	_, step := loopOpen(f.lab)
-	if row.sec == secGeneralization {
-		step = 1
+	if len(stepsOf(row.sec)) == 1 {
+		actDoc.action("enter", "open the workbench")
+	} else {
+		step := 1
 		if f.lab != nil && f.lab.ValidationRows > 0 {
 			step = 2
+			if allValidated(f.lab) {
+				step = 3
+			}
 		}
+		actDoc.action("enter", fmt.Sprintf("open at step %d — %s", step, stepNameAt(row.sec, step)))
 	}
-	if row.sec == secIteration && f.lab != nil && f.lab.TrainRows == 0 {
-		step = 1
-	}
-	actDoc.action("enter", fmt.Sprintf("open at step %d — %s", step, stepNameAt(row.sec, step)))
 	room := h - len(actDoc.lines)
 	var out []string
 	for _, b := range blocks {

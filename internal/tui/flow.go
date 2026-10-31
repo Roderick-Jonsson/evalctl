@@ -32,7 +32,9 @@ const (
 var secNames = []string{"iteration", "generalization"}
 
 // The steps each section owns, in the order the work is done.
-var iterationSteps = []string{"train set", "iterate"}
+// Iteration is one screen: the set, the wording, the last run and the revision live together, because
+// three of those four are not steps — an action, its output, and an edit.
+var iterationSteps = []string{"the loop"}
 var generalizationSteps = []string{"validation set", "validate", "results"}
 
 // iterationsRequired is the guide's "if >= 5 iterations, ready to generalize": below five measured
@@ -71,7 +73,6 @@ type flowState struct {
 	rows []store.Entry
 	sel  int
 	top  int
-	sub  int // the selected rung of the iteration ladder
 	res  int // the selected row of the result list
 	// forced remembers ctrl+g: generalization before five iterations, on purpose, said out loud.
 	forced bool
@@ -203,11 +204,14 @@ func (f *flowState) gateOpen() bool { return len(f.iters) >= iterationsRequired 
 // and the ledger alone. The chooser and the flow both read it, so the chooser cannot promise a step
 // the flow will not open.
 func loopOpen(lab *runner.Lab) (sec, step int) {
+	iters := iterationsOf(lab)
 	switch {
 	case lab == nil || lab.TrainRows == 0:
 		return secIteration, 1
-	case len(iterationsOf(lab)) == 0:
-		return secIteration, 2
+	// Below the gate the work is in the loop: revising is what moves the numbers, and validation on
+	// four wordings would rank nothing worth ranking.
+	case len(iters) < iterationsRequired:
+		return secIteration, 1
 	case lab.ValidationRows == 0:
 		return secGeneralization, 1
 	case allValidated(lab):
@@ -219,21 +223,21 @@ func loopOpen(lab *runner.Lab) (sec, step int) {
 // resumeIn puts the flow on the step inside this section the disk says the work is at.
 func (f *flowState) resumeIn(m *Model) {
 	if f.sec == secIteration {
-		f.step = 2
-		if f.lab == nil || f.lab.TrainRows == 0 {
-			f.step = 1
-		}
+		f.step = 1
 	} else {
 		switch {
 		case f.lab == nil || f.lab.ValidationRows == 0:
 			f.step = 1
 		case len(f.iters) > 0 && allValidated(f.lab):
 			f.step = 3
+		case !f.gateOpen():
+			// Land where the work can be done: the set is writable at any time, the run is not.
+			f.step = 1
 		default:
 			f.step = 2
 		}
 	}
-	f.sub, f.res, f.sel, f.top = 0, 0, 0, 0
+	f.res, f.sel, f.top = 0, 0, 0
 	f.enterStep(m)
 }
 
@@ -241,27 +245,12 @@ func (f *flowState) resumeIn(m *Model) {
 // than a cursor remembered from a previous visit to a different split.
 func (f *flowState) enterStep(m *Model) {
 	switch {
-	case f.step == 1:
+	case f.sec == secIteration, f.step == 1:
 		f.sel, f.top = 0, 0
 		m.reload()
-	case f.sec == secIteration && f.step == 2:
-		f.sub = f.defaultSub()
-	case f.sec == secGeneralization && f.step == 3:
+	case f.step == 3:
 		f.res = 0
 	}
-}
-
-// defaultSub is where the iteration ladder opens: the rung the loop is actually waiting on.
-func (f *flowState) defaultSub() int {
-	switch {
-	case f.pending() != nil:
-		return subRun // a wording is waiting to be measured
-	case f.latest() == nil:
-		return subRun
-	case len(f.latest().Cand.FailedTrain()) > 0:
-		return subResult
-	}
-	return subOptimize
 }
 
 // ---------------------------------------------------------------- the rail
@@ -320,6 +309,10 @@ func (f *flowState) stepState(i int) subState {
 // rail is the navigation inside a section: its steps, what state each one is in, and the one gate in
 // the flow. It lists only this section's steps — the other section is one screen up.
 func (f *flowState) rail(w int) string {
+	if len(f.steps()) == 1 {
+		// One screen, so there is nothing to walk: the row says where the loop is instead.
+		return " " + dimStyle.Render(f.stateLine())
+	}
 	var b strings.Builder
 	b.WriteString(" ")
 	for i, name := range f.steps() {
@@ -348,16 +341,17 @@ func (f *flowState) stateLine() string {
 	if f.lab == nil {
 		return ""
 	}
-	if f.step == 1 {
-		return plural(len(f.rows), "row")
-	}
 	if f.sec == secIteration {
 		n := max(1, len(f.iters)+boolInt(f.pending() != nil))
+		head := fmt.Sprintf("iteration %d of %d", n, iterationsRequired)
 		if it := f.latest(); it != nil && f.pending() == nil {
-			return fmt.Sprintf("iteration %d of %d (train %s)", n, iterationsRequired,
+			return head + fmt.Sprintf(" · %d of %d pass (%s)", it.Train.Train.Passed, it.Train.Train.Judged,
 				pct(it.Train.Train.Passed, it.Train.Train.Judged))
 		}
-		return fmt.Sprintf("iteration %d of %d (unmeasured)", n, iterationsRequired)
+		return head + " · unmeasured"
+	}
+	if f.step == 1 {
+		return plural(len(f.rows), "row")
 	}
 	if len(f.iters) == 0 {
 		return "nothing measured yet"
@@ -413,30 +407,30 @@ func (f *flowState) stateText() string {
 }
 
 func (f *flowState) body(m *Model, h int) []string {
-	switch {
-	case f.step == 1:
-		return m.setBody(h)
-	case f.sec == secIteration:
+	if f.sec == secIteration {
 		return m.iterBody(h)
-	case f.step == 2:
+	}
+	switch f.step {
+	case 1:
+		return m.setBody(h)
+	case 2:
 		return m.validateBody(h)
 	}
 	return m.resultBody(h)
 }
 
 func (f *flowState) hints(m *Model) []hint {
-	if f.step == 1 {
-		h := []hint{{"enter", "next step"}, {"n", "new"}, {"e", "edit"}, {"d", "delete"},
-			{"space", "label"}, {"esc", "sections"}}
-		if f.sec == secGeneralization {
-			h[0].act = "to validate"
-		} else {
-			h[0].act = "to the loop"
-		}
-		return h
-	}
 	if f.sec == secIteration {
-		return []hint{{"j k", "rung"}, {"enter", "do it"}, {"esc", "sections"}}
+		act := "run"
+		if f.pending() == nil && f.latest() != nil {
+			act = "revise"
+		}
+		return []hint{{"enter", act}, {"R", "run again"}, {"n", "new"}, {"e", "edit"},
+			{"d", "delete"}, {"space", "label"}, {"esc", "sections"}}
+	}
+	if f.step == 1 {
+		return []hint{{"enter", "to validate"}, {"n", "new"}, {"e", "edit"}, {"d", "delete"},
+			{"space", "label"}, {"esc", "sections"}}
 	}
 	if f.step == 2 {
 		switch {
@@ -468,12 +462,13 @@ func (m *Model) updateFlow(msg tea.KeyMsg) tea.Cmd {
 	if key == "ctrl+g" {
 		return m.forceGeneralization()
 	}
-	switch {
-	case f.step == 1:
-		return m.updateSet(msg)
-	case f.sec == secIteration:
+	if f.sec == secIteration {
 		return m.updateIter(msg)
-	case f.step == 2:
+	}
+	switch f.step {
+	case 1:
+		return m.updateSet(msg)
+	case 2:
 		return m.updateValidate(msg)
 	}
 	return m.updateResults(msg)

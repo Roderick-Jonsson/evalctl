@@ -326,7 +326,11 @@ func (m *Model) pathSegments() []string {
 	switch m.mode {
 	case screenFlow:
 		if m.flow != nil {
-			segs = append(segs, m.flow.sectionName(), m.flow.stepName())
+			segs = append(segs, m.flow.sectionName())
+			// A section that is one screen has no step to name: the path stops at the section.
+			if m.flow.stepCount() > 1 {
+				segs = append(segs, m.flow.stepName())
+			}
 		}
 	case screenForm:
 		segs = append(segs, "query")
@@ -379,6 +383,10 @@ func (m *Model) contextLine(w int) string {
 	// neither belongs on the path above.
 	if m.mode == screenFlow && m.flow != nil {
 		rail := m.flow.rail(w)
+		// A one-screen section has no chips to draw, so its rail row is already the numbers.
+		if m.flow.stepCount() == 1 {
+			return rail
+		}
 		facts := m.flow.stateLine()
 		// The numbers are the secondary register: when the row cannot hold both with a gutter between
 		// them, they go — a rail cut in half loses the step you are in, and the body repeats them.
@@ -566,7 +574,7 @@ func (m *Model) stateText() string {
 func (m *Model) position() string {
 	switch m.mode {
 	case screenFlow:
-		if m.flow != nil {
+		if m.flow != nil && m.flow.stepCount() > 1 {
 			return fmt.Sprintf("step %d of %d", m.flow.step, m.flow.stepCount())
 		}
 	case screenSections:
@@ -636,11 +644,13 @@ func (m *Model) helpLines() []string {
 			"  j k        iteration or generalization, on the skill's section screen",
 			"  esc        one level back: a step to its section, a section to the skills",
 		},
-		head("iteration — the train set"),
+		head("iteration — the workbench"),
 		[]string{
-			"  n e d      new, edit, delete a query in the split",
+			"  n e d      new, edit, delete a query in the set",
 			"  space      flip the label: should trigger / should not",
-			"  j k enter  pick a rung of the ladder: run, read the failures, revise",
+			"  enter      the loop's next thing: run the unmeasured wording, else revise",
+			"  R          run the train set again against the same wording",
+			"  f          the failures as full cards",
 		},
 		head("generalization — the validation set"),
 		[]string{

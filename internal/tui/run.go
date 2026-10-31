@@ -110,7 +110,12 @@ func (p *liveRun) stateText() string {
 // openRunAsk opens the training run for the wording the loop is waiting on.
 func (m *Model) openRunAsk() tea.Cmd {
 	f := m.flow
-	cand := pendingID(f.pending(), f.latest())
+	cand := 0
+	if pend := f.pending(); pend != nil {
+		cand = pend.ID
+	} else if it := f.latest(); it != nil {
+		cand = it.Cand.ID
+	}
 	m.run = &runState{
 		kind:  runTrain,
 		cand:  cand,
@@ -142,7 +147,7 @@ func (r *runState) askBody(m *Model, h int) []string {
 	d.fact("scope", fmt.Sprintf("%s of %s, %d runs each = %d agent calls",
 		pluralOf(rows, split+" query", split+" queries"), m.skill, r.runs, rows*r.runs))
 	d.fact("budget", fmt.Sprintf("%s per run · profile eval-vcc-trigger", shortDuration(runner.DefaultTriggerBudget)))
-	d.fact("writes", fmt.Sprintf("trigger-workspace/trigger-%d/", nextTrigger(m.store)))
+	d.fact("writes", fmt.Sprintf("trigger-workspace/trigger-%d/", runner.New(m.store).NextIteration(runner.New(m.store).TriggerWorkspace(), "trigger")))
 	if r.cand != 0 && r.kind != runHoldout {
 		d.fact("measures", fmt.Sprintf("candidate #%d — it is written into %s/SKILL.md first, because the router reads the file", r.cand, m.skill))
 	}
@@ -424,7 +429,7 @@ func (m *Model) leaveRun() tea.Cmd {
 	case gen:
 		m.flow.sec, m.flow.step, m.flow.res = secGeneralization, 3, 0
 	case kind == runTrain:
-		m.flow.sec, m.flow.step, m.flow.sub = secIteration, 2, subResult
+		m.flow.sec, m.flow.step = secIteration, 1
 	default:
 		m.flow.sec, m.flow.step = secGeneralization, 3
 	}
