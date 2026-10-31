@@ -292,9 +292,14 @@ func (m *Model) headLines() []string {
 	// from the left margin inward, and which evalctl drew it is one look at the corner.
 	bar := endsLine(m.barLeft(), brandName.Render(" evalctl")+" "+brandVer.Render(m.ver), m.width)
 	rule := tabRule.Render(strings.Repeat(glyphs.Heavy, max(1, m.width)))
-	// The context row is prose of wildly different lengths — the rail on a step screen, a sentence
-	// on the door — so it is cut here, once, rather than trusted per screen.
-	return []string{bar, rule, ellipsis(m.contextLine(m.width), m.width)}
+	head := []string{bar, rule}
+	// The context row is the rail on a step screen and a line of prose elsewhere — and nowhere at
+	// all on the two screens that are only a list. A screen that has nothing to put there does not
+	// get the row: an empty band under the rule is space the body can use.
+	if ctx := m.contextLine(m.width); ctx != "" {
+		head = append(head, ellipsis(ctx, m.width))
+	}
+	return head
 }
 
 // pathSegments is where you are, as a path: the optimization, the skill, and then the step, the
@@ -378,9 +383,9 @@ func (m *Model) contextLine(w int) string {
 	}
 	switch m.mode {
 	case screenLane:
-		return dimStyle.Render("  two questions about one skill: does it get loaded, and does the work come out right")
+		return ""
 	case screenSkill:
-		return dimStyle.Render("  the description loop is per skill — pick the one whose wording is being tuned")
+		return ""
 	case screenForm:
 		if m.form != nil {
 			return dimStyle.Render("  " + m.form.hint)

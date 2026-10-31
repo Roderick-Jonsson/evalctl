@@ -91,7 +91,6 @@ already are.
 ```
  what to optimize                                                                     evalctl v0.8.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  two questions about one skill: does it get loaded, and does the work come out right
                                   │ 
                                   │   TRIGGER OPTIMIZATION
 ▶ trigger optimization  built     │   built · the description loop
@@ -112,7 +111,6 @@ already are.
                                   │ 
                                   │   → enter  pick the skill whose wording gets tuned
                                   │ 
-                                  │ 
 enter open · q quit                                                                          ? keys 
                                                                                               1 / 2 
 ```
@@ -129,12 +127,10 @@ behind a divider that is not there.
 ```
  trigger optimization > choose a skill                                                evalctl v0.8.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  the description loop is per skill — pick the one whose wording is being tuned
 
   SKILL                 TRAIN  VALID  ITERS    STATE
   ────────────────────────────────────────────────────────────────────────────────────────
 ▶ slide-builder         2      2      0/5      set ready — nothing measured yet
-
 
 
 
@@ -195,8 +191,6 @@ that is not allowed says why in the status row instead of doing nothing.
 
 
 
-
-
   ────────────────────────────────────────────────────────────────────────────────────────────────
   2 rows · 1 should trigger · 1 should not · 50% of the set (the guide asks ~60/40)
 
@@ -240,8 +234,6 @@ under the cursor, so the whole loop is one screenful:
   → enter  start the training run
 
 
-
-
 j k sub-step · enter do it · ctrl+g generalize early · esc skills                            ? keys 
  candidate #1 is written but not measured                                               step 3 of 4 
 ```
@@ -273,8 +265,6 @@ wording nobody has measured should not be in it.
   ITERATION  TRAIN         VALIDATION   GAP    CHARS   NOTE
 ▶ 1          1/2 50%       2/2 100%     −50%   52      the description in SKILL.md when … ✓ in file
   2          2/2 100%      1/2 50%      +50%   91      named the deck, not the file
-
-
 
 
 
