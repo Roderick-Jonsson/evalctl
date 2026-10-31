@@ -565,15 +565,22 @@ func TestTheSkillTableIsATable(t *testing.T) {
 	if at < 0 || row[at+len("TRAIN")-1] != '2' {
 		t.Fatalf("the TRAIN column is not right-aligned under its head:\n%s\n%s", head, row)
 	}
+	// The pane names the row under the cursor, in capitals, and follows it.
 	first := m.skills.rows[m.skills.cursor].name
 	body := stripMarks(m.View())
-	if !strings.Contains(body, "── "+first+" ─") {
-		t.Fatalf("the block does not name the row under the cursor:\n%s", body)
+	if !strings.Contains(body, strings.ToUpper(first)) {
+		t.Fatalf("the pane does not name the row under the cursor:\n%s", body)
 	}
 	press(m, "j")
 	second := m.skills.rows[m.skills.cursor].name
 	body = stripMarks(m.View())
-	if second == first || !strings.Contains(body, "── "+second+" ─") || strings.Contains(body, "── "+first+" ─") {
-		t.Fatalf("the block did not follow the cursor:\n%s", body)
+	if second == first || !strings.Contains(body, strings.ToUpper(second)) || strings.Contains(body, strings.ToUpper(first)) {
+		t.Fatalf("the pane did not follow the cursor:\n%s", body)
+	}
+	// Below the width that buys a pane the block under the table does the same job.
+	m.width = 64
+	narrow := stripMarks(m.View())
+	if strings.Contains(narrow, glyphs.Seam) || !strings.Contains(narrow, "── "+second+" ─") {
+		t.Fatalf("a narrow chooser lost its block:\n%s", narrow)
 	}
 }

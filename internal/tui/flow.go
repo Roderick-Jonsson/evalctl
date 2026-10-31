@@ -165,6 +165,20 @@ func noCandidateLeft(lab *runner.Lab) bool {
 // gateOpen is the five-iteration rule, with ctrl+g as the stated exception.
 func (f *flowState) gateOpen() bool { return len(f.iters) >= iterationsRequired || f.forced }
 
+// loopStep is the step a skill's loop opens at, computed from the set and the ledger alone: the same
+// rule the flow uses to resume, so the chooser cannot promise a step the flow will not open.
+func loopStep(lab *runner.Lab) int {
+	switch {
+	case lab == nil || lab.TrainRows == 0:
+		return StepTrain
+	case lab.ValidationRows == 0:
+		return StepValidation
+	case len(iterationsOf(lab)) > 0 && allValidated(lab):
+		return StepGeneralize
+	}
+	return StepIterate
+}
+
 // resume puts the flow on the step the disk says the work is at.
 func (f *flowState) resume(m *Model) {
 	switch {

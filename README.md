@@ -127,26 +127,26 @@ behind a divider that is not there.
 ```
  trigger optimization > choose a skill                                                evalctl v0.8.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  SKILL                TRAIN VALID   ITERS  STATE
-▶ slide-builder            2     2     0/5  set ready — nothing measured yet
-
-  ── slide-builder ────────────────────────────────────────────────────────────────
-  2 train queries · 2 validation queries · 0 of 5 iterations measured
-  set ready — nothing measured yet
-  ! no cases: the runner will have nothing to measure for this stage
-
-
-
-
-
-
-
-
-
-
-
-
+                                           │ 
+  SKILL                TRAIN VALID   ITERS │   SLIDE-BUILDER
+▶ slide-builder            2     2     0/5 │   step 3 of 4 · 0 iterations measured
+                                           │   ─────────────────────────────────────────────────────
+                                           │   set ready — nothing measured yet
+                                           │ 
+                                           │   The set
+                                           │   train        2 queries · 1 trigger · 1 do not
+                                           │   validation   2 queries · 1 trigger · 1 do not
+                                           │   holdout      0 queries
+                                           │ 
+                                           │   The ledger
+                                           │   wordings     0 candidates
+                                           │   applied      none yet
+                                           │   in SKILL.md  52 characters
+                                           │ 
+                                           │   → enter  open at step 3 — iterate
+                                           │ 
+                                           │ 
+                                           │ 
 j k move · enter open the loop · esc lanes                                                   ? keys 
  1 skill with a description to tune                                                           1 / 1 
 ```
@@ -156,10 +156,14 @@ iterations the guide asks for, and `STATE` is what the loop would do next with i
 off the ledger and the iterations on disk rather than remembered.
 
 The table is the shape the eval tables had: a two-cell gutter where the cursor lives, fixed columns,
-counts right-aligned so 1 and 47 end on one edge, a quiet header and no rule under it. Below it the
-row under the cursor is said out loud — the counts as words, where the loop stands, and the findings
-that belong to that skill (which is the only place a `HEALTH` number would have been hiding).
-`STATE` is the column that gives way on a narrow window, because the block already says it.
+counts right-aligned so 1 and 47 end on one edge, a quiet header and no rule under it. Beside it, the
+pane the door uses says what the row under the cursor is — the step its loop opens at, what both
+splits hold (queries, and how many should trigger), how many wordings the ledger carries, which one
+`SKILL.md` was given, and that skill's validation findings.
+
+`STATE` is the column that gives way first: the pane already says it in words, so the table drops it
+rather than spending the pane's room on the same thing twice. Below the width that buys a pane, the
+row under the cursor is spelled out in a block under the table instead — same facts, one column.
 
 `enter` opens that skill's loop **at the step the disk says it is on**. No ledger yet: the wording in
 `SKILL.md` is adopted as candidate #1 and step 3 is where you start. A train set with no validation

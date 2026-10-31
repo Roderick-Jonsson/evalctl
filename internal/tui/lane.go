@@ -223,6 +223,15 @@ type skillRow struct {
 	gated  bool          // five iterations and validation not yet run
 	onDisk bool          // has a description and a ledger file
 	issues []store.Issue // what validation says about this skill's rows
+	// The preview needs the set's own arithmetic: both labels in both splits, the holdout's size,
+	// how many wordings the ledger holds and which one SKILL.md was given.
+	trainYes, trainNo int
+	validYes, validNo int
+	holdout           int
+	cands             int
+	applied           int
+	chars             int
+	step              int // the step the loop opens at
 }
 
 func (m *Model) skillNames() []string { return m.store.KnownSkills() }
@@ -270,8 +279,29 @@ func (m *Model) loadSkills() {
 			row.iters = len(iterationsOf(lab))
 			row.train = lab.TrainRows
 			row.valid = lab.ValidationRows
+			row.holdout = lab.HoldoutRows
 			row.gated = row.iters >= iterationsRequired && lab.Applied == nil
 			row.state = loopState(lab, row.iters)
+			row.cands = len(lab.Candidates)
+			row.chars = lab.FileChars
+			if lab.Applied != nil {
+				row.applied = lab.Applied.Candidate
+			}
+			row.step = loopStep(lab)
+		}
+		for _, e := range m.store.Rows(store.LaneTrigger, store.Filter{Skill: name, Split: store.SplitTrain}) {
+			if e.Label == "yes" {
+				row.trainYes++
+			} else {
+				row.trainNo++
+			}
+		}
+		for _, e := range m.store.Rows(store.LaneTrigger, store.Filter{Skill: name, Split: store.SplitValidation}) {
+			if e.Label == "yes" {
+				row.validYes++
+			} else {
+				row.validNo++
+			}
 		}
 		m.skills.rows = append(m.skills.rows, row)
 	}
@@ -299,10 +329,13 @@ func loopState(lab *runner.Lab, iters int) string {
 	return fmt.Sprintf("%d of %d iterations · ready to generalize", iters, iterationsRequired)
 }
 
-// The chooser's table, in the shape the eval tables had: a two-cell gutter where the cursor lives,
-// fixed columns, numbers right-aligned so 5 and 47 end on one edge, a quiet header with no rule under
-// it, and the row under the cursor spelled out in a block below the list — which is also where the
-// emptiness under four rows goes.
+// The chooser: the eval tables' own shape, with the door's pane beside it.
+//
+// The table keeps the properties that made the old ones readable — a two-cell gutter where the cursor
+// lives, fixed columns, counts right-aligned so 1 and 47 end on one edge, a quiet header — and the
+// pane says what the row under the cursor is: where its loop opens, what its two splits hold, how many
+// wordings the ledger carries and what that skill's validation findings are. Same shape as the door,
+// so there is one layout to learn, not two.
 const (
 	skillNameW  = 20
 	skillTrainW = 5
@@ -310,24 +343,52 @@ const (
 	skillItersW = 7
 )
 
+// skillTableW is the table's width with its state column dropped: the pane carries that, and a table
+// that keeps it would spend the pane's room on the same words twice.
+const skillTableW = 2 + skillNameW + 1 + skillTrainW + 1 + skillValidW + 1 + skillItersW
+
 func (m *Model) skillBody(h int) []string {
 	if len(m.skills.rows) == 0 {
 		m.loadSkills()
 	}
-	// Columns drop by importance, the way the eval tables did: STATE is the flexible one, and the
-	// block under the list says the same thing as words when the column cannot hold it.
-	withState := m.width >= 72
-	head := "  " + dimStyle.Render(padCell("SKILL", skillNameW, false)) + " " +
-		dimStyle.Render(padCell("TRAIN", skillTrainW, true)) + " " +
-		dimStyle.Render(padCell("VALID", skillValidW, true)) + " " +
-		dimStyle.Render(padCell("ITERS", skillItersW, true))
-	if withState {
-		head += "  " + dimStyle.Render("STATE")
+	if paneW := min(96, m.width-skillTableW-2); paneW >= 44 {
+		return m.skillSplit(h, paneW)
 	}
-	lines := []string{"", head}
+	return m.skillStacked(h)
+}
+
+// skillSplit is the table on the left and the row under the cursor on the right.
+func (m *Model) skillSplit(h, paneW int) []string {
+	left := []string{"", m.skillHead(false)}
+	room := max(1, h-len(left))
+	m.clampSkills(room)
+	for i := m.skills.top; i < len(m.skills.rows) && i < m.skills.top+room; i++ {
+		left = append(left, m.skillTableRow(i, false))
+	}
+	right := m.skillPane(paneW, h)
+	seam := dimStyle.Render(glyphs.Seam)
+	out := make([]string, h)
+	for i := range out {
+		var l, r string
+		if i < len(left) {
+			l = left[i]
+		}
+		if i < len(right) {
+			r = right[i]
+		}
+		out[i] = fitTo(l, skillTableW) + " " + seam + " " + fitWidth(r, paneW)
+	}
+	return out
+}
+
+// skillStacked is the chooser without a pane: the whole table, and the row under the cursor spelled
+// out in a block below it, where the emptiness under four rows is.
+func (m *Model) skillStacked(h int) []string {
+	withState := m.width >= 72
+	lines := []string{"", m.skillHead(withState)}
 
 	// The block below the list is worth its rows only when the whole list fits above it; with more
-	// skills than window, the list wins and the block goes — the list is what you are choosing from.
+	// skills than window, the list wins — the list is what you are choosing from.
 	const blockRows = 6
 	avail := h - len(lines)
 	showBlock := len(m.skills.rows)+len(lines)+blockRows <= h
@@ -335,17 +396,9 @@ func (m *Model) skillBody(h int) []string {
 		avail = h - len(lines) - blockRows
 	}
 	room := max(1, min(len(m.skills.rows), avail))
-
-	top := m.skills.top
-	if m.skills.cursor < top {
-		top = m.skills.cursor
-	}
-	if m.skills.cursor >= top+room {
-		top = m.skills.cursor - room + 1
-	}
-	m.skills.top = top
-	for i := top; i < len(m.skills.rows) && i < top+room; i++ {
-		lines = append(lines, m.skillRow(i))
+	m.clampSkills(room)
+	for i := m.skills.top; i < len(m.skills.rows) && i < m.skills.top+room; i++ {
+		lines = append(lines, m.skillTableRow(i, withState))
 	}
 	if showBlock {
 		lines = append(lines, "")
@@ -354,28 +407,128 @@ func (m *Model) skillBody(h int) []string {
 	return fitRows(lines, h)
 }
 
-// skillRow is one skill: the mark, the name, the three counts and where the loop stands.
-func (m *Model) skillRow(i int) string {
+// clampSkills keeps the cursor inside the rows that are actually drawn.
+func (m *Model) clampSkills(room int) {
+	m.skills.cursor = min(m.skills.cursor, max(0, len(m.skills.rows)-1))
+	if m.skills.cursor < m.skills.top {
+		m.skills.top = m.skills.cursor
+	}
+	if m.skills.cursor >= m.skills.top+room {
+		m.skills.top = m.skills.cursor - room + 1
+	}
+	if m.skills.top < 0 {
+		m.skills.top = 0
+	}
+}
+
+// skillHead is the table's header: quiet, right-aligned where the cells are numbers, and with no rule
+// under it — the rule belongs to the bar, and a second one over four rows reads as a second bar.
+func (m *Model) skillHead(withState bool) string {
+	head := "  " + dimStyle.Render(padCell("SKILL", skillNameW, false)) + " " +
+		dimStyle.Render(padCell("TRAIN", skillTrainW, true)) + " " +
+		dimStyle.Render(padCell("VALID", skillValidW, true)) + " " +
+		dimStyle.Render(padCell("ITERS", skillItersW, true))
+	if withState {
+		head += "  " + dimStyle.Render("STATE")
+	}
+	return head
+}
+
+// skillTableRow is one skill: the mark, the name, the three counts and — when the table has room —
+// where the loop stands.
+func (m *Model) skillTableRow(i int, withState bool) string {
 	r := m.skills.rows[i]
 	mark := "  "
 	if i == m.skills.cursor {
 		mark = cursorMark.Render(glyphs.Cursor)
 	}
-	state := dimStyle.Render(r.state)
-	if r.gated {
-		state = styleOn.Render(r.state)
-	}
 	line := mark + colSkill.Render(padCell(r.name, skillNameW, false)) + " " +
 		colText.Render(padCell(fmt.Sprint(r.train), skillTrainW, true)) + " " +
 		colText.Render(padCell(fmt.Sprint(r.valid), skillValidW, true)) + " " +
 		colSplit.Render(padCell(fmt.Sprint(r.iters)+"/"+fmt.Sprint(iterationsRequired), skillItersW, true))
-	if m.width >= 72 {
+	if withState {
+		state := dimStyle.Render(r.state)
+		if r.gated {
+			state = styleOn.Render(r.state)
+		}
 		line += "  " + state
 	}
 	if i == m.skills.cursor {
 		line = selected(line)
 	}
 	return line
+}
+
+// skillPane is the row under the cursor, said properly, in the door's pane shape: where its loop
+// opens, what its two splits hold, what the ledger carries, and what validation says about it. The
+// action line is reserved before the blocks are placed, so a short window drops the ledger before it
+// drops the sentence telling you what the key does.
+func (m *Model) skillPane(w, h int) []string {
+	r := m.skills.rows[m.skills.cursor]
+	d := &docWriter{w: w, label: 12}
+	var blocks [][]string
+	from := len(d.lines)
+	block := func() {
+		blocks = append(blocks, append([]string(nil), d.lines[from:]...))
+		from = len(d.lines)
+	}
+
+	d.title(strings.ToUpper(r.name))
+	d.lead(fmt.Sprintf("step %d of %d · %s measured", r.step, len(stepOrder), plural(r.iters, "iteration")))
+	d.rule()
+	block()
+
+	d.para(stateWord(r))
+	block()
+
+	d.card("The set")
+	d.fact("train", fmt.Sprintf("%s · %d trigger · %d do not", pluralOf(r.train, "query", "queries"), r.trainYes, r.trainNo))
+	d.fact("validation", fmt.Sprintf("%s · %d trigger · %d do not", pluralOf(r.valid, "query", "queries"), r.validYes, r.validNo))
+	d.fact("holdout", pluralOf(r.holdout, "query", "queries"))
+	block()
+
+	d.card("The ledger")
+	d.fact("wordings", plural(r.cands, "candidate"))
+	applied := "none yet"
+	if r.applied > 0 {
+		applied = fmt.Sprintf("#%d", r.applied)
+	}
+	d.fact("applied", applied)
+	d.fact("in SKILL.md", plural(r.chars, "character"))
+	block()
+
+	if len(r.issues) > 0 {
+		d.card("Findings")
+		for i, issue := range r.issues {
+			if i == 2 {
+				d.fact("more", plural(len(r.issues)-2, "finding"))
+				break
+			}
+			d.fact(severityWord(issue.Severity), issue.Msg)
+		}
+		block()
+	}
+
+	actDoc := &docWriter{w: w}
+	actDoc.action("enter", fmt.Sprintf("open at step %d — %s", r.step, stepNames[r.step]))
+	room := h - len(actDoc.lines)
+	var out []string
+	for _, b := range blocks {
+		if len(out)+len(b) > room {
+			break
+		}
+		out = append(out, b...)
+	}
+	return fitRows(append(out, actDoc.lines...), h)
+}
+
+// severityWord is the finding's weight in a word: the fact column is too narrow for the store's own
+// spelling of it, and "warn" is a verb before it is a severity.
+func severityWord(s store.Severity) string {
+	if s == store.SeverityError {
+		return "error"
+	}
+	return "warning"
 }
 
 // stateWord is where the loop stands with this skill, in the case the STATE column is not there.
@@ -386,8 +539,7 @@ func stateWord(r skillRow) string {
 	return r.state
 }
 
-// skillBlock is the row under the cursor said out loud: the counts as words, then the findings that
-// belong to that skill. It is the one thing on this screen that was behind a number.
+// skillBlock is the narrow chooser's block: the row under the cursor said out loud, under the table.
 func (m *Model) skillBlock() []string {
 	if len(m.skills.rows) == 0 {
 		return nil
@@ -406,8 +558,6 @@ func (m *Model) skillBlock() []string {
 	for _, line := range wrapPlain(facts, max(20, m.width-4)) {
 		lines = append(lines, "  "+dimStyle.Render(line))
 	}
-	// Where the loop stands gets its own line: it is the answer to "and then what", and it is the
-	// one fact on this screen that can turn into advice.
 	stateStyle := dimStyle
 	if r.gated {
 		stateStyle = styleOn
@@ -415,10 +565,9 @@ func (m *Model) skillBlock() []string {
 	for _, line := range wrapPlain(stateWord(r), max(20, m.width-4)) {
 		lines = append(lines, "  "+stateStyle.Render(line))
 	}
-	shown := 0
-	for _, issue := range r.issues {
-		if shown == 2 {
-			lines = append(lines, "  "+dimStyle.Render(fmt.Sprintf("and %s", plural(len(r.issues)-2, "more finding"))))
+	for i, issue := range r.issues {
+		if i == 2 {
+			lines = append(lines, "  "+dimStyle.Render("and "+plural(len(r.issues)-2, "more finding")))
 			break
 		}
 		mark := badgeWarn.Render("!")
@@ -426,7 +575,6 @@ func (m *Model) skillBlock() []string {
 			mark = statusBad.Render(glyphs.Failed)
 		}
 		lines = append(lines, "  "+mark+" "+dimStyle.Render(clipText(issue.Msg, max(20, m.width-6))))
-		shown++
 	}
 	if len(r.issues) == 0 {
 		lines = append(lines, "  "+styleOn.Render(glyphs.Done+" no findings"))
