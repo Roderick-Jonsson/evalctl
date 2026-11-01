@@ -84,11 +84,13 @@ func TestOneRegionHasTheKeys(t *testing.T) {
 		check(c.name, c.cursor)
 	}
 
-	// With the caret in the set's fields, the set is not the region with the keys.
-	m.flow.focus = focusSet
-	m.flow.applyFocus()
+	// With the caret in a set's fields — the pane beside the two sections, the one place a row is
+	// written when the workbench is on screen — the set is not the region with the keys.
+	m.mode = screenSections
+	m.sections.focus = sectionFocusSet
+	m.loadSectionRows()
 	m.focusForm()
-	check("workbench · editor", 0)
+	check("sections · the row's fields", 0)
 }
 
 // statusHere is the status row's own answer to "where am I", which must agree with the frame.
@@ -124,12 +126,12 @@ func TestTheStatusRowNamesTheRegionWithTheKeys(t *testing.T) {
 }
 
 // TestTheCaretSurvivesAFrame is the bug the region rule exposed: the set's fields are re-seeded
-// whenever their width does not match the pane's, and the workbench used to tell them one width and
-// draw them at another — so the caret was thrown away on the very next frame, between two
-// keystrokes, and `e` looked like a key that did nothing.
+// whenever their width does not match the pane's, and a pane that tells them one width and draws them
+// at another throws the caret away on the very next frame, between two keystrokes — so `e` looks like
+// a key that did nothing. The fields live in the set beside the two sections.
 func TestTheCaretSurvivesAFrame(t *testing.T) {
 	m, _ := measured(t, []runner.ScoreRow{row(1, "train", true, true)})
-	enterSection(m, secIteration)
+	press(m, "tab") // the pane beside the two sections
 	press(m, "e")
 	if m.form == nil || !m.form.active {
 		t.Fatal("e must put the caret in the fields")

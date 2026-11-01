@@ -173,10 +173,11 @@ func (f *formState) body(w, h int) []string {
 	// The pane decides the height, every draw: a taller window is more of the form in view, not a
 	// different form.
 	f.form.WithHeight(max(6, h))
-	// The fields are a region like any other: when the caret is in them they are the accent and the
-	// block, and the table above them is not — which is the whole of how "the next keystroke is a
-	// character, not a row command" is said without a word.
-	lines := []string{regionHead(w, "EDITOR", f.title(), f.active)}
+	// The fields are the lower half of the set's pane, not a region beside it: the pane's own head
+	// is the one that carries the block when the keys are here, so this line names the row and
+	// nothing else. The caret, the "edit q3" wording and the status row's corner are what say the
+	// next keystroke is a character rather than a row command.
+	lines := []string{"  " + titleStyle.Render(f.title())}
 	for _, line := range strings.Split(strings.TrimRight(f.form.View(), "\n"), "\n") {
 		lines = append(lines, "  "+line)
 	}

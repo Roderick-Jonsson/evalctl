@@ -454,8 +454,8 @@ func (f *flowState) hints(m *Model) []hint {
 		if !f.draftChanged() {
 			act = "run the train set"
 		}
-		return []hint{{"enter", act}, {"tab", "the description"}, {"R", "run again"}, {"n", "new"},
-			{"e", "edit"}, {"d", "delete"}, {"space", "trigger"}, {"esc", "sections"}}
+		return []hint{{"enter", act}, {"tab", "the description"}, {"R", "run again"},
+			{"f", "the failures"}, {"esc", "sections"}}
 	}
 	if f.step == 1 {
 		return []hint{{"enter", "to validate"}, {"n", "new"}, {"e", "edit"}, {"d", "delete"},

@@ -851,11 +851,12 @@ func (m *Model) helpLines() []string {
 		},
 		head("iteration — the workbench"),
 		[]string{
-			"  n e d      new, edit, delete a query in the set",
-			"  space      flip should-trigger: the row asks the router yes or no",
-			"  enter      the loop's next thing: run the unmeasured wording, else revise",
+			"  tab        the keys: the set, the description, the note — the description is what types",
+			"  j k g G    walk the train set; the failure card follows the cursor",
+			"  enter      the loop's next thing: save the wording you typed, then measure it",
 			"  R          run the train set again against the same wording",
 			"  f          the failures as full cards",
+			"  —          the set is written beside the two sections; the workbench only reads it",
 		},
 		head("generalization — the validation set"),
 		[]string{

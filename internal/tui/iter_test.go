@@ -24,13 +24,67 @@ func TestTheWorkbenchIsFourQuadrants(t *testing.T) {
 			t.Fatalf("the workbench is missing the %q quadrant:\n%s", want, view)
 		}
 	}
-	// The failure quadrant must sit above the description and left of the set: the guide reads
-	// left to right, what went wrong and then where to write the answer.
-	if strings.Index(view, "FAILED QUERY") > strings.Index(view, "TRAIN SET") {
-		t.Fatalf("the failure must be the first quadrant:\n%s", view)
+	// The quadrants are a grid, not a stack: failure top left, the set top right, the description
+	// bottom left, the iterations bottom right. The two rows are read as two questions — what went
+	// wrong, and where the answer is written.
+	failRow, failCol := at(t, view, "FAILED QUERY")
+	setRow, setCol := at(t, view, "TRAIN SET")
+	descRow, descCol := at(t, view, "THE DESCRIPTION")
+	iterRow, iterCol := at(t, view, "ITERATIONS")
+	if failCol >= setCol || setRow != failRow {
+		t.Fatalf("the failure belongs above the set's left, on one row:\n%s", view)
 	}
-	if strings.Index(view, "THE DESCRIPTION") < strings.Index(view, "TRAIN SET") {
-		t.Fatalf("the description belongs under the failure:\n%s", view)
+	if descRow <= failRow || iterRow <= setRow || iterCol <= descCol || descRow != iterRow {
+		t.Fatalf("the description belongs under the failure and left of the iterations:\n%s", view)
+	}
+}
+
+// at is where a quadrant's name sits in a finished frame: its row and the column it starts at.
+func at(t *testing.T, view, name string) (row, col int) {
+	t.Helper()
+	line := strings.Index(view, name)
+	if line < 0 {
+		t.Fatalf("%q is not on the screen:\n%s", name, view)
+	}
+	row = strings.Count(view[:line], "\n")
+	start := strings.LastIndex(view[:line], "\n") + 1
+	return row, line - start
+}
+
+// TestTheWorkbenchReportsTheSetAndEditsNothing pins what the workbench is for: the description is the
+// one thing a revision is, so it is the one thing this screen writes. The set is drawn with the run's
+// verdicts and no fields, and the keys that write a row — n, e, d, space — are the step screens' and
+// the section pane's, not this one's.
+func TestTheWorkbenchReportsTheSetAndEditsNothing(t *testing.T) {
+	m, root := measured(t, []runner.ScoreRow{
+		row(1, "train", true, true), row(2, "train", false, false),
+	})
+	enterSection(m, secIteration)
+	view := quadView(m)
+	if m.form != nil {
+		t.Fatalf("the workbench seeded an editor for the set: %+v", m.form)
+	}
+	for _, unwanted := range []string{"should the skill load?", "split", "EDITOR", "edit q1"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("the set is not edited on this screen, and %q says it is:\n%s", unwanted, view)
+		}
+	}
+	// The four quadrants are still the four quadrants.
+	for _, want := range []string{"FAILED QUERY", "THE DESCRIPTION", "ITERATIONS", "TRAIN SET"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("the workbench is missing %q:\n%s", want, view)
+		}
+	}
+	// The row commands do nothing here: no form, and the label is the file's.
+	before := triggerFile(t, root)
+	for _, key := range []string{"e", "n", "d", "space"} {
+		press(m, key)
+		if m.form != nil || m.mode != screenFlow {
+			t.Fatalf("%q opened an editor on the workbench: mode = %d form = %+v", key, m.mode, m.form)
+		}
+	}
+	if got := triggerFile(t, root); got != before {
+		t.Fatalf("a row command wrote the file from the workbench:\n%s", got)
 	}
 }
 

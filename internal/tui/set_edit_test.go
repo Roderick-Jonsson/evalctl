@@ -15,14 +15,21 @@ import (
 // A set is one pane: the table above, the row under the cursor in its fields below, always. There is
 // nothing between looking at a row and changing it — no screen to open, no key that has to reveal the
 // fields first. `e` is only the move that puts the caret in them.
+//
+// The iteration workbench is the exception, on purpose: it reports the set and does not edit it,
+// because the one thing that screen edits is the description.
 
-func workbench(t *testing.T) (*Model, string) {
+// trainPane is where a train row is written: the set beside the two sections, with the keys in it.
+func trainPane(t *testing.T) (*Model, string) {
 	t.Helper()
 	m, root := measured(t, []runner.ScoreRow{
 		row(1, "train", true, true), row(2, "train", false, false),
 		row(3, "validation", true, true), row(4, "validation", false, false),
 	})
-	enterSection(m, secIteration)
+	press(m, "tab")
+	if m.sections.focus != sectionFocusSet || m.sectionPaneWidth() == 0 {
+		t.Fatal("the pane beside the two sections must take the keys")
+	}
 	return m, root
 }
 
@@ -36,7 +43,7 @@ func triggerFile(t *testing.T, root string) string {
 }
 
 func TestTheRowsFieldsAreUnderTheTableWithoutAKey(t *testing.T) {
-	m, _ := workbench(t)
+	m, _ := trainPane(t)
 	if m.form == nil {
 		t.Fatal("the set must draw the selected row's fields without being asked")
 	}
@@ -44,25 +51,25 @@ func TestTheRowsFieldsAreUnderTheTableWithoutAKey(t *testing.T) {
 		t.Fatal("the fields must not have the caret until they are asked for: j and k still move the table")
 	}
 	view := stripMarks(m.View())
-	for _, want := range []string{"ID", "TRIGGER", "RESULT", "query", "why",
+	for _, want := range []string{"ID", "TRIGGER", "QUERY", "query", "why",
 		"should the skill load?", "split", "build me slides from this outline"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("the pane is missing %q:\n%s", want, view)
 		}
 	}
 	// The table stays above the fields, and the fields carry the row under the cursor.
-	if strings.Index(view, "RESULT") > strings.Index(view, "should the skill load?") {
+	if strings.Index(view, "TRIGGER") > strings.Index(view, "should the skill load?") {
 		t.Fatalf("the fields must be drawn under the table:\n%s", view)
 	}
-	// With the caret in the table, q is still the quit key, not a character in the ask.
-	press(m, "q")
-	if m.mode == screenFlow && m.form.query != "build me slides from this outline" {
-		t.Fatalf("a keystroke reached the fields while the table had the keys: %q", m.form.query)
+	// Moving in the table moves the fields, and none of it puts the caret in them.
+	press(m, "j")
+	if m.form.id != m.sections.rows[1].ID || m.form.active {
+		t.Fatalf("the fields must follow the pane's cursor and stay quiet: %+v", m.form)
 	}
 }
 
 func TestEditingARowInPlace(t *testing.T) {
-	m, root := workbench(t)
+	m, root := trainPane(t)
 	press(m, "e")
 	if !m.form.active {
 		t.Fatal("e must put the caret in the fields the pane is already showing")
@@ -85,13 +92,13 @@ func TestEditingARowInPlace(t *testing.T) {
 	if m.form == nil || m.form.active || m.form.query != m.store.Queries()[0].Query {
 		t.Fatalf("the fields were not re-seeded from the write: %+v", m.form)
 	}
-	if m.flow.sel != 0 {
-		t.Fatalf("the cursor must stay on the row that was saved: %d", m.flow.sel)
+	if m.sections.sel != 0 {
+		t.Fatalf("the cursor must stay on the row that was saved: %d", m.sections.sel)
 	}
 }
 
 func TestEscGivesTheKeysBackWithoutWriting(t *testing.T) {
-	m, root := workbench(t)
+	m, root := trainPane(t)
 	was := triggerFile(t, root)
 	press(m, "e")
 	press(m, "x")
@@ -99,8 +106,8 @@ func TestEscGivesTheKeysBackWithoutWriting(t *testing.T) {
 	if m.form == nil || m.form.active {
 		t.Fatal("esc must hand the keys back to the table and leave the fields where they are")
 	}
-	if m.mode != screenFlow {
-		t.Fatalf("esc in the fields stays in the section: mode = %d", m.mode)
+	if m.mode != screenSections {
+		t.Fatalf("esc in the fields stays on the section screen: mode = %d", m.mode)
 	}
 	if triggerFile(t, root) != was {
 		t.Fatalf("a discarded edit wrote the file:\n%s", triggerFile(t, root))
@@ -108,12 +115,12 @@ func TestEscGivesTheKeysBackWithoutWriting(t *testing.T) {
 }
 
 func TestARowMovesBetweenSplitsFromTheSameFields(t *testing.T) {
-	m, root := workbench(t)
+	m, root := trainPane(t)
 	press(m, "e")
 	m.form.splitSel = store.SplitValidation
 	press(m, "ctrl+s")
 
-	for _, e := range m.flow.rows {
+	for _, e := range m.sections.rows {
 		if e.ID == 1 {
 			t.Fatal("the row is still in the train set after being moved to validation")
 		}
@@ -127,16 +134,16 @@ func TestARowMovesBetweenSplitsFromTheSameFields(t *testing.T) {
 	if !strings.Contains(triggerFile(t, root), `"split": "validation"`) {
 		t.Fatalf("the split was not written:\n%s", triggerFile(t, root))
 	}
-	if m.flow.sel >= len(m.flow.rows) {
-		t.Fatalf("the cursor was left past the end of the set: %d of %d", m.flow.sel, len(m.flow.rows))
+	if m.sections.sel >= len(m.sections.rows) {
+		t.Fatalf("the cursor was left past the end of the set: %d of %d", m.sections.sel, len(m.sections.rows))
 	}
-	if m.form == nil || m.form.id != m.flow.rows[m.flow.sel].ID {
+	if m.form == nil || m.form.id != m.sections.rows[m.sections.sel].ID {
 		t.Fatalf("the fields must follow the cursor to the row it landed on: %+v", m.form)
 	}
 }
 
 func TestANewRowIsWrittenIntoTheSplitOnScreen(t *testing.T) {
-	m, root := workbench(t)
+	m, root := trainPane(t)
 	press(m, "n")
 	if m.form == nil || m.form.editing || !m.form.active {
 		t.Fatalf("n must open empty fields in the pane, with the caret: %+v", m.form)
@@ -146,14 +153,14 @@ func TestANewRowIsWrittenIntoTheSplitOnScreen(t *testing.T) {
 	}
 	m.form.query = "turn this outline into a deck"
 	press(m, "ctrl+s")
-	if len(m.flow.rows) != 3 {
-		t.Fatalf("train rows = %d, want the new one", len(m.flow.rows))
+	if len(m.sections.rows) != 3 {
+		t.Fatalf("train rows = %d, want the new one", len(m.sections.rows))
 	}
 	if !strings.Contains(triggerFile(t, root), "turn this outline into a deck") {
 		t.Fatalf("the new row is not in the file:\n%s", triggerFile(t, root))
 	}
-	if m.flow.rows[m.flow.sel].Text != "turn this outline into a deck" {
-		t.Fatalf("the cursor must land on the row just written: %+v", m.flow.rows[m.flow.sel])
+	if m.sections.rows[m.sections.sel].Text != "turn this outline into a deck" {
+		t.Fatalf("the cursor must land on the row just written: %+v", m.sections.rows[m.sections.sel])
 	}
 }
 

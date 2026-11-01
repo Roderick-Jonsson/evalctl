@@ -154,9 +154,11 @@ func (m *Model) sectionSet(w, h int) []string {
 	s := &m.sections
 	sec := sectionRows[s.cursor].sec
 	train := sec == secIteration
-	// The caret in the fields under the table is the pane losing the keys, not a second focus: the
-	// set's mark goes with them.
-	focused := s.focus == sectionFocusSet && !m.formActive()
+	// The caret in the fields under the table does not make them a second region: the table and the
+	// fields are one pane, and the pane has the keys either way. The cursor arrow belongs to the
+	// table inside it, so it goes when the caret is down in the fields — one mark at a time.
+	focused := s.focus == sectionFocusSet
+	atTable := focused && !m.formActive()
 	name := setRegionName(train)
 	// The pane's name is the thing that must survive a narrow pane: the sentence beside it goes
 	// first, because "VALIDATIO…" is a region that cannot be named.
@@ -210,7 +212,7 @@ func (m *Model) sectionSet(w, h int) []string {
 	lines = append(lines, queryHeader(cols))
 	clampWindow(&s.sel, &s.rtop, len(s.rows), room)
 	for i := s.rtop; i < len(s.rows) && i < s.rtop+room; i++ {
-		lines = append(lines, queryRow(s.rows[i], cols, focused && i == s.sel, focused && i == s.sel))
+		lines = append(lines, queryRow(s.rows[i], cols, atTable && i == s.sel, atTable && i == s.sel))
 	}
 	// The table keeps its height so the fields do not jump when a short set is edited — but it never
 	// takes a row the block or the footer needs.

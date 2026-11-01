@@ -12,20 +12,20 @@ import (
 	"evalctl/internal/store"
 )
 
-// The iteration workbench: three things on the left and the set on the right.
+// The iteration workbench: four quadrants, because the loop is one decision seen from four sides.
 //
-//	left   THE FAILED QUERY   one failing row in full, and what the guide says to do about it
-//	       THE DESCRIPTION    SKILL.md's wording, editable — the thing you actually change
-//	       ITERATIONS         every run so far, with the rate it scored
-//	right  TRAIN SET         the queries, and under them the selected row's fields, editable
+//	tl  THE FAILED QUERY   one failing row in full, and what the guide says to do about it
+//	tr  TRAIN SET          the queries and the last run's verdict beside each one — read, not edited
+//	bl  THE DESCRIPTION    SKILL.md's wording, editable — the thing you actually change
+//	br  ITERATIONS         every run so far, with the rate it scored
 //
-// The four are one decision seen from four sides: the failure says what is wrong, the set says how
-// wrong (one row, or half of them), the iteration list says whether the last five changes bought
-// anything, and the description is where the answer is written. A rung-by-rung screen hid three of
-// those while you worked on the fourth.
+// The failure says what is wrong, the set says how wrong (one row, or half of them), the iteration
+// list says whether the last five changes bought anything, and the description is where the answer is
+// written. A rung-by-rung screen hid three of those while you worked on the fourth.
 //
-// The set's column is table over fields, always: the row is edited where it is listed, not in a
-// screen of its own, and not after a key that has to be found first.
+// The description is the only thing this screen edits, because it is the only thing a revision is:
+// the set is written on its own step screen and beside the two sections, and a second editor here
+// made the loop's one editable thing look like one of five.
 
 const (
 	focusSet = iota
@@ -50,21 +50,19 @@ func (m *Model) iterBody(h int) []string {
 	}
 	leftW := min(96, max(44, m.width*40/100))
 	rightW := m.workbenchPaneWidth()
+	topH := max(8, h/2-1)
+	botH := max(6, h-topH-1)
 
-	// The left column is what the loop knows: what failed, where the answer is written, how far it
-	// has got. The right column is the set and the fields of the row under the cursor.
-	iterH := max(7, (h-2)*34/100)
-	descH := max(7, (h-2)*30/100)
-	failH := max(6, h-iterH-descH-2)
-	leftRule := dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, leftW)))
-	left := append(m.quadFailure(leftW, failH), append([]string{leftRule}, m.quadWording(leftW, descH)...)...)
-	left = append(left, leftRule)
-	left = append(left, m.quadIterations(leftW, iterH)...)
-	return m.splitBody(h, leftW, rightW, left, m.setPane(rightW, h))
+	// Two rows of two: what went wrong beside how much of the set it cost, and — under them — where
+	// the answer is written beside how far that has got the loop.
+	top := m.splitBody(topH, leftW, rightW, m.quadFailure(leftW, topH), m.setPane(rightW, topH))
+	bot := m.splitBody(botH, leftW, rightW, m.quadWording(leftW, botH), m.quadIterations(rightW, botH))
+	rule := dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, m.width)))
+	return fitRows(append(append(top, rule), bot...), h)
 }
 
-// workbenchPaneWidth is the width of the workbench's right column, where the set lives. The form
-// opened from that table is drawn to this width, so it is asked here rather than guessed there.
+// workbenchPaneWidth is the width of the workbench's right column. The set's table and the iteration
+// list are drawn to it, so the two rows line up on one seam.
 func (m *Model) workbenchPaneWidth() int {
 	leftW := min(96, max(44, m.width*40/100))
 	return m.width - leftW - 3
@@ -159,7 +157,7 @@ func (m *Model) quadSetRow(i, idW, trigW, resW, queryW int) string {
 	// Only the region with the keys draws the cursor, and the band goes with it: a row that is
 	// marked in a pane nobody is driving reads as a second cursor, which is the thing this screen
 	// had two of.
-	on := i == f.sel && f.focus == focusSet && !m.formActive()
+	on := i == f.sel && f.focus == focusSet
 	if on {
 		mark = cursorMark.Render(glyphs.Cursor)
 	}
@@ -358,6 +356,9 @@ func (m *Model) typing() bool {
 
 // ---------------------------------------------------------------- keys
 
+// updateIter is the workbench's keys: walk the set, run, read the failures — and type the wording.
+// The set is not written here. `n`, `e`, `d` and `space` belong to the screen that owns the set, and
+// a second editor on the screen whose one editable thing is the description cost the loop its focus.
 func (m *Model) updateIter(msg tea.KeyMsg) tea.Cmd {
 	f := m.flow
 	switch msg.String() {
@@ -367,30 +368,12 @@ func (m *Model) updateIter(msg tea.KeyMsg) tea.Cmd {
 		return m.cycleFocus(-1)
 	case "j", "down":
 		f.sel = min(f.sel+1, max(0, len(f.rows)-1))
-		m.syncSetForm()
 	case "k", "up":
 		f.sel = max(0, f.sel-1)
-		m.syncSetForm()
 	case "g", "home":
 		f.sel = 0
-		m.syncSetForm()
 	case "G", "end":
 		f.sel = max(0, len(f.rows)-1)
-		m.syncSetForm()
-	case "n":
-		m.openForm(nil)
-	case "e":
-		if len(f.rows) > 0 {
-			return m.focusForm()
-		}
-	case " ", "space":
-		if len(f.rows) > 0 {
-			return m.toggleLabel()
-		}
-	case "d":
-		if len(f.rows) > 0 {
-			m.askDeleteRow()
-		}
 	case "R":
 		return m.openRunAsk()
 	case "f":

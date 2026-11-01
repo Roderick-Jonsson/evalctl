@@ -393,17 +393,18 @@ func TestGateHoldsUntilFiveIterations(t *testing.T) {
 
 // ---------------------------------------------------------------- steps 1 and 2
 
+// TestSpaceFlipsTheLabelAndWritesTheFile: the label is flipped where the row is written — the set
+// beside the two sections, or the validation step. The workbench reports the set and does not write it.
 func TestSpaceFlipsTheLabelAndWritesTheFile(t *testing.T) {
 	m, _, _ := fixture(t)
 	m.openSkill("slide-builder")
-	enterSection(m, secIteration)
-	m.jumpStep(1)
-	if len(m.flow.rows) != 2 {
-		t.Fatalf("train rows = %d", len(m.flow.rows))
+	press(m, "tab") // the set beside the two sections
+	if len(m.sections.rows) != 2 {
+		t.Fatalf("train rows = %d", len(m.sections.rows))
 	}
-	before := m.flow.rows[0].Label
+	before := m.sections.rows[0].Label
 	press(m, "space")
-	after := m.flow.rows[0].Label
+	after := m.sections.rows[0].Label
 	if before == after {
 		t.Fatalf("label did not move (%q)", before)
 	}

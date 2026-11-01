@@ -53,11 +53,11 @@ func (m *Model) setBody(h int) []string {
 	f := m.flow
 	train := f.sec == secIteration
 	ruled := "  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4))))
-	// The set has the keys until the caret goes into the fields under it, and then it does not:
-	// one region at a time, and the name says which.
+	// The set has the keys — the table above and the fields below are one region, so the head keeps
+	// the block when the caret moves into the fields under it.
 	lines := []string{
 		"",
-		regionHead(m.width, setRegionName(train), "", !m.formActive()),
+		regionHead(m.width, setRegionName(train), "", true),
 		ruled,
 	}
 	// The rule closes the head and the sentence under it explains the set, the order the frame itself
@@ -424,12 +424,11 @@ func (m *Model) askDeleteEntry(e store.Entry, scope string, back screen, after f
 	m.mode = screenAsk
 }
 
-// setPane is the set as one column: its title and headings, the rows, and under them the fields of the
-// row under the cursor. It is what the workbench puts in its right-hand column, and it is the same
-// arrangement the step screens draw across the whole body — table above, the row's fields below,
-// always, with no key needed to make the fields appear.
+// setPane is the set as one column: its title, the headings and the rows with the last run's verdict
+// beside each. It is what the workbench puts in its right-hand column: the set as the run left it,
+// reported and not edited — the rows are written on the step screen that owns them, and beside the
+// two sections, so there is one editor and it is not this one.
 func (m *Model) setPane(w, h int) []string {
-	m.syncSetForm()
 	f := m.flow
 	const idW, trigW, resW = 4, 7, 6
 	queryW := max(12, w-2-3-idW-2-trigW-1-resW-2)
@@ -438,29 +437,16 @@ func (m *Model) setPane(w, h int) []string {
 		dimStyle.Render(padCell("RESULT", resW, false)) + "  " +
 		dimStyle.Render(padCell("QUERY", queryW, false))
 	lines := []string{"", regionHead(w, setRegionName(true), pluralOf(len(f.rows), "query", "queries"),
-		f.focus == focusSet && !m.formActive()), head}
+		f.focus == focusSet), head}
 
 	facts := wrapPlain(m.setFacts(true), max(20, w-6))
-	form := m.inlineForm()
-	formH := 0
-	if form != nil {
-		formH = min(form.want()+1, max(9, h-len(lines)-len(facts)-3))
-	}
-	room := max(1, h-len(lines)-len(facts)-formH-boolInt(formH > 0))
+	room := max(1, h-len(lines)-len(facts))
 	f.clampSet(room)
 	for i := f.top; i < len(f.rows) && i < f.top+room; i++ {
 		lines = append(lines, m.quadSetRow(i, idW, trigW, resW, queryW))
 	}
-	for len(lines) < h-len(facts)-formH-boolInt(formH > 0) {
+	for len(lines) < h-len(facts) {
 		lines = append(lines, "")
-	}
-	if form != nil {
-		lines = append(lines, dimStyle.Render("  "+strings.Repeat(glyphs.Rule, max(8, w-4))))
-		// The fields are drawn two cells inside the pane, like every other line in it, and the
-		// width they are told to be is the width they are drawn at: syncSetForm re-seeds a form
-		// whose width does not match the pane's, and a form re-seeded on every frame is a caret
-		// that is thrown away between two keystrokes.
-		lines = append(lines, form.body(w-2, formH)...)
 	}
 	for i, line := range facts {
 		if i == 1 && len(lines) >= h {
@@ -537,7 +523,8 @@ func (m *Model) syncSetForm() {
 }
 
 // setView is the list the screen in front of you is showing: its rows, its cursor, its split and the
-// width its pane gives the fields.
+// width its pane gives the fields. The workbench returns no width: its right column reports the set
+// and does not edit it, so there are no fields to seed there.
 func (m *Model) setView() (rows []store.Entry, sel int, split string, w int) {
 	if m.mode == screenSections {
 		sec := sectionRows[m.sections.cursor].sec
@@ -547,7 +534,7 @@ func (m *Model) setView() (rows []store.Entry, sel int, split string, w int) {
 		return nil, 0, "", 0
 	}
 	if m.flow.sec == secIteration {
-		return m.flow.rows, m.flow.sel, m.flow.split(), m.workbenchPaneWidth() - 2
+		return m.flow.rows, m.flow.sel, m.flow.split(), 0
 	}
 	return m.flow.rows, m.flow.sel, m.flow.split(), m.width - 2
 }
