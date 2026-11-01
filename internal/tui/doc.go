@@ -157,13 +157,19 @@ func (d *docWriter) bullet(text string) {
 }
 
 // hint is one numbered line of advice: the number in the amber the frame keeps for what to look at
-// next, the sentence in the body colour so it reads as an instruction and not as small print. The
-// indent hangs, so a hint that wraps starts its second line under its own first word and the numbers
-// stay a column down the pane.
+// next, the sentence in the body colour so it reads as an instruction and not as small print.
 func (d *docWriter) hint(n int, text string) {
-	label := fmt.Sprintf("Hint %d", n)
-	gap := "  " + hintLabel.Render(label) + "  "
-	for i, line := range wrapPlain(text, max(10, d.body()-lipgloss.Width(label)-2)) {
+	d.labelled(fmt.Sprintf("Hint %d", n), hintLabel, text)
+}
+
+// labelled is one line of the workbench's panes: a label in a fixed six-cell column, the text in the
+// body colour, wrapped with a hanging indent so the labels stay a column and a wrapped line starts
+// under the first word of the thing it belongs to. The label carries the weight and the colour, the
+// text carries the meaning — which is why the text is not bold: a bold label beside bold prose is one
+// solid block, and the eye has nowhere to land.
+func (d *docWriter) labelled(label string, st lipgloss.Style, text string) {
+	gap := "  " + st.Render(padCell(label, 6, false)) + "  "
+	for i, line := range wrapPlain(text, max(10, d.body()-lipgloss.Width(gap))) {
 		if i == 0 {
 			d.lines = append(d.lines, gap+colText.Render(line))
 			continue

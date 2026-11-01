@@ -304,10 +304,10 @@ func TestTheFailurePaneIsThreeMoves(t *testing.T) {
 	enterSection(m, secIteration)
 	view := quadView(m)
 	for _, want := range []string{
-		"turn today's retro notes into a deck",
+		"Query   turn today's retro notes into a deck",
 		"should trigger · fired 0 of 3 · too narrow",
 		"Hint 1", "Hint 2", "Hint 3",
-		"Name the context this ask belongs to",
+		"Name the context this belongs to",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("the failure pane is missing %q:\n%s", want, view)

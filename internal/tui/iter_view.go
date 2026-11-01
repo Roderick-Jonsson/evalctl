@@ -101,6 +101,7 @@ func (m *Model) quadFailure(w, h int) []string {
 		// A quadrant that takes no keys names itself in the quiet register, so the one that has
 		// them is the only one in the accent.
 		d.head("FAILED QUERY", false)
+		d.rule()
 		switch {
 		case f.pending() != nil:
 			d.lead(fmt.Sprintf("candidate #%d has not been run yet — run the train set", f.pending().ID))
@@ -112,16 +113,15 @@ func (m *Model) quadFailure(w, h int) []string {
 		return fitRows(d.lines, h)
 	}
 	d.head(fmt.Sprintf("FAILED QUERY · q%d", row.ID), false)
-	// The ask, in the register of a heading: it is what every line under it is about, and the one
-	// line here you might recognise from the set. It comes from the set and not from the score row,
+	d.rule()
+	// The ask, labelled and hung like a hint: the label says what the sentence is, the sentence is
+	// the thing every line under it is about. It comes from the set and not from the score row,
 	// because the set is what is on screen beside it and what the next run will measure.
 	ask := f.askOf(row.ID)
 	if ask == "" {
 		ask = row.Query
 	}
-	for _, line := range wrapPlain(ask, max(10, w-2)) {
-		d.lines = append(d.lines, "  "+titleStyle.Render(line))
-	}
+	d.labelled("Query", paneLabel, ask)
 	// A row of its own, because the ask can wrap and a wrapped ask ends mid-sentence: the failure
 	// line has to start the eye at the left edge again, or the reading runs the last line of the
 	// query into the verdict.
@@ -141,8 +141,9 @@ func (m *Model) quadFailure(w, h int) []string {
 			dimStyle.Render(fmt.Sprintf(" · fired %d of %d", row.Triggers, row.Runs))+
 			" · "+failMark.Render(verdictWord(*row)))
 	}
+	// The advice sits one row clear of the verdict: the failure line is a reading of the run, the
+	// hints are what to do about it, and two registers that close on each other read as one list.
 	d.lines = append(d.lines, "")
-	// The advice, numbered so a revision can be argued with one hint at a time.
 	for i, hint := range adaptHints(*row) {
 		d.hint(i+1, hint)
 	}
@@ -153,28 +154,28 @@ func (m *Model) quadFailure(w, h int) []string {
 // purpose: the same failure always earns the same advice, so it stays checkable against the page it
 // came from instead of being an opinion at 2am.
 //
-// Each hint is one clause, because the pane sits beside the field you are about to rewrite: a hint
-// that needs a second line is a paragraph about the fix instead of the fix. The order is the order to
-// try them in — the wording first, the row last.
+// Each hint is one clause of a fixed size — thirty-six cells, the room a workbench column gives the
+// text beside its label — because the pane is a fixed height and a hint that wraps costs the third
+// one its place. That is also the order to try them in: the wording first, the row last.
 func adaptHints(row runner.ScoreRow) []string {
 	switch {
 	case row.ShouldTrigger && row.Triggers == 0:
 		return []string{
-			"Name the context this ask belongs to.",
-			"Say it applies even unnamed — be pushy.",
+			"Name the context this belongs to.",
+			"Be pushy: say it applies unnamed.",
 			"Describe the intent, not the tool.",
 		}
 	case !row.ShouldTrigger && row.Triggers > 0:
 		return []string{
-			"Something here overlaps a neighbouring skill.",
-			"Say what this skill is for, and where it ends.",
-			"Check which skill did load — your rival.",
+			"It overlaps another skill's work.",
+			"Say where this skill starts and ends.",
+			"Check which skill did load instead.",
 		}
 	}
 	return []string{
-		"The line between yes and no is not explicit.",
-		"Say what makes this a yes, in so many words.",
-		"If it keeps happening, the row may be wrong.",
+		"The yes/no line is not explicit.",
+		"Say what makes this a yes.",
+		"If it keeps happening, fix the row.",
 	}
 }
 
@@ -225,7 +226,8 @@ func (m *Model) quadWording(w, h int) []string {
 		style = badgeWarn
 	}
 	lines := []string{"", endsLine("  "+regionHead(w, "THE DESCRIPTION", "", f.focus == focusWording),
-		style.Render(counter)+" ", w)}
+		style.Render(counter)+" ", w),
+		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, w-4)))}
 	for _, line := range strings.Split(strings.TrimRight(d.text.View(), "\n"), "\n") {
 		lines = append(lines, "  "+line)
 	}
@@ -252,7 +254,8 @@ func (m *Model) quadIterations(w, h int) []string {
 	head := "  " + dimStyle.Render(padCell("ITER", 5, true)) + " " +
 		dimStyle.Render(padCell("TRAIN", 12, true)) + " " +
 		dimStyle.Render(padCell("CHARS", 6, true)) + "  " + dimStyle.Render("NOTE")
-	lines := []string{"", regionHead(w, "ITERATIONS", fmt.Sprintf("%d of %d", len(f.iters), iterationsRequired), false), head}
+	lines := []string{"", regionHead(w, "ITERATIONS", fmt.Sprintf("%d of %d", len(f.iters), iterationsRequired), false),
+		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, w-4))), head}
 	room := max(1, h-len(lines)-2)
 	start := max(0, len(f.iters)-room)
 	for i := start; i < len(f.iters); i++ {

@@ -261,44 +261,44 @@ Only the description is edited here, because a revision is an edit to `SKILL.md`
 set is drawn with the run's verdicts and read; the rows are written beside the two sections, where the
 set is the thing on screen.
 
+Each quadrant's name is closed by a rule, the way every other region in the app is drawn: four areas
+sharing one screen need the same edge under their titles as a screen with one region, or the pane's
+name and the first row of its content read as one paragraph.
+
 ```
  tl  FAILED QUERY      one failing row in full, and what the guide says to do about it
  tr  TRAIN SET         the queries and the last run's verdict beside each one — read, not edited
  bl  THE DESCRIPTION   SKILL.md's wording, editable in place — the answer is written here
  br  ITERATIONS        every measured wording, and the rate it scored
 ```
-
-```
- trigger optimization > slide-builder > iteration                                             evalctl v0.8.0 · 11:06
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                                                │ 
   FAILED QUERY · q3                            │ ▌ TRAIN SET                                              2 queries 
-  build the deck from last week's outline      │     ID   TRIGGER RESULT  QUERY                                   
+  ──────────────────────────────────────────── │   ────────────────────────────────────────────────────────────── 
+  Query   build the deck from the retro notes  │     ID   TRIGGER RESULT  QUERY                                   
                                                │ ▶    1   yes     pass    build me slides from this outline       
   should trigger · fired 0 of 3 · too narrow   │      2   no      FAIL    research the operator pattern for me    
                                                │ 
-  Hint 1  Name the context this ask            │ 
-          belongs to.                          │ 
-  Hint 2  Say it applies even unnamed —        │ 
-          be pushy.                            │   2 rows · 1 should trigger · 1 should not · 50% of the set
-  Hint 3  Describe the intent, not the         │   (the guide asks ~60/40)
-          tool.                                │ 
+  Hint 1  Name the context this belongs to.    │ 
+  Hint 2  Be pushy: say it applies unnamed.    │ 
+  Hint 3  Describe the intent, not the tool.   │ 
+                                               │   2 rows · 1 should trigger · 1 should not · 50% of the set
+                                               │   (the guide asks ~60/40)
                                                │ 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
                                                │ 
-  THE DESCRIPTION                   52 / 1024  │   ITERATIONS                                                1 of 5 
+  THE DESCRIPTION                   52 / 1024  │   ITERATIONS                                                1 of 5
+  ──────────────────────────────────────────── │   ──────────────────────────────────────────────────────────────
   Use this skill when an outline has to        │    ITER        TRAIN  CHARS  NOTE
   become slides.                               │       1          50%     52  the description in SKILL.md when t…
                                                │   4 iterations to go before generalization
-                                               │ 
-                                               │ 
-                                               │ 
-                                               │ 
-                                               │ 
-                                               │ 
-                                               │ 
-  note  the description in SKILL.md when the … │ 
-                                               │ 
+                                               │
+                                               │
+                                               │
+                                               │
+                                               │
+                                               │
+  note  the description in SKILL.md when the … │
+                                               │
 enter run the train set · tab the description · R run again · f the failures · esc sections              ? keys 
  the wording may learn from these rows — nothing else shapes a revision                            train set · row 1 of 2 
 ```

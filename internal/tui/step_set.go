@@ -437,7 +437,8 @@ func (m *Model) setPane(w, h int) []string {
 		dimStyle.Render(padCell("RESULT", resW, false)) + "  " +
 		dimStyle.Render(padCell("QUERY", queryW, false))
 	lines := []string{"", regionHead(w, setRegionName(true), pluralOf(len(f.rows), "query", "queries"),
-		f.focus == focusSet), head}
+		f.focus == focusSet),
+		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, w-4))), head}
 
 	facts := wrapPlain(m.setFacts(true), max(20, w-6))
 	room := max(1, h-len(lines)-len(facts))
