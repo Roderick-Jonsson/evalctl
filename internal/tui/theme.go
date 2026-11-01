@@ -82,6 +82,10 @@ var (
 	// badgeWarn has no width on purpose: colDupe is a 4-cell column style, and wrapping a
 	// sentence in it folds the header one character per line.
 	badgeWarn = lipgloss.NewStyle()
+	// tagRecommend is the ranking's word for the row the validation rule picked. It is a tag in
+	// amber and not a green tick: a tick is a glyph the eye reads as "done" and skips, while the
+	// one row on the table that is a decision has to say its own name.
+	tagRecommend = lipgloss.NewStyle()
 	// failMark is the verdict in the failure pane: the two words that say which way the wording is
 	// wrong, bold and red, because it is the one line on the screen that is a failure and not a
 	// reading. hintLabel is the "Hint 1" in front of a line of advice: bold and amber, the palette's
@@ -162,6 +166,10 @@ func applyStyles(p theme.Palette) {
 	// frame's accent is pointing at, said in words.
 	regionLabel = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Text))
 	badgeWarn = lipgloss.NewStyle().Foreground(p.Color(p.Warn))
+	// Amber is the palette's "look at this", and the recommendation is the one row on the
+	// ranking that is a direction rather than a reading — so it is the tag, not the green of a
+	// pass: the rate beside it already says pass.
+	tagRecommend = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Warn))
 	// The failure pane's two marks. Red is reserved for a failure and this is the failure's own
 	// line; amber means "look at this next", which is what a hint is — the dupe column and the
 	// validation warning mean the same thing in their own places.

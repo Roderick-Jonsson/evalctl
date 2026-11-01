@@ -608,9 +608,27 @@ func TestTheRankingIsOneTableWithTheRatesItHas(t *testing.T) {
 	m.flow.sec, m.flow.step = secGeneralization, 2
 	m.flow.enterStep(m)
 	body := stripMarks(strings.Join(m.rankingBody(24), "\n"))
-	for _, want := range []string{"ITERATION", "TRAIN", "VALIDATION", "GAP", "recommended by validation"} {
+	for _, want := range []string{"ITERATION", "TRAIN", "VALIDATION", "GAP"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the ranking is missing %q:\n%s", want, body)
+		}
+	}
+	// The pick is a word on its own row, not a tick: the tick sat in the note column as a glyph the
+	// eye reads as "pass" and skips, and the one row on this table that is a decision has to say so.
+	var pick string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.Contains(line, "2/2 100%") {
+			pick = line
+		}
+	}
+	if !strings.Contains(pick, "Recommended") {
+		t.Fatalf("the recommended row does not carry the tag:\n%s", body)
+	}
+	// The tail is the owed run and nothing else: the pick is the tag above, the columns are named
+	// by their own head, and a table that explains itself twice is text where the screen is data.
+	for _, gone := range []string{"by validation", "validation is the ranking", "learned rather than earned"} {
+		if strings.Contains(body, gone) {
+			t.Fatalf("the ranking's tail still explains the table (%q):\n%s", gone, body)
 		}
 	}
 	if strings.Contains(body, "with no rate") {
@@ -661,7 +679,7 @@ func TestAnUnvalidatedRowStaysInTheTableWithADash(t *testing.T) {
 	if row1 == "" || !strings.Contains(row1, "—") {
 		t.Fatalf("the unvalidated row is not drawn with a dash:\n%s", body)
 	}
-	if !strings.Contains(body, "run the validation set for 1 iteration without a full rate") {
+	if !strings.Contains(body, "validate 1 iteration · 2 queries × 3 runs = 6 agent calls") {
 		t.Fatalf("the table must offer to run the rates it is missing:\n%s", body)
 	}
 	// The cursor opens on the recommendation, and v queues exactly the row that has no rate.
@@ -1244,7 +1262,7 @@ func TestAPartialValidationNeverRanks(t *testing.T) {
 	if !strings.Contains(body, "1/1 100% of 2") {
 		t.Fatalf("the partial rate must say how much of the set it measured:\n%s", body)
 	}
-	if !strings.Contains(body, "a stopped batch's validation rate never ranks") {
+	if !strings.Contains(body, "of N — judged of the split; a stopped batch never ranks") {
 		t.Fatalf("the table must say what the partial cell means:\n%s", body)
 	}
 	if m.flow.gen != nil {

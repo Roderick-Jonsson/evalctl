@@ -81,40 +81,32 @@ func (m *Model) rankingBody(h int) []string {
 	}
 	headRows := len(lines)
 
-	// The tail is built first so the table can be given exactly the rows that are left: the
-	// recommendation, the run it still owes, and the rule the ranking is read under.
+	// The tail is what the table still owes, and a legend only where a cell uses its mark. The pick
+	// is not restated here: it is a tag on its own row, and the columns are named by their own head
+	// — under a table that already says both, a paragraph saying them again is the screen reading
+	// itself out loud.
 	var tail []string
 	tail = append(tail, "  "+dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4)))))
-	if best != nil {
-		tail = append(tail, "  "+styleOn.Render(glyphs.Done+" recommended by validation")+"  "+
-			fmt.Sprintf("#%d · validation %s · train %s", best.Cand.ID,
-				pct(best.Valid.Validation.Passed, best.Valid.Validation.Judged),
-				pct(best.Train.Train.Passed, best.Train.Train.Judged)))
-	}
 	if pending > 0 {
 		// The missing rates are the screen's one forward move, so the line that offers it says what
 		// it costs: the validation queries, the runs, and the calls that multiplies out to.
 		cost := f.lab.ValidationRows * f.lab.Runs * pending
 		tail = append(tail, "  "+cursorMark.Render(glyphs.Arrow)+" "+titleStyle.Render("v")+"  "+
-			ellipsis(fmt.Sprintf("run the validation set for %s without a full rate · %d queries × %d runs = %d agent calls",
+			ellipsis(fmt.Sprintf("validate %s · %d queries × %d runs = %d agent calls",
 				plural(pending, "iteration"), f.lab.ValidationRows, f.lab.Runs, cost),
 				max(20, m.width-8)))
 	}
 	if draft != nil {
-		word := "no train run has measured it yet; the workbench's run measures it"
+		word := "the workbench's run measures it"
 		if !live {
-			word = "a later revision stepped over it, so it stays history and never becomes an iteration"
+			word = "a later revision stepped over it"
 		}
 		tail = append(tail, "  "+dimStyle.Render(ellipsis(fmt.Sprintf(
 			"#%d is in the ledger but not this table — %s", draft.ID, word), max(30, m.width-4))))
 	}
-	for _, line := range wrapPlain("validation is the ranking; train beside it is how much of that rate the wording learned rather than earned", max(30, m.width-4)) {
-		tail = append(tail, "  "+dimStyle.Render(line))
-	}
 	if m.anyPartial() {
-		for _, line := range wrapPlain("\"of N\" marks a rate measured over part of its split — a stopped batch's validation rate never ranks", max(30, m.width-4)) {
-			tail = append(tail, "  "+dimStyle.Render(line))
-		}
+		tail = append(tail, "  "+dimStyle.Render(ellipsis(
+			"of N — judged of the split; a stopped batch never ranks", max(30, m.width-4))))
 	}
 
 	room := max(1, h-len(lines)-len(tail))
@@ -166,13 +158,17 @@ func (m *Model) rankingRow(it iteration, focused, best bool) string {
 		colSplit.Render(fitTo(gapOf(&it.Train.Train, it.valid()), 6)) + " " +
 		colSplit.Render(fitTo(fmt.Sprint(it.Cand.Chars), 6)) + "  "
 	// The marks go last and the note takes what is left: a note that ate the row's evidence would
-	// be the one thing on this line that could not be cut.
+	// be the one thing on this line that could not be cut. The recommendation is a word in amber
+	// and not a tick: the tick read as the rate's own pass mark, and the row it sits on is the
+	// one row on the table that is a decision.
 	marks := ""
-	if best {
-		marks += " " + styleOn.Render(glyphs.Done)
-	}
+	// "in file" is a quiet fact and the tag is the loud one, so the tag goes last: the right edge
+	// of the row is where the eye lands when it is scanning for what to do.
 	if it.Cand.InFile {
 		marks += dimStyle.Render(" in file")
+	}
+	if best {
+		marks += " " + tagRecommend.Render("Recommended")
 	}
 	room := m.width - lipgloss.Width(prefix) - lipgloss.Width(marks) - 1
 	note := oneLine(it.Cand.Note)

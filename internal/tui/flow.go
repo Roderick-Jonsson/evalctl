@@ -493,20 +493,28 @@ func (f *flowState) stateText() string {
 	if !f.gateOpen() {
 		return fmt.Sprintf("%d of %d iterations — ctrl+g validates early, unproven", len(f.iters), iterationsRequired)
 	}
-	if f.anyIncomplete() {
-		return "validation is the only thing that ranks a wording — v runs it for the ones without a full rate"
+	// The rule and the key are already said above — the head names what ranks the table and the
+	// action line carries the run — so the corner is the one thing neither says: how much of the
+	// table is ranked at all.
+	done, total := f.ranked()
+	return fmt.Sprintf("%d of %d ranked", done, total)
+}
+
+// ranked counts the wordings whose validation rate covers the whole set: the ones the table can
+// actually put in an order.
+func (f *flowState) ranked() (done, total int) {
+	for _, it := range f.iters {
+		if f.complete(it.valid()) {
+			done++
+		}
 	}
-	return "validation is the only thing that ranks a wording — every wording here was judged on the whole set"
+	return done, len(f.iters)
 }
 
 // anyIncomplete reports whether some measured wording still owes a full validation rate.
 func (f *flowState) anyIncomplete() bool {
-	for _, it := range f.iters {
-		if !f.complete(it.valid()) {
-			return true
-		}
-	}
-	return false
+	done, total := f.ranked()
+	return done < total
 }
 
 func (f *flowState) body(m *Model, h int) []string {

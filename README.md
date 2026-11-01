@@ -381,15 +381,19 @@ them.
 ▌ RANKING                                                                        ranked by the validation set
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ITERATION  TRAIN         VALIDATION       GAP    CHARS   NOTE
-  1          1/2 50%       2/2 100%         −50%   52      the description in SKILL.md when the loop …  in file
-▶ 2          2/2 100%      —                —      91      the description with the deck named ✓
+  1          1/2 50%       2/2 100%         −50%   52      the description in SKILL.md when the loop …  in file Recommended
+▶ 2          2/2 100%      —                —      91      the description with the deck named
   ────────────────────────────────────────────────────────────────────────────────────────────────
-  ✓ recommended by validation  #1 · validation 100% · train 50%
-  → v  run the validation set for 1 iteration without a full rate · 2 queries × 3 runs = 6 agent calls
-  validation is the ranking; train beside it is how much of that rate the wording learned rather than earned
+  → v  validate 1 iteration · 2 queries × 3 runs = 6 agent calls
 j k move · v validate the rest · 1 validation set · enter apply · f failures · esc sections          ? keys
- validation is the only thing that ranks a wording — v runs it for the ones without a full rate     step 2 of 2
+ 1 of 2 ranked                                                                                    step 2 of 2
 ```
+
+That tail is the whole of what sits under the table: the run it still owes, with what the run costs,
+and a legend only when a cell uses the mark it explains. The pick is not restated there — it is the
+`Recommended` tag on its own row, in amber, at the right edge; the columns are named by their own head;
+and the corner says how much of the table is ranked at all. A screen that is all table does not read
+itself out loud underneath.
 
 **A wording with no rate is still a row.** The dash is a fact the table exists to show, and a row that
 vanished until it was measured would hide how much of the table is unranked. `v` runs the validation
@@ -413,14 +417,18 @@ any run leaves a candidate the ledger holds and no train run measured. It is not
 no row; the line under the table names it, says that no train run has measured it, and points at the
 workbench's run, which is what measures it.
 
-**`✓ recommended by validation`** is the guide's selection rule computed — the best validation rate,
-a tie going to the earlier wording, the one that got there with less text and fewer revisions — and it
-is where the cursor opens, because walking to the winner by hand would be the reader repeating the
-arithmetic. The pick stays yours: `j k` walk the table and `enter` (or `a`) applies the row under the
-cursor to `SKILL.md` — frontmatter only, backed up, re-read through the parser, recorded in the ledger
-beside the measurement that earned it — after the loop's one confirmation. `f` opens that iteration in
-full, and `h` then runs the fresh queries once, apart from every rate the loop tuned on. With nothing
-validated yet the table has no rate to rank, and it says so instead of recommending a row.
+**The recommendation is a tag on the row, and a line under the table.** `Recommended`, in amber, at the
+right edge of the row the rule picked — a word instead of the green tick it used to be, because a tick
+in the note column read as the rate's own pass mark and was the first thing on the screen to be skipped.
+The line under the rule says the same pick with its numbers. It is the guide's selection rule computed —
+the best validation rate, a tie going to the earlier wording, the one that got there with less text and
+fewer revisions — and it is where the cursor opens, because walking to the winner by hand would be the
+reader repeating the arithmetic. The pick stays yours: `j k` walk the table and `enter` (or `a`) applies
+the row under the cursor to `SKILL.md` — frontmatter only, backed up, re-read through the parser,
+recorded in the ledger beside the measurement that earned it — after the loop's one confirmation. `f`
+opens that iteration in full, and `h` then runs the fresh queries once, apart from every rate the loop
+tuned on. With nothing validated yet the table has no rate to rank, and it says so instead of
+recommending a row.
 
 ### The gate
 
