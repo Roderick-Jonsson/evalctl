@@ -43,7 +43,6 @@ const (
 	screenDraft                  // the description being revised
 	screenAsk                    // a yes/no question
 	screenDoc                    // a scrollable document (failures, a report, a log)
-	screenRunAsk                 // what a run will do, before it does it
 	screenRunLive                // the run, while it runs
 	screenHelp
 )
@@ -337,8 +336,6 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.ask.update(m, msg)
 	case screenDoc:
 		return m, m.doc.update(m, msg)
-	case screenRunAsk:
-		return m, m.updateRunAsk(msg)
 	case screenRunLive:
 		return m, m.updateRunLive(msg)
 	case screenHelp:
@@ -368,14 +365,19 @@ func (m *Model) escUp() tea.Cmd {
 	case screenFlow:
 		m.mode = screenSections
 	case screenSections:
+		// The run's block is inside the pane, so esc leaves it before it leaves the screen: one
+		// level up, every time, is the only promise the key has to keep.
+		if m.sections.runFocus {
+			m.sections.runFocus = false
+			m.setStatus("the run's settings are the set's — the table has the keys again", false)
+			return nil
+		}
 		m.skill, m.flow = "", nil
 		m.mode = screenSkill
 	case screenAsk:
 		m.ask, m.mode = nil, screenFlow
 	case screenDoc:
 		m.doc, m.mode = nil, m.backTo
-	case screenRunAsk:
-		m.run, m.mode = nil, screenFlow
 	case screenHelp:
 		m.mode = m.backTo
 	case screenRunLive:
@@ -470,7 +472,7 @@ func (m *Model) pathSegments() []string {
 		if m.doc != nil {
 			segs = append(segs, m.doc.scope)
 		}
-	case screenRunAsk, screenRunLive:
+	case screenRunLive:
 		if m.run != nil {
 			segs = append(segs, m.run.scope)
 		}
@@ -531,7 +533,7 @@ func (m *Model) contextLine(w int) string {
 		return ""
 	case screenSkill:
 		return ""
-	case screenRunAsk, screenRunLive:
+	case screenRunLive:
 		if m.run != nil {
 			return dimStyle.Render("  " + m.run.hint)
 		}
@@ -560,10 +562,6 @@ func (m *Model) bodyLines(h int) []string {
 	case screenDoc:
 		if m.doc != nil {
 			return m.doc.body(h)
-		}
-	case screenRunAsk:
-		if m.run != nil {
-			return m.run.askBody(m, h)
 		}
 	case screenRunLive:
 		if m.run != nil {
@@ -611,12 +609,20 @@ func (m *Model) hints() []hint {
 			return m.form.hints()
 		}
 		if m.sections.focus == sectionFocusSet && m.sectionPaneWidth() > 0 {
-			// The pane has the keys: the set's own vocabulary, one line short of the step screen's.
-			return []hint{{"j k", "rows"}, {"n e d", "new · edit · delete"}, {"space", "trigger"},
-				{"tab", "sections"}, {"enter", "open the workbench"}}
+			// The run's block has the keys: two settings, and the keys a setting has.
+			if m.sections.runFocus {
+				return []hint{{"← →", "change"}, {"tab", "next knob"}, {"space", "on·off"}, {"enter", "the set"}}
+			}
+			// The pane has the keys: the set's own vocabulary, one line short of the step screen's —
+			// and tab, which walks into the run's block below the table.
+			return []hint{{"j k", "rows"}, {"tab", "the run"}, {"n e d", "new·edit·delete"},
+				{"space", "trigger"}, {"enter", "the workbench"}, {"shift+tab", "sections"}}
 		}
 		if m.sectionPaneWidth() == 0 {
-			return []hint{{"j k", "move"}, {"enter", "open"}, {"esc", "skills"}}
+			if m.sections.runFocus {
+				return []hint{{"← →", "change"}, {"tab", "next knob"}, {"space", "on·off"}, {"esc", "the set"}}
+			}
+			return []hint{{"j k", "move"}, {"tab", "the run"}, {"enter", "open"}, {"esc", "skills"}}
 		}
 		return []hint{{"j k", "move"}, {"tab", "the set"}, {"enter", "open"}, {"esc", "skills"}}
 	case screenFlow:
@@ -629,10 +635,6 @@ func (m *Model) hints() []hint {
 		}
 	case screenDoc:
 		return []hint{{"j k", "scroll"}, {"g G", "ends"}, {"esc", "back"}}
-	case screenRunAsk:
-		if m.run != nil {
-			return m.run.askHints()
-		}
 	case screenRunLive:
 		if m.run != nil {
 			return m.run.liveHints()
@@ -681,6 +683,9 @@ func (m *Model) region() string {
 	case screenSections:
 		if m.formActive() {
 			return "editor"
+		}
+		if m.sections.runFocus {
+			return "the run"
 		}
 		if m.sections.focus == sectionFocusList || m.sectionPaneWidth() == 0 {
 			return "sections"
@@ -740,8 +745,6 @@ func (m *Model) stateText() string {
 		if m.run != nil && m.run.live != nil {
 			return m.run.live.stateText()
 		}
-	case screenRunAsk:
-		return "nothing has been run yet"
 	}
 	return ""
 }
@@ -783,6 +786,14 @@ func (m *Model) position() string {
 	case screenSections:
 		if m.formActive() {
 			return fmt.Sprintf("q%d", m.form.id)
+		}
+		if m.sections.runFocus {
+			// The block names the setting the arrows will change: the status row's corner is where
+			// that fact belongs, not the knob's own line.
+			if m.sections.runSel == knobDry {
+				return "dry run"
+			}
+			return "runs per query"
 		}
 		if m.sections.focus == sectionFocusSet && m.sectionPaneWidth() > 0 {
 			if len(m.sections.rows) == 0 {
@@ -861,11 +872,19 @@ func (m *Model) helpLines() []string {
 		head("the two sections"),
 		[]string{
 			"  j k        iteration or generalization, on the skill's section screen",
-			"  tab        the keys: the two sections, or the set beside them",
+			"  tab        the keys: the two sections, then the set beside them, then the run",
 			"  n e d      new, edit, delete a query in that set",
 			"  space      flip should-trigger: the row asks the router yes or no",
 			"  enter      open the workbench — at the step the disk is at, or at the set",
 			"  esc        one level back: a step to its section, a section to the skills",
+		},
+		head("the run's block, under the set"),
+		[]string{
+			"  tab        into the block from the table, then from one knob to the other",
+			"  ← →        change the knob under the cursor: runs per query, or the dry run",
+			"  space      flip the dry run — it prints the commands and writes nothing",
+			"  enter      back to the table; the block writes its file as it is changed",
+			"  —          runs per query is the set's own number, in trigger/trigger-evals.json",
 		},
 		head("iteration — the workbench"),
 		[]string{
@@ -885,10 +904,11 @@ func (m *Model) helpLines() []string {
 		},
 		head("a run"),
 		[]string{
-			"  ← →        runs per query, on the run screen",
-			"  d          dry run: print the commands, write nothing",
+			"  enter      starts it — the workbench goes straight to the live log, no screen between",
+			"  R          run the train set again against the same wording",
 			"  x          cancel the run; finished queries are kept",
 			"  v          the arm's activity log; esc back",
+			"  —          runs per query and dry run are set beside the two sections, on the set's pane",
 		},
 		dim("every write backs the old file up under .evalctl/backups/"),
 	)

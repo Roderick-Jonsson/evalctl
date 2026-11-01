@@ -201,21 +201,14 @@ one column.
 ```
  trigger optimization > slide-builder                                                   evalctl v0.8.0 · 11:06
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                                   │
-▌ SECTIONS                         │   TRAIN SET                                   0 of 5 iterations measured
-  ──────────────────────────────   │   ─────────────────────────────────────────────────────────────────────
-▶ iteration  0 of 5                │   ID    TRIGGER  QUERY                                 WHY
-                                   │   1     yes      build me slides from this outline     core ask
-  generalization  gated            │   2     no       research the operator pattern for me  near miss
-                                   │
-                                   │
-                                   │
-                                   │
-                                   │
-                                   │
-                                   │
-                                   │
-                                   │
+  SECTIONS                         │   THE RUN                                                 6 agent calls
+  ──────────────────────────────   │   runs per query ‹ 3 ›     dry run ‹ off ›
+▶ iteration  0 of 5                │   ─────────────────────────────────────────────────────────────────────
+                                   │ ▌ TRAIN SET                                 0 of 5 iterations measured
+  generalization  gated            │   ─────────────────────────────────────────────────────────────────────
+                                   │   ID    TRIGGER  QUERY                                 WHY
+                                   │ ▶ 1     yes      build me slides from this outline     core ask
+                                   │   2     no       research the operator pattern for me  near miss
                                    │
                                    │
                                    │
@@ -224,10 +217,16 @@ one column.
                                    │
                                    │
                                    │   ─────────────────────────────────────────────────────────────────────
+                                   │   q1
+                                   │     query
+                                   │     build me slides from this outline
+                                   │     why
+                                   │     core ask
+                                   │   ─────────────────────────────────────────────────────────────────────
                                    │   2 rows · 1 should trigger · 1 should not · 50% of the set (the
                                    │   guide asks ~60/40)
                                    │
-j k move · tab the set · enter open · esc skills                                                       ? keys
+j k rows · tab the run · n e d new·edit·delete · space trigger · enter the workbench · shift+tab sections   ? keys
  the wording may learn from these rows — nothing else shapes a revision                      sections · 1 / 2
 ```
 
@@ -244,6 +243,18 @@ has. That is the moment a set wants fixing — a label that is wrong, a why that
 about it would be a paragraph where a table belongs. `tab` moves the keys between the two
 halves: the half that has them is the accent, with a block in front of its name; the other is quiet, and
 the status row says which one it is in words.
+
+The pane reads in the order the work is decided. **THE RUN** leads — two knobs, the settings that
+govern every row below them, drawn whether or not they have the keys, because what a run costs is
+decided before it is started. **TRAIN SET** follows: the split as a table. Then, under the table, the
+fields of the row under the cursor. `tab` walks down that order: from the table into the run's block,
+and from one knob to the other; the knob under the cursor takes the accent and the cursor mark, and
+the table above goes quiet, so exactly one region is lit. `←`/`→` change it. Runs per query steps
+between 1 and 9 and is the set's own number, so it is written into `trigger-evals.json` and every run
+reads it from there, this session's or the CLI's. `space` flips the dry run, which prints the commands
+a run would issue and writes nothing — the one setting that is not the file's, because it is what the
+next run is asked to be; while it is on the status row says so. `enter` or `esc` hands the keys back to
+the table; every change is already written, so there is nothing to save.
 
 `enter` goes deeper from either side, and the two are not the same move: from the list it opens the
 workbench at the step the disk is at, and from the pane it opens the step that owns the set on screen.
@@ -444,24 +455,27 @@ validation set itself can be written at any time; it is the run that waits.
 
 ### A run
 
-Nothing is spent without a screen that says what it will cost:
+There is no screen between the key and the spend. `enter` on the workbench (or `R`, which is the same
+run against the same wording) starts the train run for the candidate being edited, and lands on the
+live log; a validation batch from generalization's run step and the holdout from the result list go the
+same way. What a run costs is decided before, on the section's pane — the runs per query and the dry
+run are there, beside the rows they multiply — so the one thing left to read is the run itself:
 
 ```
-  training run · candidate #4
-  scope          10 train queries of slide-builder, 3 runs each = 30 agent calls
-  budget         4m per run · profile eval-vcc-trigger
-  writes         trigger-workspace/trigger-11/
-  measures       candidate #4 — it is written into slide-builder/SKILL.md first
-  dry run        off
-  → enter  start it
+  trigger eval 11 · 10 quer(y/ies) × 3 run(s) · threshold 0.5 · profile eval-vcc-trigger
+  ────────────────────────────────────────────────────────────────────────────────────
+  q01 · slide-builder · should_trigger=true · train          ✓ ✓ ✓
+  q02 · slide-builder · should_trigger=false · train         ✓ ✗ ✓
+  ────────────────────────────────────────────────────────────────────────────────────
+  run q01 #1 → skill loaded, evidence found
 ```
 
-`←`/`→` change the runs per query and `d` makes it a dry run: the exact commands, nothing written.
 While it runs, one row per query carries a mark per attempt (`·` pending, `⟳` running, `✓` done, `✗`
 failed) with the newest eight lines of the arm's own stream underneath — the frames `activity.log`
 gets. `x` cancels and keeps what finished, `v` opens the arm's log in full, and the live screen is the
 one place `esc` does not leave: a half-read table of a run that is still spending money is worse than
-the wait.
+the wait. What the run measured — the candidate, the rate, the per-row verdicts — is in the ledger the
+workbench reads when it comes back.
 
 ### The frame
 

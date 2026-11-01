@@ -40,6 +40,29 @@ func TestTheWorkbenchIsFourQuadrants(t *testing.T) {
 	}
 }
 
+// TestTheWorkbenchSpendsWithoutAScreen: enter on the set is the run, and there is no confirmation
+// screen in front of it — the runs per query and the dry run were set beside the set, so the key has
+// nothing left to ask. What it starts is a dry run when the section armed one.
+func TestTheWorkbenchSpendsWithoutAScreen(t *testing.T) {
+	m, _ := measured(t, []runner.ScoreRow{row(1, "train", true, true)})
+	m.flow.dry = true // armed with ctrl+d on the section's pane
+	enterSection(m, secIteration)
+
+	press(m, "enter")
+	if m.mode != screenRunLive || m.run == nil || m.run.live == nil {
+		t.Fatalf("enter must land on the live log: mode = %d", m.mode)
+	}
+	if !m.run.dry {
+		t.Fatal("the run must be the dry one the section armed")
+	}
+	if m.run.runs != m.flow.lab.Runs {
+		t.Fatalf("runs = %d, want the set's %d", m.run.runs, m.flow.lab.Runs)
+	}
+	if body := stripMarks(strings.Join(m.run.liveBody(m, 20), "\n")); !strings.Contains(body, "dry run") {
+		t.Fatalf("the live screen must say nothing is being written:\n%s", body)
+	}
+}
+
 // at is where a quadrant's name sits in a finished frame: its row and the column it starts at.
 func at(t *testing.T, view, name string) (row, col int) {
 	t.Helper()
@@ -214,19 +237,22 @@ func TestEnterSavesTheWordingThenMeasuresIt(t *testing.T) {
 	enterSection(m, secIteration)
 
 	// Enter with an unchanged wording measures the candidate already in the ledger, and writes
-	// nothing: a run is not a revision.
+	// nothing: a run is not a revision. It lands on the live log — the run's settings are the set's,
+	// changed on the section pane, so no screen stands between the key and the spend.
 	press(m, "enter")
-	if m.mode != screenRunAsk {
+	if m.mode != screenRunLive || m.run == nil || m.run.live == nil {
 		t.Fatalf("enter runs the stored candidate: mode = %d", m.mode)
+	}
+	if m.run.cand != 1 || !strings.Contains(m.run.scope, "candidate #1") {
+		t.Fatalf("the run must name what it measures: cand = %d, scope = %q", m.run.cand, m.run.scope)
 	}
 	led, _, err := m.store.LoadDescriptionLedger("slide-builder")
 	if err != nil || len(led.Candidates) != 1 {
 		t.Fatalf("a run wrote a candidate: %d %v", len(led.Candidates), err)
 	}
-	press(m, "esc")
-	if m.mode != screenFlow {
-		t.Fatalf("the ask cancels back to the workbench: mode = %d", m.mode)
-	}
+	// The test leaves the live screen the way the run's own leave key would, without waiting for the
+	// stub binary to fail: what is under test is the key, not the run.
+	m.run, m.mode = nil, screenFlow
 
 	// Typed wording is saved as the next candidate, and measured in the same keypress.
 	press(m, "tab") // wording
@@ -251,14 +277,14 @@ func TestEnterSavesTheWordingThenMeasuresIt(t *testing.T) {
 	if last.Parent != 1 {
 		t.Fatalf("the revision must name what it revises: parent = %d", last.Parent)
 	}
-	if m.mode != screenRunAsk {
+	if m.mode != screenRunLive {
 		t.Fatalf("enter runs what it saved: mode = %d", m.mode)
 	}
 	if m.run == nil || m.run.cand != 2 {
 		t.Fatalf("the run must measure the candidate just written, not the one before it")
 	}
-	if body := stripMarks(strings.Join(m.run.askBody(m, 20), " ")); !strings.Contains(body, "candidate #2") {
-		t.Fatalf("the run must name the candidate it measures:\n%s", body)
+	if !strings.Contains(m.run.scope, "candidate #2") {
+		t.Fatalf("the run must name the candidate it measures: %q", m.run.scope)
 	}
 }
 

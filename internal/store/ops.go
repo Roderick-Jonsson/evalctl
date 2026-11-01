@@ -92,6 +92,20 @@ func (s *Store) UpdateTrigger(index int, q model.TriggerQuery) error {
 	return nil
 }
 
+// SetTriggerRuns records how many times each query is measured. It is the set's own knob — the run
+// that reads it reads it from the file — so it is written where the queries are, not held for one
+// run and forgotten.
+func (s *Store) SetTriggerRuns(runs int) error {
+	if runs < 1 {
+		return fmt.Errorf("runs must be at least 1")
+	}
+	if !s.TriggerOK {
+		return fmt.Errorf("missing %s", s.TriggerPath)
+	}
+	s.Trigger.Runs = &runs
+	return s.SaveTrigger()
+}
+
 func (s *Store) checkTrigger(q model.TriggerQuery, self int) error {
 	if q.ID <= 0 {
 		return fmt.Errorf("id must be a positive integer")

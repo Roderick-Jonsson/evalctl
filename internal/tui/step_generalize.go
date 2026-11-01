@@ -311,11 +311,11 @@ func (m *Model) openHoldout() tea.Cmd {
 	m.run = &runState{
 		kind:  runHoldout,
 		runs:  f.lab.Runs,
+		dry:   f.dry,
 		scope: "holdout run",
 		hint:  "the fresh queries are measured once and never folded into the loop's rates",
 	}
-	m.mode = screenRunAsk
-	return nil
+	return m.startRun()
 }
 
 // openIterationDoc is one iteration in full: what it failed on the train set, and what the revision

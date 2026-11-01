@@ -82,6 +82,10 @@ type flowState struct {
 	// sentence half-typed is not a file yet.
 	focus int
 	draft *iterDraft
+	// dry is the run's one non-file setting: it prints the commands a run would issue and writes
+	// nothing, so it belongs to the session and not to the tree. It is set beside the set, where the
+	// other run knob lives, and it applies to the next run and no further.
+	dry bool
 }
 
 func stepsOf(sec int) []string {
@@ -402,6 +406,11 @@ func boolInt(b bool) int {
 // stateText is the status row's own line: the constraint the step is working under, which is the
 // thing a person forgets between sessions.
 func (f *flowState) stateText() string {
+	// A dry run is the one setting that changes what a keystroke costs, so while it is on it is the
+	// only thing the status row has to say.
+	if f.dry && f.sec == secIteration && f.focus == focusSet {
+		return "dry run — the next run prints the commands it would issue and writes nothing"
+	}
 	if f.step == 1 {
 		if f.sec == secGeneralization {
 			return "these rows judge the wording; they are never used to write one"

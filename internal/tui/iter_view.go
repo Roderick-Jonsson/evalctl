@@ -500,7 +500,8 @@ func (m *Model) updateIter(msg tea.KeyMsg) tea.Cmd {
 			f.sel = idxs[len(idxs)-1]
 		}
 	case "R":
-		return m.openRunAsk()
+		// Run again: the same wording, another measurement. No screen between the key and the spend.
+		return m.startTrainingRun()
 	case "f":
 		if it := f.latest(); it != nil && f.pending() == nil && len(it.Cand.FailedTrain()) > 0 {
 			return m.openFailures(it)
@@ -580,14 +581,14 @@ func (f *flowState) blur() {
 }
 
 // runOrSave is the enter key on the set: write the wording you have been editing, then measure it.
+// A save that fails starts nothing — the run measures what is in the ledger, and a wording that was
+// refused is not.
 func (m *Model) runOrSave() tea.Cmd {
 	f := m.flow
 	if f.draftChanged() {
-		if cmd := m.saveDraft(true); cmd != nil || m.mode != screenFlow {
-			return cmd
-		}
+		return m.saveDraft(true)
 	}
-	return m.openRunAsk()
+	return m.startTrainingRun()
 }
 
 // saveDraft writes the wording into the ledger as the next candidate. It does not touch SKILL.md —
@@ -611,7 +612,7 @@ func (m *Model) saveDraft(thenRun bool) tea.Cmd {
 	if !f.draftChanged() {
 		m.setStatus("the wording is unchanged — nothing to save", false)
 		if thenRun {
-			return m.openRunAsk()
+			return m.startTrainingRun()
 		}
 		return nil
 	}
@@ -628,7 +629,7 @@ func (m *Model) saveDraft(thenRun bool) tea.Cmd {
 	m.ensureDraft()
 	m.setStatus(fmt.Sprintf("candidate #%d saved — enter runs the train set against it", cand.ID), false)
 	if thenRun {
-		return m.openRunAsk()
+		return m.startTrainingRun()
 	}
 	return nil
 }

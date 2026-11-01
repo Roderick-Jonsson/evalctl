@@ -12,13 +12,14 @@ import (
 	"evalctl/internal/store"
 )
 
-// The run: what it will cost, then what it is doing.
+// The run: one screen, and the keys go to it.
 //
-// Two screens, because a run is the one action in the loop that spends money and time. The first
-// states the candidate, the rows, the runs per query, the number of agent calls and where it writes
-// — and it is the only place the knobs live, so nothing about a run is changed by accident from a
-// screen that was about something else. The second is the run itself: one line per query, a mark per
-// attempt, and the arm's own stream folded in as it arrives.
+// A run is the one action in the loop that spends money and time, so it used to have a screen in
+// front of it that stated the candidate, the rows, the runs per query, the agent calls and where it
+// would write — and it was the only place the knobs lived. That screen is gone: the knobs live where
+// the set lives, in the pane beside the two sections, and the file carries them, so the workbench's
+// forward key goes straight to the run itself. What the run is doing is the screen: one line per
+// query, a mark per attempt, and the arm's own stream folded in as it arrives.
 
 type runKind int
 
@@ -105,97 +106,41 @@ func (p *liveRun) stateText() string {
 	return fmt.Sprintf("running %s · %s elapsed", pluralOf(len(p.cases), "query", "queries"), shortDuration(time.Since(p.started)))
 }
 
-// ---------------------------------------------------------------- the ask
+// ---------------------------------------------------------------- starting
 
-// openRunAsk opens the training run for the wording the loop is waiting on.
-func (m *Model) openRunAsk() tea.Cmd {
+// startTrainingRun launches the train run for the wording the loop is waiting on. There is nothing
+// between the key and the spend: how many runs each query gets is the set's own number, changed in
+// the section pane beside it, and the candidate is the one the workbench is editing. The live screen
+// is the whole of the run — what it is measuring is its title and the ledger it writes.
+func (m *Model) startTrainingRun() tea.Cmd {
 	f := m.flow
+	if f == nil || f.lab == nil {
+		return nil
+	}
+	if f.lab.TrainRows == 0 {
+		m.setStatus("the train set is empty — the section's first step defines it", true)
+		return nil
+	}
 	cand := 0
 	if pend := f.pending(); pend != nil {
 		cand = pend.ID
 	} else if it := f.latest(); it != nil {
 		cand = it.Cand.ID
 	}
+	scope := "training run"
+	if cand != 0 {
+		scope = fmt.Sprintf("training run · candidate #%d", cand)
+	}
 	m.run = &runState{
 		kind:  runTrain,
 		cand:  cand,
 		runs:  f.lab.Runs,
-		scope: "training run",
-		hint:  "nothing has been spent yet — enter starts it, d only prints the commands",
+		dry:   f.dry,
+		scope: scope,
+		hint:  "the train set is what a revision may learn from — the validation set is not read here",
 	}
-	m.mode = screenRunAsk
-	return nil
+	return m.startRun()
 }
-
-func (m *Model) askBody(h int) []string { return m.run.askBody(m, h) }
-
-func (r *runState) askBody(m *Model, h int) []string {
-	f := m.flow
-	rows := f.lab.TrainRows
-	split := store.SplitTrain
-	title := fmt.Sprintf("%s · candidate #%d", r.scope, r.cand)
-	switch r.kind {
-	case runValidation:
-		rows, split = f.lab.ValidationRows, store.SplitValidation
-	case runHoldout:
-		rows, split = f.lab.HoldoutRows, store.SplitHoldout
-	}
-	d := &docWriter{w: max(28, m.width-4)}
-	d.title(title)
-	d.lead(askLead(r.kind))
-	d.rule()
-	d.fact("scope", fmt.Sprintf("%s of %s, %d runs each = %d agent calls",
-		pluralOf(rows, split+" query", split+" queries"), m.skill, r.runs, rows*r.runs))
-	d.fact("budget", fmt.Sprintf("%s per run · profile eval-vcc-trigger", shortDuration(runner.DefaultTriggerBudget)))
-	d.fact("writes", fmt.Sprintf("trigger-workspace/trigger-%d/", runner.New(m.store).NextIteration(runner.New(m.store).TriggerWorkspace(), "trigger")))
-	if r.cand != 0 && r.kind != runHoldout {
-		d.fact("measures", fmt.Sprintf("candidate #%d — it is written into %s/SKILL.md first, because the router reads the file", r.cand, m.skill))
-	}
-	d.fact("dry run", onOff(r.dry))
-	d.blank()
-	d.para("The run is the only thing in this tool that costs money. Everything it records lands in the iteration directory; nothing is written into the skill itself except the description being measured.")
-	d.action("enter", "start it")
-	return fitRows(d.lines, h)
-}
-
-func askLead(k runKind) string {
-	switch k {
-	case runValidation:
-		return "The validation set is run once per measured wording, and it is the only thing that ranks them. It is read after the wording is frozen — never while it is being revised."
-	case runHoldout:
-		return "The fresh queries are measured once, after the winner is applied. They are not part of the loop and never steer it: their only job is to say whether the shipped wording works on something nobody tuned against."
-	}
-	return "The train set is what a revision may learn from. Validation is not run here: it judges the wording in generalization, and measuring it now would let the loop learn from it."
-}
-
-func (r *runState) askHints() []hint {
-	return []hint{
-		{"← →", "runs per query"},
-		{"d", "dry run"},
-		{"enter", "start"},
-		{"esc", "back"},
-	}
-}
-
-func (m *Model) updateRunAsk(msg tea.KeyMsg) tea.Cmd {
-	r := m.run
-	if r == nil {
-		return nil
-	}
-	switch msg.String() {
-	case "left", "h":
-		r.runs = max(1, r.runs-1)
-	case "right", "l":
-		r.runs = min(9, r.runs+1)
-	case "d":
-		r.dry = !r.dry
-	case "enter":
-		return m.startRun()
-	}
-	return nil
-}
-
-// ---------------------------------------------------------------- starting
 
 func (m *Model) startRun() tea.Cmd {
 	r := m.run
@@ -582,11 +527,12 @@ func (m *Model) startValidationStep() tea.Cmd {
 		kind:  runValidation,
 		cand:  id,
 		runs:  m.flow.lab.Runs,
+		dry:   m.flow.dry,
 		gen:   true,
 		scope: fmt.Sprintf("validation run · candidate #%d", id),
 		hint:  fmt.Sprintf("candidate %d of %d — the queue runs each measured wording in turn", g.at+1, len(g.queue)),
 	}
-	r.live = newLiveRun(r.scope, false)
+	r.live = newLiveRun(r.scope, r.dry)
 	m.run = r
 	m.mode = screenRunLive
 	opts := runner.Options{
@@ -595,17 +541,10 @@ func (m *Model) startValidationStep() tea.Cmd {
 		Split:  store.SplitValidation,
 		Runs:   r.runs,
 		Budget: runner.DefaultTriggerBudget,
+		DryRun: r.dry,
 		Log:    runner.ActivityFull,
 	}
 	return m.startTriggerRun(opts)
-}
-
-// onOff is a boolean as the run screen says it.
-func onOff(b bool) string {
-	if b {
-		return "on"
-	}
-	return "off"
 }
 
 // shortDuration says 1200s as 20m: the operator is deciding whether to wait, not reading a spec.

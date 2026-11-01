@@ -43,6 +43,12 @@ const triggerSet = `{
 func fixture(t *testing.T) (*Model, string, *store.Store) {
 	t.Helper()
 	root := t.TempDir()
+	// No run ever reaches an agent from a test: the binary the runner would exec does not exist, so a
+	// keystroke that starts one fails at once instead of spending a session's worth of tokens — and
+	// the profile it would have provisioned is provisioned under the fixture, never in ~/.hermes.
+	t.Setenv("HERMES_BIN", filepath.Join(root, "no-such-hermes"))
+	t.Setenv("HERMES_ROOT", filepath.Join(root, "hermes"))
+	t.Setenv("EVAL_MASTERCLASS_ROOT", filepath.Join(root, "masterclasses"))
 	write(t, filepath.Join(root, "trigger", "trigger-evals.json"), triggerSet)
 	write(t, filepath.Join(root, "slide-builder", "evals", "evals.json"), `{"skill_name":"slide-builder","evals":[]}`)
 	write(t, filepath.Join(root, "slide-builder", "SKILL.md"), skillMD)
@@ -102,6 +108,12 @@ func press(m *Model, key string) tea.Cmd {
 		msg = tea.KeyMsg{Type: tea.KeyCtrlG}
 	case "ctrl+s":
 		msg = tea.KeyMsg{Type: tea.KeyCtrlS}
+	case "ctrl+d":
+		msg = tea.KeyMsg{Type: tea.KeyCtrlD}
+	case "left":
+		msg = tea.KeyMsg{Type: tea.KeyLeft}
+	case "right":
+		msg = tea.KeyMsg{Type: tea.KeyRight}
 	case "tab":
 		msg = tea.KeyMsg{Type: tea.KeyTab}
 	case "down":
@@ -223,6 +235,113 @@ func TestTheSectionScreenShowsTheSetThatSectionWorks(t *testing.T) {
 	}
 	if got := pane(); !strings.Contains(got, setRegionName(false)) || !strings.Contains(got, "turn PO-RevB into a deck") {
 		t.Fatalf("the pane must follow the cursor onto the validation set:\n%s", got)
+	}
+}
+
+// TestThePaneCarriesTheRunsKnob: the run's settings are a block of their own in the pane, with a name
+// and two knobs — `tab` walks into them from the table the way tab walks into a field, the arrows
+// change the knob under the cursor, and running settings that belong to the set are written into the
+// file. A dry run is the one setting that is not the file's: it is what the next run is asked to be.
+func TestThePaneCarriesTheRunsKnob(t *testing.T) {
+	m, root, _ := fixture(t)
+	m.openSkill("slide-builder")
+	press(m, "tab") // the pane
+	pane := func() string { return stripMarks(strings.Join(m.sectionsBody(m.bodyHeight()), "\n")) }
+	for _, want := range []string{"THE RUN", "runs per query", "‹ 3 ›", "dry run", "‹ off ›"} {
+		if !strings.Contains(pane(), want) {
+			t.Fatalf("the pane must show the run's knobs, %q is missing:\n%s", want, pane())
+		}
+	}
+	// The block is drawn before it has the keys, and it says so only when it does.
+	if strings.Contains(pane(), "▌ THE RUN") {
+		t.Fatalf("the block has the accent while the table has the keys:\n%s", pane())
+	}
+	press(m, "tab") // into the block
+	if !m.sections.runFocus || m.sections.runSel != knobRuns {
+		t.Fatalf("tab must land on the first knob: focus = %v sel = %d", m.sections.runFocus, m.sections.runSel)
+	}
+	if !strings.Contains(pane(), "▌ THE RUN") {
+		t.Fatalf("the block with the keys must be the one region in the accent:\n%s", pane())
+	}
+
+	press(m, "right")
+	if m.flow.lab.Runs != 4 {
+		t.Fatalf("runs = %d, want 4", m.flow.lab.Runs)
+	}
+	blob, err := os.ReadFile(filepath.Join(root, "trigger", "trigger-evals.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(blob), `"runs": 4`) {
+		t.Fatalf("the knob is the file's and the file did not move:\n%s", blob)
+	}
+	// It stops at the runner's range instead of wrapping.
+	for i := 0; i < 10; i++ {
+		press(m, "right")
+	}
+	if m.flow.lab.Runs != 9 {
+		t.Fatalf("runs = %d, want the 9 ceiling", m.flow.lab.Runs)
+	}
+	// The second knob is a boolean, and it is not written anywhere: it belongs to this session.
+	press(m, "tab")
+	if m.sections.runSel != knobDry {
+		t.Fatalf("tab must move to the dry run knob: sel = %d", m.sections.runSel)
+	}
+	press(m, "right")
+	if !m.flow.dry {
+		t.Fatal("the dry run knob did not flip")
+	}
+	if !strings.Contains(pane(), "‹ on ›") {
+		t.Fatalf("the knob must say it is on:\n%s", pane())
+	}
+	if !strings.Contains(m.flow.stateText(), "dry run") {
+		t.Fatalf("the workbench must say the next run writes nothing: %q", m.flow.stateText())
+	}
+	blob, _ = os.ReadFile(filepath.Join(root, "trigger", "trigger-evals.json"))
+	if strings.Contains(string(blob), "dry") {
+		t.Fatalf("a dry run is not a property of the set:\n%s", blob)
+	}
+	// esc leaves the block before it leaves the screen.
+	press(m, "esc")
+	if m.sections.runFocus || m.mode != screenSections {
+		t.Fatalf("esc must hand the keys back to the table: focus = %v mode = %d", m.sections.runFocus, m.mode)
+	}
+}
+
+// TestThePaneIsOrderedRunThenSetThenRow: the run's settings govern every row of the split, so they
+// lead the pane; the set follows; and the fields of the row under the cursor are last, under the row
+// they edit. Reading order is the whole of it — a knob under the fields read as a footnote.
+func TestThePaneIsOrderedRunThenSetThenRow(t *testing.T) {
+	m, _, _ := fixture(t)
+	m.openSkill("slide-builder")
+	press(m, "tab")
+	view := stripMarks(strings.Join(m.sectionsBody(m.bodyHeight()), "\n"))
+	run := strings.Index(view, "THE RUN")
+	set := strings.Index(view, "TRAIN SET")
+	row := strings.Index(view, "build me slides from this outline")
+	fields := strings.Index(view, "should the skill load?")
+	if run < 0 || set < 0 || row < 0 || fields < 0 {
+		t.Fatalf("the pane is missing a part of the order (run %d, set %d, row %d, fields %d):\n%s",
+			run, set, row, fields, view)
+	}
+	if !(run < set && set < row && row < fields) {
+		t.Fatalf("the pane must read run, set, row, fields — got run %d, set %d, row %d, fields %d:\n%s",
+			run, set, row, fields, view)
+	}
+}
+
+// TestThePaneKeepsTheSplitOfTheSectionItIsOn: the knob is the set's, so it is on screen beside both
+// splits — the validation runs read the same number.
+func TestThePaneKeepsTheSplitOfTheSectionItIsOn(t *testing.T) {
+	m, _, _ := fixture(t)
+	m.openSkill("slide-builder")
+	press(m, "j") // generalization
+	if m.sections.cursor != secGeneralization {
+		t.Fatalf("cursor = %d", m.sections.cursor)
+	}
+	press(m, "tab")
+	if got := stripMarks(strings.Join(m.sectionsBody(m.bodyHeight()), "\n")); !strings.Contains(got, "runs per query") {
+		t.Fatalf("the validation pane must carry the same run settings:\n%s", got)
 	}
 }
 
