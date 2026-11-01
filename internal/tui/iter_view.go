@@ -52,7 +52,10 @@ func (m *Model) iterBody(h int) []string {
 	}
 	leftW := min(96, max(44, m.width*40/100))
 	rightW := m.workbenchPaneWidth()
-	topH := max(8, h/2-1)
+	// The top row takes the larger half: the failure pane has to fit a wrapped ask, the two labelled
+	// facts and three hints, while the description and the iteration list below pad with blanks when
+	// they have room to spare. A row given to the top is a row the bottom does not miss.
+	topH := max(8, h/2)
 	botH := max(6, h-topH-1)
 
 	// Two rows of two: what went wrong beside how much of the set it cost, and — under them — where
@@ -126,24 +129,34 @@ func (m *Model) quadFailure(w, h int) []string {
 	// line has to start the eye at the left edge again, or the reading runs the last line of the
 	// query into the verdict.
 	d.lines = append(d.lines, "")
-	// How it failed, in the order the run is read: what it should have done, what it did, and the
-	// two words for the gap. Squeezed, it keeps the words and loses the colours rather than the
-	// other way round: a cut verdict is unreadable, a colourless one is not.
-	label := colYes
+	// How it failed, as two labelled rows: the label names the axis, the value answers it. The old
+	// line said "should not trigger · fired 3 of 3", and the reader had to work out which half was
+	// the wish and which was the fact — "not" made it worse by turning the sentence inside out. This
+	// is the fix a table makes with a column called "is true": name what the boolean means, and the
+	// boolean stops being a puzzle. Squeezed, the pair keeps its words and loses its colours; a cut
+	// phrase is unreadable, a colourless one is not.
+	expect := "to trigger"
 	if !row.ShouldTrigger {
-		label = colNo
+		expect = "not to trigger"
 	}
-	kind := "should " + triggerWord(row.ShouldTrigger) + fmt.Sprintf(" · fired %d of %d · ", row.Triggers, row.Runs)
-	if lipgloss.Width(kind+verdictWord(*row)) > max(10, w-2) {
-		d.lines = append(d.lines, "  "+colText.Render(ellipsis(kind+verdictWord(*row), max(10, w-2))))
-	} else {
-		d.lines = append(d.lines, "  "+label.Render("should "+triggerWord(row.ShouldTrigger))+
-			dimStyle.Render(fmt.Sprintf(" · fired %d of %d", row.Triggers, row.Runs))+
-			" · "+failMark.Render(verdictWord(*row)))
-	}
-	// The advice sits one row clear of the verdict: the failure line is a reading of the run, the
-	// hints are what to do about it, and two registers that close on each other read as one list.
+	d.labelled("Expected", paneLabel, expect)
+	// The run's own numbers, and nothing else on this row: how many of the runs fired. What those
+	// numbers mean is a verdict, and a verdict is a reading rather than a measurement — it goes with
+	// the advice, not with the evidence.
+	d.labelled("Fired", paneLabel, fmt.Sprintf("%d of %d runs", row.Triggers, row.Runs))
+	// The advice sits one row clear of the verdict line's block, and it opens with the verdict itself:
+	// the two words that name the failure, then the moves that answer it. The verdict is the guide's
+	// reading of the numbers above — "too broad" is not a measurement, it is what the guide says those
+	// measurements mean — so it belongs with what to do, and on a row of its own so that the run's
+	// numbers never carry an opinion.
 	d.lines = append(d.lines, "")
+	verdict := verdictWord(*row)
+	gap := d.paneGap("Verdict", paneLabel)
+	if lipgloss.Width(gap)+lipgloss.Width(verdict) > d.w {
+		d.lines = append(d.lines, gap+colText.Render(ellipsis(verdict, max(10, d.w-lipgloss.Width(gap)))))
+	} else {
+		d.lines = append(d.lines, gap+failMark.Render(verdict))
+	}
 	for i, hint := range adaptHints(*row) {
 		d.hint(i+1, hint)
 	}
@@ -168,14 +181,14 @@ func adaptHints(row runner.ScoreRow) []string {
 	case !row.ShouldTrigger && row.Triggers > 0:
 		return []string{
 			"It overlaps another skill's work.",
-			"Say where this skill starts and ends.",
-			"Check which skill did load instead.",
+			"Name the hand-off: where it stops.",
+			"Check which skill did load.",
 		}
 	}
 	return []string{
 		"The yes/no line is not explicit.",
 		"Say what makes this a yes.",
-		"If it keeps happening, fix the row.",
+		"If it recurs, fix the row.",
 	}
 }
 
@@ -186,7 +199,10 @@ func (m *Model) quadSetRow(i, idW, trigW, resW, queryW int) string {
 	// Only the region with the keys draws the cursor, and the band goes with it: a row that is
 	// marked in a pane nobody is driving reads as a second cursor, which is the thing this screen
 	// had two of.
-	on := i == f.sel && f.focus == focusSet
+	// The cursor of a read-only table only stands where something can be learned: on a row the run
+	// failed. A passing row keeps its verdict and loses the mark — a cursor there would say "this is
+	// the failure I am looking at" about a row the pane beside it says nothing about.
+	on := i == f.sel && f.focus == focusSet && f.fails(e.ID)
 	if on {
 		mark = cursorMark.Render(glyphs.Cursor)
 	}
@@ -393,6 +409,67 @@ func (f *flowState) askOf(id int) string {
 	return ""
 }
 
+// fails reports whether the run in hand failed this row. A row with no verdict — a candidate that has
+// not been run yet — has not failed: nothing has been said about it.
+func (f *flowState) fails(id int) bool {
+	p := f.passOf(id)
+	return p != nil && !*p
+}
+
+// failIdxs are the rows the workbench can stand on. The set is drawn whole, because it is what the run
+// left and its passing rows are half of what says whether the wording works; but the cursor walks the
+// failures only, since a passing row is nothing to work on and the pane beside it would have nothing
+// to say about it.
+func (f *flowState) failIdxs() []int {
+	var out []int
+	for i, e := range f.rows {
+		if f.fails(e.ID) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// snapWorkbench puts the cursor on a failure: the first at or after where it stands, else the last.
+// With nothing failed it rests at the top and the set draws no cursor at all.
+func (f *flowState) snapWorkbench() {
+	idxs := f.failIdxs()
+	if len(idxs) == 0 {
+		f.sel = 0
+		return
+	}
+	for _, i := range idxs {
+		if i >= f.sel {
+			f.sel = i
+			return
+		}
+	}
+	f.sel = idxs[len(idxs)-1]
+}
+
+// stepFail moves the cursor to the next (dir > 0) or previous failure, skipping the rows that passed,
+// and stays put at either end.
+func (f *flowState) stepFail(dir int) {
+	if len(f.failIdxs()) == 0 {
+		return
+	}
+	if dir > 0 {
+		for i := f.sel + 1; i < len(f.rows); i++ {
+			if f.fails(f.rows[i].ID) {
+				f.sel = i
+				return
+			}
+		}
+		return
+	}
+	for i := f.sel - 1; i >= 0; i-- {
+		if f.fails(f.rows[i].ID) {
+			f.sel = i
+			return
+		}
+	}
+}
+
 // typing reports whether the iteration screen's keystrokes belong to a text field.
 func (m *Model) typing() bool {
 	return m.mode == screenFlow && m.flow != nil && m.flow.sec == secIteration && m.flow.focus != focusSet
@@ -411,13 +488,17 @@ func (m *Model) updateIter(msg tea.KeyMsg) tea.Cmd {
 	case "shift+tab":
 		return m.cycleFocus(-1)
 	case "j", "down":
-		f.sel = min(f.sel+1, max(0, len(f.rows)-1))
+		f.stepFail(1)
 	case "k", "up":
-		f.sel = max(0, f.sel-1)
+		f.stepFail(-1)
 	case "g", "home":
-		f.sel = 0
+		if idxs := f.failIdxs(); len(idxs) > 0 {
+			f.sel = idxs[0]
+		}
 	case "G", "end":
-		f.sel = max(0, len(f.rows)-1)
+		if idxs := f.failIdxs(); len(idxs) > 0 {
+			f.sel = idxs[len(idxs)-1]
+		}
 	case "R":
 		return m.openRunAsk()
 	case "f":

@@ -150,6 +150,11 @@ func (m *Model) reload() {
 	if m.mode == screenSections {
 		m.loadSectionRows()
 	}
+	// The workbench's cursor stands on a failure: its pane is about one failing row, and a cursor
+	// resting on a passing row leaves the pane describing something the cursor is not on.
+	if m.mode == screenFlow && m.flow.sec == secIteration {
+		m.flow.snapWorkbench()
+	}
 	// The fields under a set's table follow its cursor. Every write and every re-read comes through
 	// here, so they are seeded once, here, rather than on the frame that happens to draw them.
 	m.syncSetForm()
@@ -757,7 +762,19 @@ func (m *Model) position() string {
 		}
 		var parts []string
 		if f.focus == focusSet && len(f.rows) > 0 {
-			parts = append(parts, fmt.Sprintf("row %d of %d", f.sel+1, len(f.rows)))
+			// The set is walked by its failures, so this counts failures: "row 3 of 3" would promise
+			// two rows the cursor will not go to.
+			if idxs := f.failIdxs(); len(idxs) > 0 {
+				n := 1
+				for _, i := range idxs {
+					if i < f.sel {
+						n++
+					}
+				}
+				parts = append(parts, fmt.Sprintf("failure %d of %d", n, len(idxs)))
+			} else {
+				parts = append(parts, "nothing failed")
+			}
 		}
 		if f.draftChanged() {
 			parts = append(parts, "unsaved")
@@ -853,7 +870,7 @@ func (m *Model) helpLines() []string {
 		head("iteration — the workbench"),
 		[]string{
 			"  tab        the keys: the set, the description, the note — the description is what types",
-			"  j k g G    walk the train set; the failure card follows the cursor",
+			"  j k g G    walk the failures; the passing rows are drawn, not walked",
 			"  enter      the loop's next thing: save the wording you typed, then measure it",
 			"  R          run the train set again against the same wording",
 			"  f          the failures as full cards",

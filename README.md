@@ -274,14 +274,16 @@ name and the first row of its content read as one paragraph.
                                                │ 
   FAILED QUERY · q3                            │ ▌ TRAIN SET                                              2 queries 
   ──────────────────────────────────────────── │   ────────────────────────────────────────────────────────────── 
-  Query   build the deck from the retro notes  │     ID   TRIGGER RESULT  QUERY                                   
-                                               │ ▶    1   yes     pass    build me slides from this outline       
-  should trigger · fired 0 of 3 · too narrow   │      2   no      FAIL    research the operator pattern for me    
+  Query     build the deck from the retro      │     ID   TRIGGER RESULT  QUERY                                   
+            notes                              │ ▶    1   yes     pass    build me slides from this outline       
+                                               │      2   no      FAIL    research the operator pattern for me    
+  Expected  to trigger                         │ 
+  Fired     0 of 3 runs                        │ 
                                                │ 
-  Hint 1  Name the context this belongs to.    │ 
-  Hint 2  Be pushy: say it applies unnamed.    │ 
-  Hint 3  Describe the intent, not the tool.   │ 
-                                               │   2 rows · 1 should trigger · 1 should not · 50% of the set
+  Verdict   too narrow                         │ 
+  Hint 1    Name the context this belongs to.  │ 
+  Hint 2    Be pushy: say it applies unnamed.  │ 
+  Hint 3    Describe the intent, not the tool. │   2 rows · 1 should trigger · 1 should not · 50% of the set
                                                │   (the guide asks ~60/40)
                                                │ 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -300,13 +302,13 @@ name and the first row of its content read as one paragraph.
   note  the description in SKILL.md when the … │
                                                │
 enter run the train set · tab the description · R run again · f the failures · esc sections              ? keys 
- the wording may learn from these rows — nothing else shapes a revision                            train set · row 1 of 2 
+ the wording may learn from these rows — nothing else shapes a revision                            train set · failure 1 of 1 
 ```
 
 | quadrant | what it holds |
 |---|---|
-| **failed query** (top left) | the row under the cursor if it failed, otherwise the first failure, in three moves and nothing else: **the ask** in full, **how it failed** (`should trigger · fired 0 of 3 · too narrow`), and the guide's numbered hints — what to change about the wording for this kind of failure. The why, the skill that loaded instead and the full verdict sentence are one key away (`f`). The hints are deterministic, so the advice is checkable against the page it came from, and each is one clause: the pane sits beside the field you are about to rewrite |
-| **train set** (top right) | the queries the wording may learn from, as the last run left them: `RESULT` is `pass`, `FAIL`, or `—` when the candidate has not been run, and the cursor walks the rows so the failure card can follow it. It is read here and written on the screen that owns the set — the pane beside the two sections |
+| **failed query** (top left) | the row under the cursor if it failed, otherwise the first failure, in three moves and nothing else: **the ask** in full under a `Query` label; **the evidence** as two labelled rows — `Expected  not to trigger` above `Fired  3 of 3 runs`; then the **verdict** and its hints. The expectation and the run are separate facts with their own labels, because `should not trigger · fired 3 of 3` made the reader work out which half was the wish — the same fix a table makes with a column called *is true*. The verdict (`too broad`) is the guide's reading of those numbers, not a measurement, so it opens the advice rather than trailing the evidence. The why, the skill that loaded instead and the full verdict sentence are one key away (`f`), and each hint is one clause, since the pane sits beside the field you are about to rewrite |
+| **train set** (top right) | the queries the wording may learn from, as the last run left them: `RESULT` is `pass`, `FAIL`, or `—` when the candidate has not been run. It is drawn whole — a passing row is half of what says whether the wording works — but the cursor walks the failures only, because a pass is nothing to work on and the pane beside it would have nothing to say. It is read here and written on the screen that owns the set — the pane beside the two sections |
 | **the description** (bottom left) | the wording itself, in a field with a caret, because a revision is an edit and not a screen you navigate to. The counter is the format's 1024-character ceiling |
 | **iterations** (bottom right) | every run, its train rate, its length, and the note that says why it exists — the only place you can see whether five revisions moved anything |
 
@@ -471,7 +473,7 @@ exactly one of them has the keystrokes. It says so in two places and no more: th
 is drawn in the accent with a block in front of its name, every other region's name is quiet, and the
 cursor mark and the selected row exist only inside that region. A second bright thing is a second
 answer to the only question the frame has to answer. The same fact is spelled out at the right edge of
-the status row — `sections · 1 / 2`, `train set · row 3 of 6`, `editor · q3`, `note` — which is the form
+the status row — `sections · 1 / 2`, `train set · failure 2 of 3`, `editor · q3`, `note` — which is the form
 of it that survives a screenshot, a colour-blind reader, and a terminal drawing neither the accent nor
 the block. The rail's `●` is a different mark on purpose: it says which step of the flow you are in,
 which stays true whichever region has the keys, and it is never the arrow the cursor uses. The key band and the status row are the last two rows of the window,

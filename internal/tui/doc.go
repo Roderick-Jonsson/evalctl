@@ -162,13 +162,23 @@ func (d *docWriter) hint(n int, text string) {
 	d.labelled(fmt.Sprintf("Hint %d", n), hintLabel, text)
 }
 
-// labelled is one line of the workbench's panes: a label in a fixed six-cell column, the text in the
-// body colour, wrapped with a hanging indent so the labels stay a column and a wrapped line starts
-// under the first word of the thing it belongs to. The label carries the weight and the colour, the
-// text carries the meaning — which is why the text is not bold: a bold label beside bold prose is one
-// solid block, and the eye has nowhere to land.
+// paneLabelW is the workbench's label column: wide enough for "Expected", so the failure pane's two
+// facts, the query and the numbered hints all start their text on the same edge.
+const paneLabelW = 8
+
+// paneGap is that column plus the two spaces that separate it from the value. Callers that mix styles
+// on one line build it themselves; labelled() is the same line with the whole value in the body colour.
+func (d *docWriter) paneGap(label string, st lipgloss.Style) string {
+	return "  " + st.Render(padCell(label, paneLabelW, false)) + "  "
+}
+
+// labelled is one line of the workbench's panes: a label in the label column, the text in the body
+// colour, wrapped with a hanging indent so the labels stay a column and a wrapped line starts under
+// the first word of the thing it belongs to. The label carries the weight and the colour, the text
+// carries the meaning — which is why the text is not bold: a bold label beside bold prose is one solid
+// block, and the eye has nowhere to land.
 func (d *docWriter) labelled(label string, st lipgloss.Style, text string) {
-	gap := "  " + st.Render(padCell(label, 6, false)) + "  "
+	gap := d.paneGap(label, st)
 	for i, line := range wrapPlain(text, max(10, d.body()-lipgloss.Width(gap))) {
 		if i == 0 {
 			d.lines = append(d.lines, gap+colText.Render(line))

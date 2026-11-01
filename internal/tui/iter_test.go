@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"evalctl/internal/model"
 	"evalctl/internal/runner"
 )
 
@@ -261,6 +262,65 @@ func TestEnterSavesTheWordingThenMeasuresIt(t *testing.T) {
 	}
 }
 
+// TestTheWorkbenchCursorWalksTheFailures: the set is drawn whole — passing rows are half of what says
+// whether the wording works — but only the rows the run failed can be stood on, because the pane beside
+// them has something to say about a failure and nothing at all about a pass.
+func TestTheWorkbenchCursorWalksTheFailures(t *testing.T) {
+	m, root, s := fixture(t)
+	desc := s.SkillDescription("slide-builder")
+	for _, q := range []model.TriggerQuery{
+		{ID: 5, Skill: "slide-builder", ShouldTrigger: true, Split: "train",
+			Query: "turn the retro notes into a deck", Why: "missed"},
+		{ID: 6, Skill: "slide-builder", ShouldTrigger: false, Split: "train",
+			Query: "summarise the incident", Why: "noise"},
+	} {
+		if err := s.AddTrigger(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	iterationDir(t, root, desc, 1, []runner.ScoreRow{
+		row(1, "train", true, true), row(2, "train", false, true),
+		row(5, "train", true, false), row(6, "train", false, false),
+	})
+	m.openSkill("slide-builder")
+	m.width, m.height = 120, 34
+	enterSection(m, secIteration)
+
+	if got := m.flow.failIdxs(); len(got) != 2 || got[0] != 2 || got[1] != 3 {
+		t.Fatalf("failures are at rows %v, want the two added train rows (2 and 3)", got)
+	}
+	if m.flow.sel != 2 {
+		t.Fatalf("the workbench opened on row %d, want the first failure", m.flow.sel+1)
+	}
+	if got := m.position(); got != "failure 1 of 2" {
+		t.Fatalf("the status row says %q, want the count of failures the cursor can reach", got)
+	}
+	press(m, "k")
+	if m.flow.sel != 2 {
+		t.Fatalf("k stepped off the first failure onto row %d", m.flow.sel+1)
+	}
+	press(m, "j")
+	if m.flow.sel != 3 {
+		t.Fatalf("j stopped on row %d instead of the last failure", m.flow.sel+1)
+	}
+	press(m, "j")
+	if m.flow.sel != 3 {
+		t.Fatalf("j ran past the last failure onto row %d", m.flow.sel+1)
+	}
+	// The mark follows the cursor onto the failing row and nowhere else: a cursor on a pass reads as
+	// a failure the pane is not talking about.
+	view := quadView(m)
+	var marked []string
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, glyphs.Cursor) {
+			marked = append(marked, line)
+		}
+	}
+	if len(marked) != 1 || !strings.Contains(marked[0], "FAIL") {
+		t.Fatalf("the cursor is on %d rows, want one failing row:\n%s", len(marked), view)
+	}
+}
+
 func TestTheDraftSurvivesLeavingTheSection(t *testing.T) {
 	m, _ := measured(t, []runner.ScoreRow{row(1, "train", true, true)})
 	enterSection(m, secIteration)
@@ -304,8 +364,10 @@ func TestTheFailurePaneIsThreeMoves(t *testing.T) {
 	enterSection(m, secIteration)
 	view := quadView(m)
 	for _, want := range []string{
-		"Query   turn today's retro notes into a deck",
-		"should trigger · fired 0 of 3 · too narrow",
+		"Query     turn today's retro notes into a",
+		"Expected  to trigger",
+		"Fired     0 of 3 runs",
+		"Verdict   too narrow",
 		"Hint 1", "Hint 2", "Hint 3",
 		"Name the context this belongs to",
 	} {
