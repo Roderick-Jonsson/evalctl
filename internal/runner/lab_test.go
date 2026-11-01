@@ -130,10 +130,12 @@ func TestLabAppliesTheBestNotTheLast(t *testing.T) {
 	}
 	base := runtime.Store.SkillDescription("slide-builder")
 
-	// #1 measured: train clean, validation clean.
+	// #1 measured: train clean, validation clean. A validation run judges the whole validation set —
+	// a rate over one of its two rows is a stopped batch, and the lab refuses to rank it.
 	writeIteration(t, root, "slide-builder", base, 1, []ScoreRow{
 		{ID: 1, Skill: "slide-builder", Split: SplitTrain, ShouldTrigger: true, Runs: 3, ValidRuns: 3, Triggers: 3, Rate: ptr(1.0), Passed: ptr(true)},
 		{ID: 3, Skill: "slide-builder", Split: SplitValidation, ShouldTrigger: true, Runs: 3, ValidRuns: 3, Triggers: 3, Rate: ptr(1.0), Passed: ptr(true)},
+		{ID: 4, Skill: "slide-builder", Split: SplitValidation, ShouldTrigger: false, Runs: 3, ValidRuns: 3, Triggers: 0, Rate: ptr(1.0), Passed: ptr(true)},
 	})
 	// #2 is longer and its train split is spotless, but it loses one validation row: it fitted the
 	// train sample, which is exactly what the validation split exists to catch.
@@ -148,6 +150,7 @@ func TestLabAppliesTheBestNotTheLast(t *testing.T) {
 	writeIteration(t, root, "slide-builder", runtime.Store.SkillDescription("slide-builder"), 2, []ScoreRow{
 		{ID: 1, Skill: "slide-builder", Split: SplitTrain, ShouldTrigger: true, Runs: 3, ValidRuns: 3, Triggers: 3, Rate: ptr(1.0), Passed: ptr(true)},
 		{ID: 3, Skill: "slide-builder", Split: SplitValidation, ShouldTrigger: true, Runs: 3, ValidRuns: 3, Triggers: 1, Rate: ptr(0.33), Passed: ptr(false)},
+		{ID: 4, Skill: "slide-builder", Split: SplitValidation, ShouldTrigger: false, Runs: 3, ValidRuns: 3, Triggers: 0, Rate: ptr(1.0), Passed: ptr(true)},
 	})
 
 	lab, err = runtime.DescriptionLab("slide-builder")
@@ -299,3 +302,138 @@ func TestLiftedWordsCatchesThePaste(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// row builds one scored row for the fixtures above: runs always 3, judged, and the verdict asked for.
+func scoredRow(id int, split string, should, hit bool) ScoreRow {
+	rate := 0.0
+	if hit {
+		rate = 1
+	}
+	triggers := 0
+	if hit {
+		triggers = 3
+	}
+	passed := hit
+	return ScoreRow{ID: id, Skill: "slide-builder", Split: split, ShouldTrigger: should,
+		Runs: 3, ValidRuns: 3, Triggers: triggers, Rate: &rate, Passed: &passed}
+}
+
+// TestLabJSONCarriesTheMeasurements: `lab --json` is the machine-readable view of the loop, and the
+// ledger row alone is not that view. DescriptionCandidate's MarshalJSON used to be promoted onto
+// LabCandidate and win, so the output lost sha, chars, measures, applied and in_file — every field
+// the JSON exists for.
+func TestLabJSONCarriesTheMeasurements(t *testing.T) {
+	runtime, root := labFixture(t)
+	first, err := runtime.AdoptFileDescription("slide-builder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeIteration(t, root, "slide-builder", first.Text, 1, []ScoreRow{
+		scoredRow(1, SplitTrain, true, true),
+		scoredRow(3, SplitValidation, true, true),
+		scoredRow(4, SplitValidation, false, true),
+	})
+	lab, err := runtime.DescriptionLab("slide-builder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := json.Marshal(lab.Candidates[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(blob, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"id", "text", "sha", "chars", "measures", "applied", "in_file"} {
+		if _, ok := got[key]; !ok {
+			t.Fatalf("lab json is missing %q: %s", key, blob)
+		}
+	}
+	measures, _ := got["measures"].([]any)
+	if len(measures) != 1 {
+		t.Fatalf("measures = %v, want the one measured iteration", got["measures"])
+	}
+}
+
+// TestApplySurvivesTheValidationRunBeingLast: which half of the loop ran last is the operator's
+// order, not a property of the candidate. Applying a wording whose newest measurement is its
+// validation run used to fail with "measured on no train rows", and when it did not, it recorded the
+// validation iteration and printed validation 0/0.
+func TestApplySurvivesTheValidationRunBeingLast(t *testing.T) {
+	runtime, root := labFixture(t)
+	first, err := runtime.AdoptFileDescription("slide-builder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeIteration(t, root, "slide-builder", first.Text, 1, []ScoreRow{
+		scoredRow(1, SplitTrain, true, true),
+		scoredRow(2, SplitTrain, false, true),
+	})
+	writeIteration(t, root, "slide-builder", first.Text, 2, []ScoreRow{
+		scoredRow(3, SplitValidation, true, true),
+		scoredRow(4, SplitValidation, false, false),
+	})
+	lab, err := runtime.DescriptionLab("slide-builder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := lab.Candidate(first.ID).Measure(); m == nil || m.Validation.Judged == 0 {
+		t.Fatalf("fixture is not the case: the newest measure must be the validation run: %+v", m)
+	}
+	note, err := runtime.ApplyDescription("slide-builder", first.ID)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !strings.Contains(note, "train 2/2") || !strings.Contains(note, "validation 1/2") {
+		t.Fatalf("note = %q, want both halves reported from their own runs", note)
+	}
+	ledger, _, err := runtime.Store.LoadDescriptionLedger("slide-builder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ledger.Applied == nil || ledger.Applied.Iteration != 1 {
+		t.Fatalf("applied = %+v, want the train iteration 1", ledger.Applied)
+	}
+}
+
+// TestLabRanksOnlyAFullValidation: 1/1 out of a two-query validation set is a stopped batch, and the
+// lab's own best-of rule must not hand it the win it would get by having less to fail.
+func TestLabRanksOnlyAFullValidation(t *testing.T) {
+	runtime, root := labFixture(t)
+	first, err := runtime.AdoptFileDescription("slide-builder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := runtime.SaveDescriptionCandidate("slide-builder",
+		first.Text+" Decks and handouts count too.", "wider", first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// #1 was stopped after the first validation query and passed it; #2 saw both and failed one.
+	writeIteration(t, root, "slide-builder", first.Text, 1, []ScoreRow{
+		scoredRow(1, SplitTrain, true, true),
+		scoredRow(3, SplitValidation, true, true),
+	})
+	writeIteration(t, root, "slide-builder", second.Text, 2, []ScoreRow{
+		scoredRow(1, SplitTrain, true, true),
+		scoredRow(3, SplitValidation, true, true),
+		scoredRow(4, SplitValidation, false, false),
+	})
+	lab, err := runtime.DescriptionLab("slide-builder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lab.Complete(lab.Candidate(second.ID).MeasureOn(SplitValidation)) {
+		t.Fatal("fixture: #2's validation judged both rows and must count as complete")
+	}
+	if lab.Complete(lab.Candidate(first.ID).MeasureOn(SplitValidation)) {
+		t.Fatal("fixture: #1's validation judged one of two rows and must not count as complete")
+	}
+	if lab.Best == nil || lab.Best.ID != second.ID {
+		t.Fatalf("best = %+v, want #%d: a partial rate is not a ranking", lab.Best, second.ID)
+	}
+	if strings.Contains(lab.Next.Line, "best validation 1/1") {
+		t.Fatalf("next = %q, must not name a partial rate as the best", lab.Next.Line)
+	}
+}

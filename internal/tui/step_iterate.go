@@ -128,15 +128,15 @@ func shortWhen(s string) string {
 	return s
 }
 
-// needsValidation counts the measured iterations whose validation run has not happened: the work the
-// validate step has to do before it can rank anything.
+// needsValidation counts the measured iterations whose validation run has not happened — or happened
+// over part of the set: the work the validate step has to do before it can rank anything.
 func (m *Model) needsValidation() int {
 	if m.flow == nil {
 		return 0
 	}
 	n := 0
 	for _, it := range m.flow.iters {
-		if it.Valid == nil {
+		if !m.flow.complete(it.valid()) {
 			n++
 		}
 	}

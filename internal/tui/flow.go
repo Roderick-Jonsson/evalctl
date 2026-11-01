@@ -35,7 +35,7 @@ var secNames = []string{"iteration", "generalization"}
 // Iteration is one screen: the set, the wording, the last run and the revision live together, because
 // three of those four are not steps — an action, its output, and an edit.
 var iterationSteps = []string{"the loop"}
-var generalizationSteps = []string{"validation set", "validate", "results"}
+var generalizationSteps = []string{"validation set", "ranking"}
 
 // iterationsRequired is the guide's "if >= 5 iterations, ready to generalize": below five measured
 // wordings the validation rate is a coin and the comparison between iterations is noise.
@@ -67,13 +67,13 @@ type flowState struct {
 	step int // 1-based within the section
 	lab  *runner.Lab
 	// iters is the measured candidates in ledger order: the loop's own numbering, which is what the
-	// result list is keyed on.
+	// ranking is keyed on.
 	iters []iteration
 	// rows is the split the section's first step edits; empty on the other steps.
 	rows []store.Entry
 	sel  int
 	top  int
-	res  int // the selected row of the result list
+	res  int // the selected row of the ranking
 	// forced remembers ctrl+g: generalization before five iterations, on purpose, said out loud.
 	forced bool
 	gen    *genState
@@ -177,29 +177,75 @@ func (f *flowState) latest() *iteration {
 	return &f.iters[len(f.iters)-1]
 }
 
-// pending is the wording the next training run is about: the latest candidate with no TRAIN
-// measurement. It is the train run that makes a candidate an iteration, so a wording that has only
-// been through the validation set is still waiting to be measured — which is the state a skill is in
-// when its description was already validated in some earlier run.
+// pending is the wording the next training run is about: the newest candidate with no TRAIN
+// measurement that nothing has been revised into. It is the train run that makes a candidate an
+// iteration, so a wording that has only been through the validation set is still waiting to be
+// measured — which is the state a skill is in when its description was already validated in some
+// earlier run.
+//
+// Two rules, both learned from a ledger that had them wrong. It reads every candidate and not just
+// the last one, because a revision written between two train runs leaves a wording that only the
+// last-candidate check would hide. And a candidate with a child was revised past: #5 written and
+// then corrected to #6 is history, not work, so measuring it would put the typo back into SKILL.md.
 func (f *flowState) pending() *runner.LabCandidate {
-	if f.lab == nil || len(f.lab.Candidates) == 0 {
+	c, live := f.draftOf()
+	if !live {
 		return nil
 	}
-	c := f.lab.Candidates[len(f.lab.Candidates)-1]
-	if c.MeasureOn(store.SplitTrain) != nil {
-		return nil
-	}
-	return &f.lab.Candidates[len(f.lab.Candidates)-1]
+	return c
 }
 
-// allValidated reports whether every measured wording has been through the validation set.
+// draftOf is a candidate the ledger holds and no train run measured: the wording the next run is
+// about when nothing newer is waiting (live), or one a later revision stepped over (superseded).
+func (f *flowState) draftOf() (*runner.LabCandidate, bool) {
+	if f.lab == nil {
+		return nil, false
+	}
+	var out *runner.LabCandidate
+	revised := map[int]bool{}
+	for i := range f.lab.Candidates {
+		if p := f.lab.Candidates[i].Parent; p != 0 {
+			revised[p] = true
+		}
+	}
+	for i := range f.lab.Candidates {
+		c := &f.lab.Candidates[i]
+		if c.MeasureOn(store.SplitTrain) != nil {
+			continue
+		}
+		if out == nil || c.ID > out.ID {
+			out = c
+		}
+	}
+	if out == nil {
+		return nil, false
+	}
+	return out, !revised[out.ID]
+}
+
+// complete says whether a validation measurement judged the whole validation set.
+//
+// A batch that was cancelled, or a query whose launches all died, leaves a rate over the queries
+// that happened to land — 1/1 out of a three-query set reads like a clean pass and is not one. The
+// set's own row count is the denominator: below it the measurement is partial, it is drawn as
+// partial, and it never decides the ranking.
+func (f *flowState) complete(v *runner.LabTally) bool {
+	if f.lab == nil {
+		return v != nil && v.Judged > 0
+	}
+	return f.lab.CompleteTally(v)
+}
+
+// allValidated reports whether every measured wording has been through the validation set — and
+// through all of it. A rate over part of the set is not a validation: it is a batch that stopped.
 func allValidated(lab *runner.Lab) bool {
 	it := iterationsOf(lab)
 	if len(it) == 0 {
 		return false
 	}
+	f := &flowState{lab: lab}
 	for _, i := range it {
-		if i.Valid == nil {
+		if !f.complete(i.valid()) {
 			return false
 		}
 	}
@@ -230,9 +276,9 @@ func loopOpen(lab *runner.Lab) (sec, step int) {
 		return secIteration, 1
 	case lab.ValidationRows == 0:
 		return secGeneralization, 1
-	case allValidated(lab):
-		return secGeneralization, 3
 	}
+	// Everything past the set lands on the ranking: validated or not, the table is the screen that
+	// says which wordings have a validation rate, runs the ones that do not, and applies the pick.
 	return secGeneralization, 2
 }
 
@@ -245,7 +291,7 @@ func (f *flowState) resumeIn(m *Model) {
 		case f.lab == nil || f.lab.ValidationRows == 0:
 			f.step = 1
 		case len(f.iters) > 0 && allValidated(f.lab):
-			f.step = 3
+			f.step = 2
 		case !f.gateOpen():
 			// Land where the work can be done: the set is writable at any time, the run is not.
 			f.step = 1
@@ -266,9 +312,27 @@ func (f *flowState) enterStep(m *Model) {
 		f.focus = focusSet
 		m.reload()
 		m.ensureDraft()
-	case f.step == 3:
-		f.res = 0
+	case f.step == 2:
+		// The ranking opens on its own recommendation: the point of the table is that the pick is
+		// already made, and walking to it by hand would be the reader repeating the arithmetic.
+		m.reload()
+		f.res = f.recommended()
 	}
+}
+
+// recommended is the row the table opens on: the best validation rate, or the top row when nothing
+// has been validated yet — the table still has to be something you can walk from.
+func (f *flowState) recommended() int {
+	best := bestIteration(f)
+	if best == nil {
+		return 0
+	}
+	for i := range f.iters {
+		if f.iters[i].Cand.ID == best.Cand.ID {
+			return i
+		}
+	}
+	return 0
 }
 
 // ---------------------------------------------------------------- the rail
@@ -300,7 +364,7 @@ func (f *flowState) stepState(i int) subState {
 		}
 		return stateWaiting
 	}
-	// Generalization: its last two steps are behind the five-iteration gate.
+	// Generalization: its ranking is behind the five-iteration gate.
 	switch i {
 	case 1:
 		if f.lab != nil && f.lab.ValidationRows > 0 {
@@ -311,13 +375,6 @@ func (f *flowState) stepState(i int) subState {
 			return stateLocked
 		}
 		if f.lab != nil && len(f.iters) > 0 && allValidated(f.lab) {
-			return stateDone
-		}
-	case 3:
-		if !f.gateOpen() {
-			return stateLocked
-		}
-		if f.lab != nil && f.lab.Applied != nil {
 			return stateDone
 		}
 	}
@@ -384,16 +441,13 @@ func (f *flowState) stateLine() string {
 	if len(f.iters) == 0 {
 		return "nothing measured yet"
 	}
-	if f.step == 2 {
-		done := 0
-		for _, it := range f.iters {
-			if it.Valid != nil {
-				done++
-			}
+	done := 0
+	for _, it := range f.iters {
+		if f.complete(it.valid()) {
+			done++
 		}
-		return fmt.Sprintf("%d of %d validated", done, len(f.iters))
 	}
-	return plural(len(f.iters), "iteration") + " measured"
+	return fmt.Sprintf("%d of %d validated", done, len(f.iters))
 }
 
 func boolInt(b bool) int {
@@ -439,20 +493,30 @@ func (f *flowState) stateText() string {
 	if !f.gateOpen() {
 		return fmt.Sprintf("%d of %d iterations — ctrl+g validates early, unproven", len(f.iters), iterationsRequired)
 	}
-	return "validation is run once per iteration, and it is the only thing that ranks them"
+	if f.anyIncomplete() {
+		return "validation is the only thing that ranks a wording — v runs it for the ones without a full rate"
+	}
+	return "validation is the only thing that ranks a wording — every wording here was judged on the whole set"
+}
+
+// anyIncomplete reports whether some measured wording still owes a full validation rate.
+func (f *flowState) anyIncomplete() bool {
+	for _, it := range f.iters {
+		if !f.complete(it.valid()) {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *flowState) body(m *Model, h int) []string {
 	if f.sec == secIteration {
 		return m.iterBody(h)
 	}
-	switch f.step {
-	case 1:
+	if f.step == 1 {
 		return m.setBody(h)
-	case 2:
-		return m.validateBody(h)
 	}
-	return m.resultBody(h)
+	return m.rankingBody(h)
 }
 
 func (f *flowState) hints(m *Model) []hint {
@@ -474,21 +538,26 @@ func (f *flowState) hints(m *Model) []hint {
 			{"f", "the failures"}, {"esc", "sections"}}
 	}
 	if f.step == 1 {
-		return []hint{{"enter", "to validate"}, {"n", "new"}, {"e", "edit"}, {"d", "delete"},
+		return []hint{{"enter", "to the ranking"}, {"n", "new"}, {"e", "edit"}, {"d", "delete"},
 			{"space", "should trigger"}, {"esc", "sections"}}
 	}
-	if f.step == 2 {
-		switch {
-		case f.lab != nil && f.lab.ValidationRows == 0:
-			return []hint{{"1", "validation set"}, {"esc", "sections"}}
-		case !f.gateOpen():
-			return []hint{{"ctrl+g", "validate early, unproven"}, {"esc", "sections"}}
-		case m.needsValidation() == 0:
-			return []hint{{"enter", "open the results"}, {"esc", "sections"}}
-		}
-		return []hint{{"enter", "run the validation set"}, {"esc", "sections"}}
+	switch {
+	case f.lab != nil && f.lab.ValidationRows == 0:
+		return []hint{{"1", "validation set"}, {"esc", "sections"}}
+	case !f.gateOpen():
+		return []hint{{"ctrl+g", "validate early, unproven"}, {"esc", "sections"}}
+	case len(f.iters) == 0:
+		return []hint{{"esc", "sections"}}
 	}
-	return []hint{{"j k", "move"}, {"enter", "what it failed"}, {"a", "apply"}, {"h", "holdout"}, {"esc", "sections"}}
+	hs := []hint{{"j k", "move"}}
+	if m.needsValidation() > 0 {
+		hs = append(hs, hint{"v", "validate the rest"})
+	}
+	// The holdout is not advertised here: it is the move after applying, and the status says so
+	// then. The band is the one row where a key nobody can use yet would push out the way back.
+	hs = append(hs, hint{"1", "validation set"}, hint{"enter", "apply"}, hint{"f", "failures"},
+		hint{"esc", "sections"})
+	return hs
 }
 
 // ---------------------------------------------------------------- update
@@ -510,13 +579,10 @@ func (m *Model) updateFlow(msg tea.KeyMsg) tea.Cmd {
 	if f.sec == secIteration {
 		return m.updateIter(msg)
 	}
-	switch f.step {
-	case 1:
+	if f.step == 1 {
 		return m.updateSet(msg)
-	case 2:
-		return m.updateValidate(msg)
 	}
-	return m.updateResults(msg)
+	return m.updateRanking(msg)
 }
 
 // forceGeneralization is ctrl+g: the gate is a bar, not a wall, and using it says so.

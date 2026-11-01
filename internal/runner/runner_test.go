@@ -3,6 +3,8 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -555,5 +557,60 @@ func TestArmWritesTheProducedTreeIntoOutputs(t *testing.T) {
 	}
 	if !res.Checks.Containment.OK {
 		t.Fatalf("containment = %+v", res.Checks.Containment)
+	}
+}
+
+// TestACancelledBatchWritesNoMeasurement: the cancel is the operator stopping the batch, so the
+// runner must not walk the rest of the queue on a dead context. It used to launch every remaining
+// run anyway — each one returning in two milliseconds with "cancelled" — score the lot, and write a
+// meta.json that made the stopped batch look like a finished iteration with a rate.
+func TestACancelledBatchWritesNoMeasurement(t *testing.T) {
+	s, _ := newTree(t)
+	r := New(s)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := r.RunTrigger(ctx, Options{Lane: LaneTrigger, Skills: []string{"slide-builder"},
+		Split: store.SplitValidation, Runs: 1, Threshold: 0.5, MaxTurns: 8})
+	if err == nil {
+		t.Fatal("a cancelled batch reported success")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	entries, _ := os.ReadDir(r.TriggerWorkspace())
+	if len(entries) != 0 {
+		t.Fatalf("a cancelled batch wrote %d iteration dir(s): the lab would read them as measurements", len(entries))
+	}
+}
+
+// TestAnAbortedBatchSaysWhyItStopped: the directory a cancel leaves behind is a record, not junk —
+// no meta.json (so the lab skips it) and an aborted.json that answers "what is this" on sight.
+func TestAnAbortedBatchSaysWhyItStopped(t *testing.T) {
+	s, _ := newTree(t)
+	r := New(s)
+	dir := r.TriggerIterDir(21)
+	writeFile(t, filepath.Join(dir, "q01-slide-builder", "run-1", "query.txt"), "build me slides\n")
+	r.markAborted(dir, context.Canceled)
+
+	if fileExists(filepath.Join(dir, "meta.json")) {
+		t.Fatal("an aborted iteration wrote meta.json: the lab would read it as a measurement")
+	}
+	blob, err := os.ReadFile(filepath.Join(dir, "aborted.json"))
+	if err != nil {
+		t.Fatalf("no aborted.json: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(blob, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["aborted"] != true || !strings.Contains(fmt.Sprint(got["reason"]), "canceled") {
+		t.Fatalf("aborted.json = %s", blob)
+	}
+
+	// An iteration dir that was never created is not created to hold a note about itself.
+	empty := r.TriggerIterDir(22)
+	r.markAborted(empty, context.Canceled)
+	if fileExists(empty) {
+		t.Fatal("markAborted created an iteration dir")
 	}
 }

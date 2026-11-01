@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -117,6 +118,11 @@ type LabMeasure struct {
 	Rows       []ScoreRow `json:"rows"`  // this skill's rows in that iteration
 	Fixed      []int      `json:"fixed"` // failed against the parent, passes here
 	Broke      []int      `json:"broke"` // passed against the parent, fails here
+	// Full says, per split, whether every row of that split was judged — what tells a measurement
+	// from a batch that stopped. It is set where the set's size is known, which is the join.
+	TrainFull      bool `json:"train_full"`
+	ValidationFull bool `json:"validation_full"`
+	HoldoutFull    bool `json:"holdout_full"`
 }
 
 // LabCandidate is one wording, the measurements of it, and what it is to the tree right now.
@@ -129,6 +135,83 @@ type LabCandidate struct {
 	InFile   bool         `json:"in_file"`
 }
 
+// MarshalJSON keeps the ledger's own fields and adds the measurement view beside them. Without it
+// DescriptionCandidate's method is promoted onto this type and wins, so `lab --json` printed the
+// ledger row and dropped sha, chars, measures, applied and in_file — the five things the JSON output
+// exists for.
+func (c LabCandidate) MarshalJSON() ([]byte, error) {
+	base, err := json.Marshal(c.DescriptionCandidate)
+	if err != nil {
+		return nil, err
+	}
+	obj := map[string]any{}
+	if err := json.Unmarshal(base, &obj); err != nil {
+		return nil, err
+	}
+	obj["sha"] = c.SHA
+	obj["chars"] = c.Chars
+	if c.Measures == nil {
+		obj["measures"] = []LabMeasure{}
+	} else {
+		obj["measures"] = c.Measures
+	}
+	obj["applied"] = c.Applied
+	obj["in_file"] = c.InFile
+	return json.Marshal(obj)
+}
+
+// judged reports whether a measurement judged rows of one split.
+func judged(m *LabMeasure, split string) bool {
+	if m == nil {
+		return false
+	}
+	switch split {
+	case SplitTrain:
+		return m.Train.Judged > 0
+	case SplitValidation:
+		return m.Validation.Judged > 0
+	case SplitHoldout:
+		return m.Holdout.Judged > 0
+	}
+	return false
+}
+
+// CompleteTally says whether a rate was measured over the whole set it is a rate of.
+//
+// A stopped batch, or a query whose launches all died, leaves a tally over the rows that happened to
+// land; 1/1 out of three validation queries reads as a clean pass and is not one. Every screen and
+// every selection rule asks this one question, so the answer cannot differ between them.
+func (l *Lab) CompleteTally(t *LabTally) bool {
+	if t == nil {
+		return false
+	}
+	rows := 0
+	if l != nil {
+		rows = l.ValidationRows
+	}
+	return complete(*t, rows)
+}
+
+// complete is CompleteTally against a known split size, which is what the join has while it flags
+// each measurement.
+func complete(t LabTally, rows int) bool {
+	if t.Judged == 0 {
+		return false
+	}
+	if rows == 0 {
+		return true
+	}
+	return t.Judged >= rows
+}
+
+// Complete is CompleteTally for a whole measurement: its validation half judged the set.
+func (l *Lab) Complete(m *LabMeasure) bool {
+	if m == nil {
+		return false
+	}
+	return l.CompleteTally(&m.Validation)
+}
+
 // Measure is the candidate's latest measurement, or nil when it has never been run.
 func (c LabCandidate) Measure() *LabMeasure {
 	if len(c.Measures) == 0 {
@@ -137,31 +220,44 @@ func (c LabCandidate) Measure() *LabMeasure {
 	return &c.Measures[len(c.Measures)-1]
 }
 
-// MeasureOn is the candidate's latest measurement that actually judged one split.
+// MeasureOn is the candidate's measurement that judged one split — the latest complete one, or the
+// latest there is when none of them judged the whole split.
 //
 // It exists because the two halves of the loop are measured by two different runs: the iteration
 // runs the train set, and generalization runs the validation set against the same wording. Joined by
 // the description's hash they are two measurements of one candidate, and reading the newest one
 // alone would throw away whichever half was run first.
+//
+// Complete beats newer, deliberately: a re-run stopped halfway through must not hide the finished
+// measurement of the same wording that is already on disk.
 func (c LabCandidate) MeasureOn(split string) *LabMeasure {
+	var fallback *LabMeasure
 	for i := len(c.Measures) - 1; i >= 0; i-- {
 		m := &c.Measures[i]
-		switch split {
-		case SplitTrain:
-			if m.Train.Judged > 0 {
-				return m
-			}
-		case SplitValidation:
-			if m.Validation.Judged > 0 {
-				return m
-			}
-		case SplitHoldout:
-			if m.Holdout.Judged > 0 {
-				return m
-			}
+		if !judged(m, split) {
+			continue
+		}
+		if full(m, split) {
+			return m
+		}
+		if fallback == nil {
+			fallback = m
 		}
 	}
-	return nil
+	return fallback
+}
+
+// full reports whether a measurement judged every row of one split.
+func full(m *LabMeasure, split string) bool {
+	switch split {
+	case SplitTrain:
+		return m.TrainFull
+	case SplitValidation:
+		return m.ValidationFull
+	case SplitHoldout:
+		return m.HoldoutFull
+	}
+	return false
 }
 
 // FailedTrain is the train rows this candidate does not pass right now — the only rows the guide
@@ -260,13 +356,28 @@ func (r *Runner) DescriptionLab(skill string) (*Lab, error) {
 	if err != nil {
 		return nil, err
 	}
-	lab.Iterations = len(measured)
+
+	// The set's own sizes come first: they are what decides whether a measurement judged all of a
+	// split, and that has to be known before any measurement is chosen for one.
+	for _, e := range r.Store.Rows(store.LaneTrigger, store.Filter{Skill: skill}) {
+		switch r.Store.Trigger.Queries[e.Index].Split {
+		case SplitTrain:
+			lab.TrainRows++
+		case SplitValidation:
+			lab.ValidationRows++
+		case SplitHoldout:
+			lab.HoldoutRows++
+		}
+	}
 
 	// Every measurement of a wording is kept, not just the newest: the train run and the
 	// validation run are two measurements of one candidate, and joining by hash without keeping
 	// both would throw away whichever half ran first.
 	bySHA := map[string][]LabMeasure{}
 	for _, m := range measured {
+		m.measure.TrainFull = complete(m.measure.Train, lab.TrainRows)
+		m.measure.ValidationFull = complete(m.measure.Validation, lab.ValidationRows)
+		m.measure.HoldoutFull = complete(m.measure.Holdout, lab.HoldoutRows)
 		bySHA[m.sha] = append(bySHA[m.sha], m.measure)
 	}
 	for _, c := range ledger.Candidates {
@@ -286,6 +397,12 @@ func (r *Runner) DescriptionLab(skill string) (*Lab, error) {
 		if !lab.Candidates[i].Unmeasured() {
 			lab.Measured++
 		}
+		// Iterations are measured wordings, which is what the loop counts and what the gate is
+		// stated in: a candidate's train run and its validation run are two measurements of the same
+		// iteration, so counting records would report the loop as twice as long as it is.
+		if lab.Candidates[i].MeasureOn(SplitTrain) != nil {
+			lab.Iterations++
+		}
 	}
 	// Fixed/broke are the diff against the parent's own measurement: the record of what a revision
 	// actually did, which is what stops the next revision from re-breaking what this one fixed.
@@ -298,43 +415,44 @@ func (r *Runner) DescriptionLab(skill string) (*Lab, error) {
 		if parent == nil || parent.Unmeasured() || c.Unmeasured() {
 			continue
 		}
-		before := map[int]bool{}
-		for _, row := range parent.Measure().Rows {
-			if row.Passed != nil {
-				before[row.ID] = *row.Passed
-			}
-		}
-		m := &c.Measures[len(c.Measures)-1]
-		for _, row := range m.Rows {
-			if row.Passed == nil {
+		// The diff is computed split by split, because the two halves of the loop are two
+		// measurements: comparing the newest measure of each side compares a validation run with a
+		// train run the moment the halves ran in a different order, and then reports "broke q63" for
+		// a row the wording was never measured on twice. Each measure carries its own split's diff,
+		// and when one iteration holds both halves — a single run over the whole set — it carries
+		// both, which is the union the reader wants anyway.
+		for _, split := range []string{SplitTrain, SplitValidation, SplitHoldout} {
+			before, after := parent.MeasureOn(split), c.MeasureOn(split)
+			if !judged(before, split) || !judged(after, split) {
 				continue
 			}
-			was, ok := before[row.ID]
-			switch {
-			case ok && !was && *row.Passed:
-				m.Fixed = append(m.Fixed, row.ID)
-			case ok && was && !*row.Passed:
-				m.Broke = append(m.Broke, row.ID)
+			passed := map[int]bool{}
+			for _, row := range before.Rows {
+				if row.Passed != nil && row.Split == split {
+					passed[row.ID] = *row.Passed
+				}
 			}
+			for _, row := range after.Rows {
+				if row.Passed == nil || row.Split != split {
+					continue
+				}
+				was, ok := passed[row.ID]
+				switch {
+				case ok && !was && *row.Passed:
+					after.Fixed = append(after.Fixed, row.ID)
+				case ok && was && !*row.Passed:
+					after.Broke = append(after.Broke, row.ID)
+				}
+			}
+			sort.Ints(after.Fixed)
+			sort.Ints(after.Broke)
 		}
-		sort.Ints(m.Fixed)
-		sort.Ints(m.Broke)
 	}
 
 	lab.FileInLedger = false
 	for _, c := range lab.Candidates {
 		if c.InFile {
 			lab.FileInLedger = true
-		}
-	}
-	for _, e := range r.Store.Rows(store.LaneTrigger, store.Filter{Skill: skill}) {
-		switch r.Store.Trigger.Queries[e.Index].Split {
-		case SplitTrain:
-			lab.TrainRows++
-		case SplitValidation:
-			lab.ValidationRows++
-		case SplitHoldout:
-			lab.HoldoutRows++
 		}
 	}
 	lab.Checks, lab.Ready = r.labChecks(skill)
@@ -426,7 +544,9 @@ func (l *Lab) best() *LabCandidate {
 	var best *LabCandidate
 	for i := range l.Candidates {
 		c := &l.Candidates[i]
-		if c.MeasureOn(SplitValidation) == nil {
+		// Only a full validation competes: a rate over part of the set is a stopped batch, and it
+		// would win every comparison by having less to fail.
+		if !l.Complete(c.MeasureOn(SplitValidation)) {
 			continue
 		}
 		if best == nil || betterPick(c, best) {
@@ -594,11 +714,16 @@ func (l *Lab) next() LabNext {
 		}
 		bv, bt := best.MeasureOn(SplitValidation), best.MeasureOn(SplitTrain)
 		line := fmt.Sprintf("select #%d — validation not measured yet", best.ID)
-		if bv != nil {
+		switch {
+		case l.Complete(bv):
 			line = fmt.Sprintf("select #%d — best validation %d/%d", best.ID, bv.Validation.Passed, bv.Validation.Judged)
 			if bt != nil {
 				line += fmt.Sprintf(" (train %d/%d)", bt.Train.Passed, bt.Train.Judged)
 			}
+		case bv != nil:
+			// A stopped batch is not a rate: naming 1/1 here is how a partial run gets applied.
+			line = fmt.Sprintf("select #%d — its validation judged %d of %d queries; run the set again first",
+				best.ID, bv.Validation.Judged, l.ValidationRows)
 		}
 		return LabNext{Step: StepBest, Key: "best", Line: line,
 			Detail: "the best description is not necessarily the last one; validation is the number that ranks them"}
@@ -654,18 +779,23 @@ func (l *Lab) latest() *LabCandidate {
 	return last
 }
 
-// flattened is the guide's fifth-iteration rule: five revisions in and the best loop rate has not
+// flattened is the guide's fifth-iteration rule: five revisions in and the best train rate has not
 // moved means the description is not what is failing.
+//
+// It compares train rates and nothing else. The loop rate of a wording whose newest run happened to
+// be the validation half is a rate over the validation rows — comparing it with a train rate would
+// report "no gain" between two different instruments.
 func (l *Lab) flattened() bool {
 	if l.Measured < 5 {
 		return false
 	}
 	var rates []float64
 	for _, c := range l.Candidates {
-		if c.Unmeasured() {
+		m := c.MeasureOn(SplitTrain)
+		if m == nil || m.Train.Judged == 0 {
 			continue
 		}
-		rates = append(rates, c.Measure().Loop.Rate)
+		rates = append(rates, m.Train.Rate)
 	}
 	if len(rates) < 2 {
 		return false
@@ -824,7 +954,11 @@ func (r *Runner) ApplyDescription(skill string, id int) (string, error) {
 	if view == nil || view.Unmeasured() {
 		return "", fmt.Errorf("#%d has not been measured — apply is a choice between measured descriptions", id)
 	}
-	if view.Measure().Train.Judged == 0 {
+	// Each half of the loop is its own measurement, and which one ran last is an accident of the
+	// operator's order: asking the newest one for a train rate rejects a wording whose last run was
+	// the validation run, and records the wrong iteration when it does not.
+	train := view.MeasureOn(SplitTrain)
+	if train == nil || train.Train.Judged == 0 {
 		return "", fmt.Errorf("#%d was measured on no train rows — there is nothing to apply", id)
 	}
 	notes := []string{}
@@ -834,13 +968,23 @@ func (r *Runner) ApplyDescription(skill string, id int) (string, error) {
 		}
 		notes = append(notes, fmt.Sprintf("#%d written into %s/SKILL.md", id, skill))
 	}
-	ledger.Applied = &model.AppliedDescription{Candidate: id, Iteration: view.Measure().Iteration,
+	ledger.Applied = &model.AppliedDescription{Candidate: id, Iteration: train.Iteration,
 		SHA256: view.SHA, At: timestamp()}
 	if err := r.Store.SaveDescriptionLedger(ledger); err != nil {
 		return "", err
 	}
-	notes = append(notes, fmt.Sprintf("applied #%d · validation %d/%d · measured in trigger-%d",
-		id, view.Measure().Validation.Passed, view.Measure().Validation.Judged, view.Measure().Iteration))
+	note := fmt.Sprintf("applied #%d · train %d/%d · measured in trigger-%d",
+		id, train.Train.Passed, train.Train.Judged, train.Iteration)
+	switch valid := view.MeasureOn(SplitValidation); {
+	case lab.Complete(valid):
+		note += fmt.Sprintf(" · validation %d/%d", valid.Validation.Passed, valid.Validation.Judged)
+	case valid != nil:
+		note += fmt.Sprintf(" · validation %d/%d of %d judged — a stopped batch, so the rate is unproven",
+			valid.Validation.Passed, valid.Validation.Judged, lab.ValidationRows)
+	default:
+		note += " · validation not measured"
+	}
+	notes = append(notes, note)
 	return strings.Join(notes, " — "), nil
 }
 

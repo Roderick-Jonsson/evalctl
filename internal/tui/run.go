@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -64,8 +65,11 @@ type liveRun struct {
 	done    bool
 	dry     bool
 	cancel  context.CancelFunc
-	logPath string
-	logArm  string
+	// cancelled is the operator's x, as opposed to an error: a batch stops at the candidate it was
+	// on, and the queue behind it is dropped rather than walked through.
+	cancelled bool
+	logPath   string
+	logArm    string
 }
 
 type liveCase struct {
@@ -203,7 +207,13 @@ func (m *Model) startTriggerRun(opts runner.Options) tea.Cmd {
 	go func() {
 		defer close(ch)
 		if err := r.RunTrigger(ctx, opts); err != nil {
-			ch <- runner.Event{Kind: "error", Lane: opts.Lane, Err: err, Message: err.Error()}
+			msg := err.Error()
+			// A cancel is an operator's decision, not a fault: the runner stopped before it scored,
+			// so the only thing worth saying is that the rest of the batch was left alone.
+			if errors.Is(err, context.Canceled) {
+				msg = "cancelled — the remaining queries were not run and nothing was scored"
+			}
+			ch <- runner.Event{Kind: "error", Lane: opts.Lane, Err: err, Message: msg}
 		}
 	}()
 	return tea.Batch(waitForEvent(ch), tickEvery())
@@ -286,12 +296,15 @@ func (m *Model) applyEvent(e runner.Event) {
 		p.log = append(p.log, text)
 	case "error":
 		p.err = e.Err
+		if errors.Is(e.Err, context.Canceled) {
+			p.cancelled = true
+		}
 		msg := e.Message
 		if msg == "" && e.Err != nil {
 			msg = e.Err.Error()
 		}
 		p.log = append(p.log, statusBad.Render(msg))
-		m.setStatus(msg, true)
+		m.setStatus(msg, !p.cancelled)
 	}
 	if len(p.log) > 200 {
 		p.log = p.log[len(p.log)-200:]
@@ -311,6 +324,11 @@ func setArm(pc *liveCase, name, status, detail string) {
 // finishRun is where a run ends. A generalization queue chains: the next candidate's validation run
 // starts from here, because the queue is one batch and stopping between candidates would ask the
 // same question three times.
+//
+// A cancelled run is the one exception, and it is not a detail: the operator's x is meant to stop
+// the batch, so the queue is dropped here instead of advanced. Chaining anyway turned one cancel
+// into a batch that walked the rest of the queue with a live context each time — which is what a
+// validation run that never stops looks like from the outside.
 func (m *Model) finishRun() tea.Cmd {
 	if m.run == nil || m.run.live == nil {
 		return nil
@@ -320,18 +338,30 @@ func (m *Model) finishRun() tea.Cmd {
 	m.reload()
 	if m.run.gen && m.flow != nil && m.flow.gen != nil {
 		g := m.flow.gen
+		if m.run.live.cancelled {
+			m.flow.gen = nil
+			done, total := g.at+1, len(g.queue)
+			m.run.live.summary = fmt.Sprintf("batch stopped at candidate %d of %d — nothing was scored, so nothing entered the ranking", done, total)
+			m.setStatus(m.run.live.summary, true)
+			return nil
+		}
 		g.done++
 		g.at++
 		if g.at < len(g.queue) {
 			return m.startValidationStep()
 		}
-		m.run.live.summary = fmt.Sprintf("validation run finished · %s measured", plural(g.done, "iteration"))
+		m.run.live.summary = fmt.Sprintf("validation run finished · %s measured — enter for the ranking", plural(g.done, "iteration"))
 		m.flow.gen = nil
 		m.setStatus(m.run.live.summary, false)
 		return nil
 	}
+	if m.run.live.cancelled {
+		m.run.live.summary = "cancelled — the run stopped before it scored, so nothing new entered the iteration table"
+		m.setStatus(m.run.live.summary, true)
+		return nil
+	}
 	if m.run.kind == runTrain {
-		m.setStatus("training run finished — the result is rung 2", false)
+		m.setStatus("training run finished — the result is the iteration table", false)
 	} else {
 		m.setStatus("run finished", false)
 	}
@@ -344,8 +374,9 @@ func (m *Model) updateRunLive(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "x":
 		if !p.done && p.cancel != nil {
+			p.cancelled = true
 			p.cancel()
-			m.setStatus("cancelled — the queries already measured keep their results", true)
+			m.setStatus("cancelled — the batch stops here; nothing was scored", true)
 		}
 	case "v":
 		if p.logPath != "" {
@@ -363,8 +394,9 @@ func (m *Model) updateRunLive(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// leaveRun puts the flow back on the rung the run was for: a finished training run lands on its
-// result, a finished generalization lands on the comparison.
+// leaveRun puts the flow back on the screen the run was for: a finished training run lands on the
+// workbench, a finished validation batch on the ranking it just filled in — with the cursor on the
+// wording the new rates recommend.
 func (m *Model) leaveRun() tea.Cmd {
 	kind := m.run.kind
 	gen := m.run.gen
@@ -372,11 +404,13 @@ func (m *Model) leaveRun() tea.Cmd {
 	m.mode = screenFlow
 	switch {
 	case gen:
-		m.flow.sec, m.flow.step, m.flow.res = secGeneralization, 3, 0
+		m.flow.sec, m.flow.step = secGeneralization, 2
+		m.flow.enterStep(m)
 	case kind == runTrain:
 		m.flow.sec, m.flow.step = secIteration, 1
 	default:
-		m.flow.sec, m.flow.step = secGeneralization, 3
+		m.flow.sec, m.flow.step = secGeneralization, 2
+		m.flow.enterStep(m)
 	}
 	return nil
 }
@@ -482,12 +516,13 @@ type genState struct {
 	done  int
 }
 
-// unvalidatedIDs is the work the validate step has to do before it can rank anything: measured candidates with
-// no validation measurement, in iteration order.
+// unvalidatedIDs is the work the ranking step has to do before it can rank anything: measured
+// candidates with no validation rate, or with one over part of the set — a batch stopped halfway
+// still owes its remaining queries, and the ranking screen is where they are run from.
 func (m *Model) unvalidatedIDs() []int {
 	var out []int
 	for _, it := range m.flow.iters {
-		if it.Valid == nil {
+		if !m.flow.complete(it.valid()) {
 			out = append(out, it.Cand.ID)
 		}
 	}

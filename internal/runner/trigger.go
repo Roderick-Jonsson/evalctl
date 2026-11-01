@@ -64,6 +64,13 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 	if iteration == 0 {
 		iteration = r.NextIteration(r.TriggerWorkspace(), "trigger")
 	}
+
+	// A batch nobody is waiting for provisions nothing: a cancelled context is checked before the
+	// profile is written and before the first query is launched.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	iterDir := r.TriggerIterDir(iteration)
 	if fileExists(iterDir) && !o.DryRun && !o.Resume && !o.Force {
 		return fmt.Errorf("%s already exists — rerun with --resume, --force, or pick another --iteration",
@@ -103,6 +110,15 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 
 	startedAt := timestamp()
 	for _, c := range cases {
+		// A cancelled batch stops before it starts its next query. The context is the operator's
+		// cancel and the run's budget at once, so once it is done every later launch would die
+		// inside its first millisecond and still write a scored record — a batch that cancels
+		// itself through to the end and reports itself finished. Aborting here leaves the iteration
+		// without meta.json, which is how the lab reads "this run measured nothing".
+		if err := ctx.Err(); err != nil {
+			r.markAborted(iterDir, err)
+			return err
+		}
 		caseDir := filepath.Join(iterDir, caseDirName(c))
 		r.emit(Event{Kind: EventCase, Lane: LaneTrigger, Case: caseDirName(c),
 			Message: fmt.Sprintf("q%02d · %s · should_trigger=%v · %s", c.ID, c.Skill, c.ShouldTrigger, c.Split)})
@@ -116,6 +132,10 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 			}
 		}
 		for n := 1; n <= o.Runs; n++ {
+			if err := ctx.Err(); err != nil {
+				r.markAborted(iterDir, err)
+				return err
+			}
 			runDir := filepath.Join(caseDir, fmt.Sprintf("run-%d", n))
 			if o.DryRun {
 				turns := o.MaxTurns
@@ -155,6 +175,14 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 		r.emit(Event{Kind: EventDone, Lane: LaneTrigger,
 			Message: "Dry run: nothing was written. Drop --dry-run to execute."})
 		return nil
+	}
+
+	// A cancel that lands during the last run gets here too: the record is on disk for the reader,
+	// but a stopped batch is not a scored one, and scoring it would put a rate over half the set
+	// into the lab's ranking.
+	if err := ctx.Err(); err != nil {
+		r.markAborted(iterDir, err)
+		return err
 	}
 
 	// Score the whole iteration, not just this invocation's slice: a filtered or resumed run
@@ -294,4 +322,20 @@ func clip(s string, limit int) string {
 		return s
 	}
 	return string(r[:limit]) + "…"
+}
+
+// markAborted says on disk why an iteration dir stopped short, so the leftover is a record instead
+// of junk: no meta.json (nothing was scored, and the lab reads meta.json to decide that), and a
+// file that answers "what is this directory" without the operator having to guess.
+func (r *Runner) markAborted(iterDir string, err error) {
+	// fileExists is a file check, and this is a directory: stat it directly.
+	if info, statErr := os.Stat(iterDir); statErr != nil || !info.IsDir() {
+		return
+	}
+	_ = writeJSONFile(filepath.Join(iterDir, "aborted.json"), map[string]any{
+		"aborted": true,
+		"reason":  err.Error(),
+		"at":      timestamp(),
+		"note":    "the batch stopped before it scored: this iteration measured nothing and the lab skips it",
+	})
 }

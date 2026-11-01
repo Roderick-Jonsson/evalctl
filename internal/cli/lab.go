@@ -46,6 +46,7 @@ func runLab(args []string) int {
 		fmt.Println(styleDim.Render("  no candidates yet — the loop starts by adopting the description SKILL.md carries"))
 	}
 	rows := make([][]string, 0, len(lab.Candidates))
+	partial := false
 	for _, cand := range lab.Candidates {
 		state := ""
 		if cand.Applied {
@@ -54,14 +55,22 @@ func runLab(args []string) int {
 		if cand.InFile {
 			state += " file"
 		}
+		valid := rateCell(cand, store.SplitValidation, lab.ValidationRows)
+		train := rateCell(cand, store.SplitTrain, lab.TrainRows)
+		if strings.HasSuffix(valid, "~") || strings.HasSuffix(train, "~") {
+			partial = true
+		}
 		rows = append(rows, []string{
 			fmt.Sprintf("#%d", cand.ID), strings.TrimSpace(state),
-			rateCell(cand, store.SplitTrain), rateCell(cand, store.SplitValidation),
+			train, valid,
 			fmt.Sprint(cand.Chars), shortStamp(cand.Created), truncate(cand.Note, 46),
 		})
 	}
 	if len(rows) > 0 {
 		table(os.Stdout, []string{"CAND", "", "TRAIN", "VALID", "CHARS", "WHEN", "CHANGE"}, rows, nil)
+	}
+	if partial {
+		fmt.Println(styleDim.Render("  ~ = judged on part of that split's queries — the batch stopped, and a partial validation rate never ranks"))
 	}
 
 	if !lab.Ready {
@@ -80,20 +89,38 @@ func runLab(args []string) int {
 	return 0
 }
 
-// rateCell is one candidate's split rate, or an em dash when that split never ran.
-func rateCell(c runner.LabCandidate, split string) string {
-	m := c.Measure()
-	if m == nil {
+// rateCell is one candidate's split rate, or an em dash when that split never ran. It asks per
+// split because it must: a candidate's newest run is whichever half of the loop ran last, and
+// reading that one alone prints a dash in the column the other run filled.
+//
+// A rate over part of the split carries a trailing ~: 1/1 out of three validation queries is a batch
+// that stopped, and printing it as a plain rate is how a stopped batch gets picked as the best one.
+func rateCell(c runner.LabCandidate, split string, rows int) string {
+	m := c.MeasureOn(split)
+	if !judgedSplit(m, split) {
 		return "—"
 	}
 	t := m.Train
 	if split == store.SplitValidation {
 		t = m.Validation
 	}
-	if t.Judged == 0 {
-		return "—"
+	cell := fmt.Sprintf("%d/%d", t.Passed, t.Judged)
+	if rows > 0 && t.Judged < rows {
+		cell += "~"
 	}
-	return fmt.Sprintf("%d/%d", t.Passed, t.Judged)
+	return cell
+}
+
+// judgedSplit is the runner's per-split judgement, spelled here because the lab's rows carry the
+// flag rather than the split name.
+func judgedSplit(m *runner.LabMeasure, split string) bool {
+	if m == nil {
+		return false
+	}
+	if split == store.SplitValidation {
+		return m.Validation.Judged > 0
+	}
+	return m.Train.Judged > 0
 }
 
 // shortStamp keeps the ledger's date readable in a table: the year is in the file, and two

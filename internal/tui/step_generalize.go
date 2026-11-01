@@ -10,42 +10,224 @@ import (
 	"evalctl/internal/runner"
 )
 
-// Step 4: generalization.
+// Generalization: the validation set, and the ranking.
 //
-// The validation set is the instrument the whole loop protects: it is read here, once, against every
-// wording the loop produced, and it is the only thing that ranks them. The guide is blunt about why
-// — the best description is often not the last one written, and a loop that keeps revising until the
-// train set passes will have learned the train set.
+// The validation set is the instrument the whole loop protects: it is read against every wording the
+// loop produced, and it is the only thing that ranks them. The guide is blunt about why — the best
+// description is often not the last one written, and a loop that keeps revising until the train set
+// passes will have learned the train set.
 //
-// So this step has two states and they are both honest about it: before the validation runs, it
-// states what is about to be measured and what it costs; after, it is the result list, one line per
-// iteration, train beside validation and the gap between them.
+// So the ranking is one screen and one table. It used to be two — a batch screen that listed the
+// wordings still to run, and a result list you were sent to afterwards — and that was the same table
+// twice with a keypress between them: the batch screen had to draw every iteration's state to say
+// what it was about to do, and the result list had to draw the same rows again to show what it did.
+// Now the table is the whole of it. A wording with no validation rate sits in its row with a dash in
+// that column, the rows that are missing a rate are run from the same screen (`v`), the table fills
+// itself in when the batch lands, and the row the rule recommends is already under the cursor.
 
-// validateBody is the generalization section's second step: the gate, the empty set, or the batch.
-//
-// The validation set is the instrument the whole loop protects — read once, against every wording the
-// iteration produced, and the only thing that ranks them. So this screen says what is about to be
-// measured and what it costs before anything is spent, and it is where the five-iteration bar is
-// either satisfied or forced.
-func (m *Model) validateBody(h int) []string {
+const rankingName = "RANKING"
+
+// valCol is the validation column's width: "1/1 100% of 3" is the widest cell the column has to
+// hold, and a partial rate is worth two extra cells — it is the difference between a rank and a
+// rounding of one. colTrain is the same width for the same reason.
+const (
+	valCol   = 16
+	colTrain = 16
+)
+
+// rankingBody is the generalization section's second step: the gate, the empty set, the empty loop,
+// or the ranking with whatever it still owes.
+func (m *Model) rankingBody(h int) []string {
 	f := m.flow
 	if !f.gateOpen() {
 		return m.lockedBody(h)
 	}
-	if f.lab != nil && f.lab.ValidationRows == 0 {
+	if f.lab == nil || f.lab.ValidationRows == 0 {
 		return m.emptyValidationBody(h)
 	}
-	if m.needsValidation() > 0 {
-		return m.validationBody(h)
+	if len(f.iters) == 0 {
+		d := &docWriter{w: max(28, m.width-4)}
+		d.title("Nothing measured yet")
+		d.lead("The ranking is the loop's own history — it is empty until a wording has been run on the train set.")
+		d.rule()
+		d.fact("iterations", "none measured")
+		d.blank()
+		d.para("Iteration is the other half of the loop: a wording has to be written and measured before the validation set has anything to judge.")
+		d.action("esc", "back to the sections")
+		return fitRows(d.lines, h)
 	}
-	// Everything has been validated: the step's work is done, and the results are the next step.
-	d := &docWriter{w: max(28, m.width-4)}
-	d.title("Every measured wording has been validated")
-	d.lead("Nothing is left to run against the validation set. The result list ranks the wordings by it, and there is where one gets applied.")
-	d.rule()
-	d.fact("iterations", plural(len(f.iters), "measured wording"))
-	d.action("enter", "open the results")
-	return fitRows(d.lines, h)
+
+	f.res = min(max(f.res, 0), len(f.iters)-1)
+	best := bestIteration(f)
+	pending := m.needsValidation()
+	// The wordings the ledger holds and no train run ever measured are not rows here — they are not
+	// iterations yet — but they are the answer to "why does this table have fewer rows than the
+	// ledger", so the tail names them instead of leaving the count to be guessed.
+	draft, live := f.draftOf()
+
+	// The head says what the table is ranked by, and says it as a fact rather than as an intention:
+	// with no rate measured yet there is nothing here to rank.
+	right := "ranked by the validation set"
+	if best == nil {
+		right = "nothing validated yet"
+	}
+	lines := []string{
+		"",
+		regionHead(m.width, rankingName, right, true),
+		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4)))),
+		"  " + dimStyle.Render(fitTo("ITERATION", 10)) + " " + dimStyle.Render(fitTo("TRAIN", colTrain)) + "  " +
+			dimStyle.Render(fitTo("VALIDATION", valCol)) + " " + dimStyle.Render(fitTo("GAP", 6)) + " " +
+			dimStyle.Render(fitTo("CHARS", 6)) + "  " + dimStyle.Render("NOTE"),
+	}
+	headRows := len(lines)
+
+	// The tail is built first so the table can be given exactly the rows that are left: the
+	// recommendation, the run it still owes, and the rule the ranking is read under.
+	var tail []string
+	tail = append(tail, "  "+dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4)))))
+	if best != nil {
+		tail = append(tail, "  "+styleOn.Render(glyphs.Done+" recommended by validation")+"  "+
+			fmt.Sprintf("#%d · validation %s · train %s", best.Cand.ID,
+				pct(best.Valid.Validation.Passed, best.Valid.Validation.Judged),
+				pct(best.Train.Train.Passed, best.Train.Train.Judged)))
+	}
+	if pending > 0 {
+		// The missing rates are the screen's one forward move, so the line that offers it says what
+		// it costs: the validation queries, the runs, and the calls that multiplies out to.
+		cost := f.lab.ValidationRows * f.lab.Runs * pending
+		tail = append(tail, "  "+cursorMark.Render(glyphs.Arrow)+" "+titleStyle.Render("v")+"  "+
+			ellipsis(fmt.Sprintf("run the validation set for %s without a full rate · %d queries × %d runs = %d agent calls",
+				plural(pending, "iteration"), f.lab.ValidationRows, f.lab.Runs, cost),
+				max(20, m.width-8)))
+	}
+	if draft != nil {
+		word := "no train run has measured it yet; the workbench's run measures it"
+		if !live {
+			word = "a later revision stepped over it, so it stays history and never becomes an iteration"
+		}
+		tail = append(tail, "  "+dimStyle.Render(ellipsis(fmt.Sprintf(
+			"#%d is in the ledger but not this table — %s", draft.ID, word), max(30, m.width-4))))
+	}
+	for _, line := range wrapPlain("validation is the ranking; train beside it is how much of that rate the wording learned rather than earned", max(30, m.width-4)) {
+		tail = append(tail, "  "+dimStyle.Render(line))
+	}
+	if m.anyPartial() {
+		for _, line := range wrapPlain("\"of N\" marks a rate measured over part of its split — a stopped batch's validation rate never ranks", max(30, m.width-4)) {
+			tail = append(tail, "  "+dimStyle.Render(line))
+		}
+	}
+
+	room := max(1, h-len(lines)-len(tail))
+	top := max(0, f.res-room+1)
+	for i := top; i < len(f.iters) && len(lines) < headRows+room; i++ {
+		lines = append(lines, m.rankingRow(f.iters[i], i == f.res, best != nil && best.Cand.ID == f.iters[i].Cand.ID))
+	}
+	for len(lines) < headRows+room {
+		lines = append(lines, "")
+	}
+	return fitRows(append(lines, tail...), h)
+}
+
+func (m *Model) rankingRow(it iteration, focused, best bool) string {
+	mark := "  "
+	if focused {
+		mark = cursorMark.Render(glyphs.Cursor)
+	}
+	trainTxt := fmt.Sprintf("%d/%d %s", it.Train.Train.Passed, it.Train.Train.Judged,
+		pct(it.Train.Train.Passed, it.Train.Train.Judged))
+	// The train column is marked the same way: a run whose later queries died judges fewer rows than
+	// the set holds, and 1/1 100% beside 4/4 100% would read as the better wording.
+	if !it.Train.TrainFull && m.flow.lab != nil {
+		trainTxt += fmt.Sprintf(" of %d", m.flow.lab.TrainRows)
+	}
+	// A wording the validation set has not seen is drawn and not skipped: the dash is the fact this
+	// screen exists to show, and a row that vanished until it was measured would hide how much of
+	// the table is still unranked. A rate over part of the set is drawn as a rate and marked, because
+	// it is the one number on this screen that can look better than it is.
+	validTxt := "—"
+	partial := false
+	if v := it.valid(); v != nil {
+		validTxt = fmt.Sprintf("%d/%d %s", v.Passed, v.Judged, pct(v.Passed, v.Judged))
+		partial = !m.flow.complete(v)
+		if partial && m.flow.lab != nil {
+			validTxt += fmt.Sprintf(" of %d", m.flow.lab.ValidationRows)
+		}
+	}
+	// The row's key is the iteration — the measured order — and the candidate's own id is printed
+	// beside it only when the two differ, which is the case a draft in the ledger created: without
+	// it "iteration 5" and "candidate #5" would be two different wordings on one screen.
+	idTxt := fmt.Sprint(it.N)
+	if it.Cand.ID != it.N {
+		idTxt += "·#" + fmt.Sprint(it.Cand.ID)
+	}
+	prefix := mark + colID.Render(fitTo(idTxt, 10)) + " " +
+		colText.Render(fitTo(trainTxt, colTrain)) + "  " +
+		colText.Render(fitTo(validTxt, valCol)) + " " +
+		colSplit.Render(fitTo(gapOf(&it.Train.Train, it.valid()), 6)) + " " +
+		colSplit.Render(fitTo(fmt.Sprint(it.Cand.Chars), 6)) + "  "
+	// The marks go last and the note takes what is left: a note that ate the row's evidence would
+	// be the one thing on this line that could not be cut.
+	marks := ""
+	if best {
+		marks += " " + styleOn.Render(glyphs.Done)
+	}
+	if it.Cand.InFile {
+		marks += dimStyle.Render(" in file")
+	}
+	room := m.width - lipgloss.Width(prefix) - lipgloss.Width(marks) - 1
+	note := oneLine(it.Cand.Note)
+	if note == "" {
+		note = "—"
+	}
+	line := prefix + colText.Render(ellipsis(note, max(6, room))) + marks
+	if focused {
+		line = selected(line)
+	}
+	return line
+}
+
+// anyPartial reports whether some row in the table carries a rate over part of its split, so the
+// legend for that cell is only drawn when a cell uses it.
+func (m *Model) anyPartial() bool {
+	if m.flow == nil {
+		return false
+	}
+	for _, it := range m.flow.iters {
+		if !it.Train.TrainFull {
+			return true
+		}
+		if v := it.valid(); v != nil && !m.flow.complete(v) {
+			return true
+		}
+	}
+	return false
+}
+
+// bestIteration is the guide's rule, computed: the best validation rate wins, and a tie goes to the
+// earlier wording — the one that got there with less text and fewer revisions. It is the table's
+// recommendation, and the row the cursor opens on.
+//
+// A rate over part of the validation set does not compete. Comparing 1/1 against 3/3 is comparing a
+// batch that stopped against one that finished, and the stopped one always looks perfect.
+func bestIteration(f *flowState) *iteration {
+	var best *iteration
+	for i := range f.iters {
+		it := &f.iters[i]
+		if !f.complete(it.valid()) {
+			continue
+		}
+		if best == nil {
+			best = it
+			continue
+		}
+		a, b := it.Valid.Validation, best.Valid.Validation
+		ra := pctInt(a.Passed, a.Judged)
+		rb := pctInt(b.Passed, b.Judged)
+		if ra > rb || (ra == rb && it.Cand.ID < best.Cand.ID) {
+			best = it
+		}
+	}
+	return best
 }
 
 // emptyValidationBody is the state a loop reaches when the train set was built and the validation
@@ -77,7 +259,9 @@ func (m *Model) lockedBody(h int) []string {
 	d.rule()
 	d.fact("measured", fmt.Sprintf("%d of %d iterations", len(f.iters), iterationsRequired))
 	d.fact("train", fmt.Sprintf("%s", trainSummary(f)))
-	d.fact("validation", fmt.Sprintf("%s held back, never read", pluralOf(f.lab.ValidationRows, "query", "queries")))
+	if f.lab != nil {
+		d.fact("validation", fmt.Sprintf("%s held back, never read", pluralOf(f.lab.ValidationRows, "query", "queries")))
+	}
 	d.blank()
 	d.para("If the loop has stopped moving — the same failures for two revisions, or nothing to change — the answer is the query set, not the wording. ctrl+g forces generalization and says so in the report.")
 	d.action("ctrl+g", "validate anyway — the rate is unproven")
@@ -91,155 +275,9 @@ func trainSummary(f *flowState) string {
 	return "nothing measured"
 }
 
-// validationBody is the batch before it runs: which iterations, how many agent calls, and the fact
-// that each one is written into SKILL.md in turn.
-func (m *Model) validationBody(h int) []string {
-	f := m.flow
-	n := m.needsValidation()
-	d := &docWriter{w: max(28, m.width-4)}
-	d.title("Run the validation set")
-	d.lead("Every measured wording has to see the validation set once, or the result list has nothing to rank. This runs each candidate in turn: the wording is written into SKILL.md, the validation queries are run against it, and the next candidate follows.")
-	d.rule()
-	for _, it := range f.iters {
-		state := "to run"
-		if it.Valid != nil {
-			state = "done · " + pct(it.Valid.Validation.Passed, it.Valid.Validation.Judged)
-		}
-		d.fact(fmt.Sprintf("iteration %d", it.N),
-			fmt.Sprintf("#%d · train %s · validation %s", it.Cand.ID,
-				pct(it.Train.Train.Passed, it.Train.Train.Judged), state))
-	}
-	d.fact("cost", fmt.Sprintf("%d validation queries × %d runs × %s to run = %d agent calls",
-		f.lab.ValidationRows, f.lab.Runs, plural(n, "iteration"),
-		f.lab.ValidationRows*f.lab.Runs*n))
-	d.blank()
-	d.para("SKILL.md is left holding the last candidate measured. Nothing is applied until you choose one on the result list.")
-	d.action("enter", fmt.Sprintf("run the validation set for %s", plural(n, "iteration")))
-	return fitRows(d.lines, h)
-}
-
-// resultsName is the result list's name, in the register every region uses. Its head carries the
-// fact that the sentence used to: what the ranking is by.
-const resultsName = "RESULTS"
-
-// resultBody is the draft's result list: iteration, train, validation.
-func (m *Model) resultBody(h int) []string {
-	f := m.flow
-	if len(f.iters) == 0 {
-		d := &docWriter{w: max(28, m.width-4)}
-		d.title("Nothing measured yet")
-		d.lead("The result list is the loop's own history — it is empty until a wording has been run on the train set.")
-		return fitRows(d.lines, h)
-	}
-	f.res = min(f.res, len(f.iters)-1)
-	best := bestIteration(f)
-	head := "  " + dimStyle.Render(fitTo("ITERATION", 10)) + " " + dimStyle.Render(fitTo("TRAIN", 12)) + "  " +
-		dimStyle.Render(fitTo("VALIDATION", 12)) + " " + dimStyle.Render(fitTo("GAP", 6)) + " " +
-		dimStyle.Render(fitTo("CHARS", 6)) + "  " + dimStyle.Render("NOTE")
-	lines := []string{"", regionHead(m.width, resultsName, "ranked by the validation set", true),
-		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4)))), head}
-	room := max(1, h-len(lines)-3)
-	top := max(0, f.res-room+1)
-	for i := top; i < len(f.iters) && len(lines) < 4+room; i++ {
-		lines = append(lines, m.resultRow(f.iters[i], i == f.res, best != nil && best.Cand.ID == f.iters[i].Cand.ID))
-	}
-	for len(lines) < 4+room {
-		lines = append(lines, "")
-	}
-	lines = append(lines, "  "+dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4)))))
-	if best != nil {
-		lines = append(lines,
-			"  "+styleOn.Render(glyphs.Done+" best by validation")+"  "+
-				fmt.Sprintf("#%d · validation %s · train %s", best.Cand.ID,
-					pct(best.Valid.Validation.Passed, best.Valid.Validation.Judged),
-					pct(best.Train.Train.Passed, best.Train.Train.Judged)))
-	} else {
-		lines = append(lines, "")
-	}
-	for _, line := range wrapPlain("validation is the ranking; train beside it is how much of that rate the wording learned rather than earned", max(30, m.width-4)) {
-		lines = append(lines, "  "+dimStyle.Render(line))
-	}
-	return fitRows(lines, h)
-}
-
-func (m *Model) resultRow(it iteration, focused, best bool) string {
-	mark := "  "
-	if focused {
-		mark = cursorMark.Render(glyphs.Cursor)
-	}
-	trainTxt := fmt.Sprintf("%d/%d %s", it.Train.Train.Passed, it.Train.Train.Judged,
-		pct(it.Train.Train.Passed, it.Train.Train.Judged))
-	validTxt := "—"
-	if v := it.valid(); v != nil {
-		validTxt = fmt.Sprintf("%d/%d %s", v.Passed, v.Judged, pct(v.Passed, v.Judged))
-	}
-	prefix := mark + colID.Render(fitTo(fmt.Sprint(it.N), 10)) + " " +
-		colText.Render(fitTo(trainTxt, 12)) + "  " +
-		colText.Render(fitTo(validTxt, 12)) + " " +
-		colSplit.Render(fitTo(gapOf(&it.Train.Train, it.valid()), 6)) + " " +
-		colSplit.Render(fitTo(fmt.Sprint(it.Cand.Chars), 6)) + "  "
-	// The marks go last and the note takes what is left: a note that ate the row's evidence would
-	// be the one thing on this line that could not be cut.
-	marks := ""
-	if best {
-		marks += " " + styleOn.Render(glyphs.Done)
-	}
-	if it.Cand.InFile {
-		marks += dimStyle.Render(" in file")
-	}
-	room := m.width - lipgloss.Width(prefix) - lipgloss.Width(marks) - 1
-	note := oneLine(it.Cand.Note)
-	if note == "" {
-		note = "—"
-	}
-	line := prefix + colText.Render(ellipsis(note, max(6, room))) + marks
-	if focused {
-		line = selected(line)
-	}
-	return line
-}
-
-// bestIteration is the guide's rule, computed: the best validation rate wins, and a tie goes to the
-// earlier wording — the one that got there with less text and fewer revisions.
-func bestIteration(f *flowState) *iteration {
-	var best *iteration
-	for i := range f.iters {
-		it := &f.iters[i]
-		if it.Valid == nil {
-			continue
-		}
-		if best == nil {
-			best = it
-			continue
-		}
-		a, b := it.Valid.Validation, best.Valid.Validation
-		ra := pctInt(a.Passed, a.Judged)
-		rb := pctInt(b.Passed, b.Judged)
-		if ra > rb || (ra == rb && it.Cand.ID < best.Cand.ID) {
-			best = it
-		}
-	}
-	return best
-}
-
-// updateValidate is the batch step's one key: run, or move on when there is nothing left to run.
-func (m *Model) updateValidate(msg tea.KeyMsg) tea.Cmd {
-	f := m.flow
-	if !f.gateOpen() || f.lab == nil || f.lab.ValidationRows == 0 {
-		return nil
-	}
-	if msg.String() != "enter" {
-		return nil
-	}
-	if m.needsValidation() > 0 {
-		return m.startGeneralization()
-	}
-	return m.jumpStep(3)
-}
-
-// updateResults is the result list: pick a wording, read why it failed, apply it, or run the fresh
-// queries once it is in.
-func (m *Model) updateResults(msg tea.KeyMsg) tea.Cmd {
+// updateRanking is the ranking's keys: pick a row, run the rates it is missing, read why a wording
+// failed, apply the pick, or run the fresh queries once one is in.
+func (m *Model) updateRanking(msg tea.KeyMsg) tea.Cmd {
 	f := m.flow
 	switch msg.String() {
 	case "j", "down":
@@ -250,14 +288,20 @@ func (m *Model) updateResults(msg tea.KeyMsg) tea.Cmd {
 		f.res = 0
 	case "G", "end":
 		f.res = max(0, len(f.iters)-1)
-	case "enter":
-		if len(f.iters) > 0 {
-			return m.openIterationDoc(f.iters[f.res])
-		}
-	case "a":
+	case "enter", "a":
+		// The selection is the write: choose the wording, confirm, and SKILL.md carries it.
 		if len(f.iters) > 0 {
 			m.askApply(f.iters[f.res])
 		}
+	case "f":
+		if len(f.iters) > 0 {
+			return m.openIterationDoc(f.iters[f.res])
+		}
+	case "v":
+		if !f.gateOpen() || f.lab == nil || f.lab.ValidationRows == 0 {
+			return nil
+		}
+		return m.startGeneralization()
 	case "h":
 		return m.openHoldout()
 	}
@@ -270,6 +314,9 @@ func (m *Model) askApply(it iteration) {
 	validTxt := "— (not measured on the validation set)"
 	if v := it.valid(); v != nil {
 		validTxt = pct(v.Passed, v.Judged)
+		if !m.flow.complete(v) && m.flow.lab != nil {
+			validTxt += fmt.Sprintf(" over %d of %d queries — a stopped batch", v.Judged, m.flow.lab.ValidationRows)
+		}
 	}
 	m.ask = &askState{
 		scope: "apply",
@@ -329,10 +376,18 @@ func (m *Model) openIterationDoc(it iteration) tea.Cmd {
 	d.rule()
 	d.fact("train", fmt.Sprintf("%s (%d of %d)", pct(it.Train.Train.Passed, it.Train.Train.Judged),
 		it.Train.Train.Passed, it.Train.Train.Judged))
+	if !it.Train.TrainFull && m.flow.lab != nil {
+		d.fact("partial", fmt.Sprintf("the train batch stopped — %d of %d train rows were judged",
+			it.Train.Train.Judged, m.flow.lab.TrainRows))
+	}
 	if valid != nil {
 		d.fact("validation", fmt.Sprintf("%s (%d of %d)", pct(valid.Passed, valid.Judged), valid.Passed, valid.Judged))
+		if !m.flow.complete(valid) && m.flow.lab != nil {
+			d.fact("partial", fmt.Sprintf("the batch stopped — %d of %d validation queries were judged; v runs it again",
+				valid.Judged, m.flow.lab.ValidationRows))
+		}
 	} else {
-		d.fact("validation", "not measured — validate runs it")
+		d.fact("validation", "not measured — v runs it")
 	}
 	d.fact("gap", gapOf(&it.Train.Train, valid))
 	d.fact("chars", fmt.Sprint(it.Cand.Chars))

@@ -591,7 +591,12 @@ func TestTheBestIterationIsTheBestValidation(t *testing.T) {
 	}
 }
 
-func TestResultListShowsTrainValidationAndTheGap(t *testing.T) {
+// ---------------------------------------------------------------- the ranking
+
+// TestTheRankingIsOneTableWithTheRatesItHas: generalization's second step is the table itself, not a
+// screen that lists what is about to be measured and a second one that lists what was. The rate the
+// run produced is in its column and the rule's pick is stated under the table.
+func TestTheRankingIsOneTableWithTheRatesItHas(t *testing.T) {
 	m, root, s := fixture(t)
 	first := s.SkillDescription("slide-builder")
 	iterationDir(t, root, first, 1, []runner.ScoreRow{
@@ -599,12 +604,156 @@ func TestResultListShowsTrainValidationAndTheGap(t *testing.T) {
 		row(3, "validation", true, true), row(4, "validation", false, true),
 	})
 	m.openSkill("slide-builder")
-	m.flow.sec, m.flow.step = secGeneralization, 3
-	body := strings.Join(m.resultBody(24), "\n")
-	for _, want := range []string{"ITERATION", "TRAIN", "VALIDATION", "GAP", "best by validation"} {
+	m.flow.forced = true
+	m.flow.sec, m.flow.step = secGeneralization, 2
+	m.flow.enterStep(m)
+	body := stripMarks(strings.Join(m.rankingBody(24), "\n"))
+	for _, want := range []string{"ITERATION", "TRAIN", "VALIDATION", "GAP", "recommended by validation"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("result list is missing %q:\n%s", want, body)
+			t.Fatalf("the ranking is missing %q:\n%s", want, body)
 		}
+	}
+	if strings.Contains(body, "with no rate") {
+		t.Fatalf("every wording is validated, so nothing is owed:\n%s", body)
+	}
+}
+
+// TestAnUnvalidatedRowStaysInTheTableWithADash: a wording the validation set has not seen is a row
+// with a blank in that column — the fact the screen exists to show — and the rate it is missing is
+// run from the same screen, for exactly the rows that are missing one.
+func TestAnUnvalidatedRowStaysInTheTableWithADash(t *testing.T) {
+	m, root, s := fixture(t)
+	m.openSkill("slide-builder")
+	first := s.SkillDescription("slide-builder")
+	second := "Use this skill when an outline has to become slides — even when the user calls them a deck."
+	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", second, "named the deck", 1); err != nil {
+		t.Fatal(err)
+	}
+	// #1 has only a train run; #2 has both.
+	iterationDir(t, root, first, 1, []runner.ScoreRow{
+		row(1, "train", true, true), row(2, "train", false, false),
+	})
+	iterationDir(t, root, second, 2, []runner.ScoreRow{
+		row(1, "train", true, true), row(2, "train", false, true),
+		row(3, "validation", true, true), row(4, "validation", false, true),
+	})
+	m.reload()
+	// The section opens on its set, and ctrl+g is the way past the five-iteration bar.
+	enterSection(m, secGeneralization)
+	press(m, "ctrl+g")
+	if m.flow.step != 2 || m.mode != screenFlow {
+		t.Fatalf("mode = %v step = %d, want the ranking", m.mode, m.flow.step)
+	}
+	if len(m.flow.iters) != 2 {
+		t.Fatalf("iterations = %d, want both measured wordings drawn", len(m.flow.iters))
+	}
+	if m.needsValidation() != 1 {
+		t.Fatalf("needsValidation = %d, want the one without a rate", m.needsValidation())
+	}
+	body := stripMarks(strings.Join(m.rankingBody(24), "\n"))
+	// The row with no rate is drawn, with a dash where the rate would be.
+	var row1 string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.Contains(line, "1/2 50%") {
+			row1 = line
+		}
+	}
+	if row1 == "" || !strings.Contains(row1, "—") {
+		t.Fatalf("the unvalidated row is not drawn with a dash:\n%s", body)
+	}
+	if !strings.Contains(body, "run the validation set for 1 iteration without a full rate") {
+		t.Fatalf("the table must offer to run the rates it is missing:\n%s", body)
+	}
+	// The cursor opens on the recommendation, and v queues exactly the row that has no rate.
+	if m.flow.res != 1 {
+		t.Fatalf("res = %d, want the recommended row (#2) under the cursor", m.flow.res)
+	}
+	press(m, "v")
+	if m.flow.gen == nil || len(m.flow.gen.queue) != 1 || m.flow.gen.queue[0] != 1 {
+		t.Fatalf("the batch must queue only the unvalidated wording: %+v", m.flow.gen)
+	}
+	if m.mode != screenRunLive {
+		t.Fatalf("mode = %v, want the run the key started", m.mode)
+	}
+}
+
+// TestEnterOnTheRankingAppliesTheRowUnderTheCursor: the selection is the write. The table opens on
+// the recommended wording, the arrows move off it, and the row you land on is the one SKILL.md gets.
+func TestEnterOnTheRankingAppliesTheRowUnderTheCursor(t *testing.T) {
+	m, root, s := fixture(t)
+	m.openSkill("slide-builder")
+	first := s.SkillDescription("slide-builder")
+	second := "Use this skill when an outline has to become slides — even when the user calls them a deck."
+	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", second, "named the deck", 1); err != nil {
+		t.Fatal(err)
+	}
+	// #1 is the better validation rate; #2 is the later revision the loop would keep by default.
+	iterationDir(t, root, first, 1, []runner.ScoreRow{
+		row(1, "train", true, true), row(2, "train", false, true),
+		row(3, "validation", true, true), row(4, "validation", false, true),
+	})
+	iterationDir(t, root, second, 2, []runner.ScoreRow{
+		row(1, "train", true, true), row(2, "train", false, true),
+		row(3, "validation", true, false), row(4, "validation", false, false),
+	})
+	m.reload()
+	enterSection(m, secGeneralization)
+	press(m, "ctrl+g")
+	if len(m.flow.iters) != 2 {
+		t.Fatalf("iterations = %d, want both wordings", len(m.flow.iters))
+	}
+	if m.flow.res != 0 || m.flow.iters[m.flow.res].Cand.ID != 1 {
+		t.Fatalf("the table must open on the recommendation: res = %d", m.flow.res)
+	}
+	// The pick stays yours: walk to the other row and apply that one.
+	press(m, "j")
+	if m.flow.iters[m.flow.res].Cand.ID != 2 {
+		t.Fatalf("j must move the cursor off the recommendation, res = %d", m.flow.res)
+	}
+	press(m, "enter")
+	if m.mode != screenAsk {
+		t.Fatalf("mode = %v, want the confirmation before the write", m.mode)
+	}
+	press(m, "y")
+	if got := s.SkillDescription("slide-builder"); got != strings.Join(strings.Fields(second), " ") {
+		t.Fatalf("SKILL.md = %q, want the row that was picked %q", got, second)
+	}
+}
+
+// TestAFinishedBatchLandsOnTheRankingWithTheCursorOnThePick: the batch writes its rates and hands the
+// keys back to the same table, with the cursor on what the new rates recommend — no third screen and
+// no walking to the winner by hand.
+func TestAFinishedBatchLandsOnTheRankingWithTheCursorOnThePick(t *testing.T) {
+	m, root, s := fixture(t)
+	m.openSkill("slide-builder")
+	first := s.SkillDescription("slide-builder")
+	second := "Use this skill when an outline has to become slides — even when the user calls them a deck."
+	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", second, "named the deck", 1); err != nil {
+		t.Fatal(err)
+	}
+	// The batch has just written #2's validation run; #1 is the better rate and must be offered.
+	iterationDir(t, root, first, 1, []runner.ScoreRow{
+		row(1, "train", true, true), row(2, "train", false, true),
+		row(3, "validation", true, true), row(4, "validation", false, true),
+	})
+	iterationDir(t, root, second, 2, []runner.ScoreRow{
+		row(1, "train", true, true), row(2, "train", false, true),
+		row(3, "validation", true, false), row(4, "validation", false, false),
+	})
+	m.reload()
+	m.flow.forced = true
+	m.flow.sec, m.flow.step = secGeneralization, 2
+	m.mode = screenRunLive
+	m.run = &runState{kind: runValidation, gen: true, live: &liveRun{}}
+	m.leaveRun()
+	if m.mode != screenFlow || m.flow.step != 2 {
+		t.Fatalf("mode = %v step = %d, want the ranking back", m.mode, m.flow.step)
+	}
+	if m.flow.iters[m.flow.res].Cand.ID != 1 {
+		t.Fatalf("res = %d, want the recommended wording under the cursor", m.flow.res)
+	}
+	if !allValidated(m.flow.lab) {
+		t.Fatal("the table must read the rates the batch just wrote")
 	}
 }
 
@@ -616,7 +765,7 @@ func TestApplyWritesTheWinnerIntoSkillMD(t *testing.T) {
 	})
 	m.openSkill("slide-builder")
 	m.flow.forced = true
-	m.flow.sec, m.flow.step = secGeneralization, 3
+	m.flow.sec, m.flow.step = secGeneralization, 2
 	m.askApply(m.flow.iters[0])
 	if m.mode != screenAsk {
 		t.Fatalf("mode = %v, want the confirmation", m.mode)
@@ -635,7 +784,12 @@ func TestApplyWritesTheWinnerIntoSkillMD(t *testing.T) {
 // TestEveryScreenFitsTheWindow is the one property no screen may break: the view is the height of
 // the terminal, whatever it holds, and the status line is its last row.
 func TestEveryScreenFitsTheWindow(t *testing.T) {
-	m, _, _ := fixture(t)
+	m, root, s := fixture(t)
+	// A measured wording, so the ranking is drawn with a row in it and the line that offers the
+	// rates it is missing — the two places this screen can overrun its width.
+	iterationDir(t, root, s.SkillDescription("slide-builder"), 1, []runner.ScoreRow{
+		row(1, "train", true, true), row(2, "train", false, false),
+	})
 	screens := []struct {
 		name string
 		open func()
@@ -649,10 +803,13 @@ func TestEveryScreenFitsTheWindow(t *testing.T) {
 			m.mode = screenFlow
 			m.reload()
 		}},
-		{"iteration ladder", func() { m.flow.sec, m.flow.step = secIteration, 2; m.mode = screenFlow }},
 		{"validation set", func() { m.flow.sec, m.flow.step = secGeneralization, 1; m.reload() }},
-		{"validate locked", func() { m.flow.sec, m.flow.step = secGeneralization, 2; m.flow.forced = false }},
-		{"results", func() { m.flow.forced = true; m.flow.sec, m.flow.step = secGeneralization, 3 }},
+		{"ranking locked", func() { m.flow.sec, m.flow.step = secGeneralization, 2; m.flow.forced = false }},
+		{"ranking", func() {
+			m.flow.forced = true
+			m.flow.sec, m.flow.step = secGeneralization, 2
+			m.flow.enterStep(m)
+		}},
 		{"help", func() { m.mode = screenHelp }},
 		{"document", func() { m.mode = screenDoc; m.doc = &docState{title: "t", lines: []string{"a", "b"}} }},
 	}
@@ -982,5 +1139,140 @@ func TestATreeCaughtMidWriteKeepsTheReadingAndRetries(t *testing.T) {
 	}
 	if len(m.skills.rows) != 1 || m.skills.rows[0].train != 2 {
 		t.Fatalf("rows = %+v, want the rewritten set read back", m.skills.rows)
+	}
+}
+
+// ---------------------------------------------------------------- the loop's two failures
+
+// TestARevisionWrittenBetweenRunsIsStillMeasurable: a wording saved and then revised again before any
+// run leaves a candidate no train run ever measured. Nothing should measure it — a later revision
+// stepped over it, and measuring it would put the superseded wording back into SKILL.md — so it is
+// neither an iteration nor the run's target, and the ranking says that in words instead of leaving
+// the row count to be guessed. A draft nothing has revised yet is the run's target, and it is the
+// case the last-candidate check used to get wrong.
+func TestARevisionWrittenBetweenRunsIsStillMeasurable(t *testing.T) {
+	m, root, s := fixture(t)
+	m.openSkill("slide-builder")
+	first := s.SkillDescription("slide-builder")
+	stranded := "Use this skill when an outline has to become slides, when the user says slides."
+	third := "Use this skill when an outline has to become slides, even if the user says deck."
+	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", stranded, "named slides", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", third, "named deck", 2); err != nil {
+		t.Fatal(err)
+	}
+	// #1 and #3 are measured on train; #2 was written between the two runs and never was.
+	iterationDir(t, root, first, 1, []runner.ScoreRow{row(1, "train", true, true), row(2, "train", false, true)})
+	iterationDir(t, root, third, 2, []runner.ScoreRow{row(1, "train", true, true), row(2, "train", false, true)})
+	m.reload()
+
+	if len(m.flow.iters) != 2 {
+		t.Fatalf("iterations = %d, want the two measured wordings", len(m.flow.iters))
+	}
+	if pend := m.flow.pending(); pend != nil {
+		t.Fatalf("pending = %+v, want none: #2 was revised into #3, so it is history and not the run's target", pend)
+	}
+	draft, live := m.flow.draftOf()
+	if draft == nil || draft.ID != 2 || live {
+		t.Fatalf("draft = %+v live=%v, want the superseded #2 named as such", draft, live)
+	}
+	m.flow.forced = true
+	m.flow.sec, m.flow.step = secGeneralization, 2
+	m.flow.enterStep(m)
+	body := stripMarks(strings.Join(m.rankingBody(24), "\n"))
+	if !strings.Contains(body, "#2 is in the ledger but not this table") ||
+		!strings.Contains(body, "a later revision stepped over it") {
+		t.Fatalf("the ranking must say why the ledger has a row the table does not:\n%s", body)
+	}
+
+	// A draft nothing has revised is the wording the next train run measures, and the row key says
+	// which candidate it is when "iteration 3" and "candidate #3" are not the same wording.
+	fourth := "Use this skill when an outline has to become slides, however the user names the output."
+	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", fourth, "any output name", 3); err != nil {
+		t.Fatal(err)
+	}
+	m.reload()
+	pend := m.flow.pending()
+	if pend == nil || pend.ID != 4 {
+		t.Fatalf("pending = %+v, want the live draft #4", pend)
+	}
+	m.flow.sec, m.flow.step = secGeneralization, 2
+	m.flow.enterStep(m)
+	body = stripMarks(strings.Join(m.rankingBody(24), "\n"))
+	if !strings.Contains(body, "#4 is in the ledger but not this table") ||
+		!strings.Contains(body, "the workbench's run measures it") {
+		t.Fatalf("a live draft must be named as the run's next target:\n%s", body)
+	}
+	if !strings.Contains(body, "2·#3") {
+		t.Fatalf("the row must carry the candidate id when it differs from the iteration number:\n%s", body)
+	}
+}
+
+// TestAPartialValidationNeverRanks: a batch stopped halfway leaves a rate over the queries that
+// landed. It is drawn as a rate over that many of the set, offered for a re-run, and it does not
+// compete with a wording that was measured on all of it.
+func TestAPartialValidationNeverRanks(t *testing.T) {
+	m, root, s := fixture(t)
+	m.openSkill("slide-builder")
+	first := s.SkillDescription("slide-builder")
+	second := "Use this skill when an outline has to become slides — even when the user calls them a deck."
+	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", second, "named the deck", 1); err != nil {
+		t.Fatal(err)
+	}
+	// The set has two validation rows. #1 was stopped after the first; #2 saw both.
+	iterationDir(t, root, first, 1, []runner.ScoreRow{
+		row(1, "train", true, false), row(2, "train", false, true),
+		row(3, "validation", true, true),
+	})
+	iterationDir(t, root, second, 2, []runner.ScoreRow{
+		row(1, "train", true, false), row(2, "train", false, true),
+		row(3, "validation", true, false), row(4, "validation", false, true),
+	})
+	m.reload()
+
+	if m.needsValidation() != 1 {
+		t.Fatalf("needsValidation = %d, want the one stopped after part of the set", m.needsValidation())
+	}
+	if best := bestIteration(m.flow); best == nil || best.Cand.ID != 2 {
+		t.Fatalf("best = %+v, want #2: a 1/1 over one of two queries is not a validation rate", best)
+	}
+	m.flow.forced = true
+	m.flow.sec, m.flow.step = secGeneralization, 2
+	m.flow.enterStep(m)
+	body := stripMarks(strings.Join(m.rankingBody(28), "\n"))
+	if !strings.Contains(body, "1/1 100% of 2") {
+		t.Fatalf("the partial rate must say how much of the set it measured:\n%s", body)
+	}
+	if !strings.Contains(body, "a stopped batch's validation rate never ranks") {
+		t.Fatalf("the table must say what the partial cell means:\n%s", body)
+	}
+	if m.flow.gen != nil {
+		t.Fatalf("a partial rate queued a batch on its own: %+v", m.flow.gen)
+	}
+}
+
+// TestCancelStopsTheValidationQueue: x is the operator stopping the batch. The queue behind the
+// cancelled run is dropped, not advanced — advancing it started the next candidate's validation run
+// the same second and made one cancel look like a batch that never stops.
+func TestCancelStopsTheValidationQueue(t *testing.T) {
+	m, _, _ := fixture(t)
+	m.openSkill("slide-builder")
+	m.flow.gen = &genState{queue: []int{1, 2, 3}, at: 1}
+	m.run = &runState{kind: runValidation, cand: 2, gen: true, live: newLiveRun("validation run · candidate #2", false)}
+	m.run.live.cancelled = true
+	m.mode = screenRunLive
+
+	if cmd := m.finishRun(); cmd != nil {
+		t.Fatal("a cancelled batch started another run")
+	}
+	if m.flow.gen != nil {
+		t.Fatalf("the queue survived the cancel: %+v", m.flow.gen)
+	}
+	if m.run == nil || m.run.cand != 2 {
+		t.Fatal("a new run was started from the cancelled queue")
+	}
+	if !strings.Contains(m.run.live.summary, "stopped at candidate 2 of 3") {
+		t.Fatalf("summary = %q, want the batch's stopping point", m.run.live.summary)
 	}
 }

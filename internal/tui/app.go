@@ -514,6 +514,12 @@ func (m *Model) contextLine(w int) string {
 	// steps say where you are, the numbers say how far in. They are two registers of one row, and
 	// neither belongs on the path above.
 	if m.mode == screenFlow && m.flow != nil {
+		// The ranking is one table: its head says what ranks it and the line under it says what it
+		// still owes, so a rail above would be the flow restated at the top of a screen that is all
+		// table. It takes the row the way the workbench does.
+		if m.flow.sec == secGeneralization && m.flow.step == 2 {
+			return ""
+		}
 		rail := m.flow.rail(m, w)
 		// A one-screen section has no chips to draw, so its rail row is already the numbers — or
 		// empty, where the workbench itself is drawing them.
@@ -895,10 +901,12 @@ func (m *Model) helpLines() []string {
 			"  f          the failures as full cards",
 			"  —          the set is written beside the two sections; the workbench only reads it",
 		},
-		head("generalization — the validation set"),
+		head("generalization — validate, rank, apply"),
 		[]string{
-			"  enter      run the validation set for every measured wording",
-			"  a          apply the wording under the cursor to SKILL.md",
+			"  v          run the validation set for every wording that has no rate yet",
+			"  j k g G    walk the table; it opens on the wording the rates recommend",
+			"  enter / a  apply the wording under the cursor to SKILL.md",
+			"  f          one iteration in full: what it failed and what changed",
 			"  h          run the fresh queries (holdout) once, after applying",
 			"  ctrl+g     validate before five iterations, with the warning",
 		},

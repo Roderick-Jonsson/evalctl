@@ -94,7 +94,9 @@ the one you are looking at, and the numbers moved to the right end of the rail's
 already are. The iteration screen leaves that row empty, because the workbench states its own totals —
 the iterations table counts the loop and rates the last run — and a second counter above the table read
 as a rival to it. Below the width where the table is stacked away, the row comes back: there it is the
-only place the loop's count is.
+only place the loop's count is. Generalization's ranking takes the row out too — its head and its
+line about what it still owes are the whole flow of that screen — so it opens one row higher, the
+body where the rail was.
 
 ```
  what to optimize                                                                             evalctl v0.8.0 · 11:06
@@ -353,112 +355,86 @@ nobody has measured should not be in it. The note beside the description is the 
 Below 90 columns the four quadrants cannot be read, so the workbench stacks: the set with its
 verdicts, then the description. The failures keep their full cards behind `f`.
 
-### Generalization — the validation set
+### Generalization — validate, rank, apply
 
 ```
- ✓ 1 validation set ─── ● 2 validate ─── 3 results
+ ✓ 1 validation set ─── ● 2 ranking
 ```
 
 **Step 1 — the validation set.** The same table with the other job: these rows judge the wording and
 are never used to write one. `e` and `n` open the same editor under the table, and its `split` field is
 the way a row that turned out not to be held-back becomes a train row instead.
 
-**Step 2 — validate.** One run per measured wording, in the order the loop wrote them:
+**Step 2 — the ranking.** One table is the whole of the section, and it has no rail above it: the head
+says what ranks the rows and the line under them says what the table still owes, so a rail would be the
+flow restated at the top of a screen that is all table — the same row the workbench takes. `1` goes back
+to the validation set. The table holds every iteration the loop measured, the train rate it was written
+against, and the validation rate it earned — or a dash, where the validation set has not been run
+against that wording yet. It used to be two screens, a batch that listed what was about to be run and a
+result list that listed what had been, and the same rows were drawn on both with a keypress between
+them.
 
 ```
- trigger optimization > slide-builder > generalization > validate                             evalctl v0.8.0 · 11:06
+ trigger optimization > slide-builder > generalization > ranking                              evalctl v0.8.0 · 11:06
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- ✓ 1 validation set ─── ● 2 validate ─── 3 results                                                 2 of 2 validated 
 
-  Every measured wording has been validated
-  Nothing is left to run against the validation set. The result list ranks the wordings by it, and there is
-  where one gets applied.
-  ────────────────────────────────────────────────────────────────
-  iterations     2 measured wordings
-
-  → enter  open the results
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-enter open the results · esc sections                                                                        ? keys 
- validation is run once per iteration, and it is the only thing that ranks them                         step 2 of 3 
-```
-
-Each candidate is written into `SKILL.md` in turn (that is what the router reads), the validation
-queries are run against it, and the next candidate follows — one batch, one progress screen. `SKILL.md`
-is left holding the last candidate measured; nothing is applied until you choose one.
-
-**Step 3 — results.** The ranking, in the draft's own table:
-
-```
- trigger optimization > slide-builder > generalization > results                              evalctl v0.8.0 · 11:06
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- ✓ 1 validation set ─── ✓ 2 validate ─── ● 3 results                                          2 iterations measured 
-
-▌ RESULTS                                                                                              ranked by the validation set 
+▌ RANKING                                                                        ranked by the validation set
   ────────────────────────────────────────────────────────────────────────────────────────────────
-  ITERATION  TRAIN         VALIDATION   GAP    CHARS   NOTE
-▶ 1          1/2 50%       2/2 100%     −50%   52      the description in SKILL.md when the loop started ✓ in file
-  2          2/2 100%      1/2 50%      +50%   91      named the deck, not the file
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+  ITERATION  TRAIN         VALIDATION       GAP    CHARS   NOTE
+  1          1/2 50%       2/2 100%         −50%   52      the description in SKILL.md when the loop …  in file
+▶ 2          2/2 100%      —                —      91      the description with the deck named ✓
   ────────────────────────────────────────────────────────────────────────────────────────────────
-  ✓ best by validation  #1 · validation 100% · train 50%
+  ✓ recommended by validation  #1 · validation 100% · train 50%
+  → v  run the validation set for 1 iteration without a full rate · 2 queries × 3 runs = 6 agent calls
   validation is the ranking; train beside it is how much of that rate the wording learned rather than earned
-j k move · enter what it failed · a apply · h holdout · esc sections                                         ? keys 
- validation is run once per iteration, and it is the only thing that ranks them                         step 3 of 3 
+j k move · v validate the rest · 1 validation set · enter apply · f failures · esc sections          ? keys
+ validation is the only thing that ranks a wording — v runs it for the ones without a full rate     step 2 of 2
 ```
 
-`✓ best by validation` is the guide's selection rule computed, with a tie going to the earlier wording
-— the one that got there with less text and fewer revisions. `enter` opens one iteration in full, `a`
-applies it to `SKILL.md` (frontmatter only, backed up, re-read through the parser, recorded in the
-ledger), and `h` then runs the fresh queries once, apart from every rate the loop tuned on.
+**A wording with no rate is still a row.** The dash is a fact the table exists to show, and a row that
+vanished until it was measured would hide how much of the table is unranked. `v` runs the validation
+set for exactly those iterations, in the order the loop wrote them: the wording is written into
+`SKILL.md` in turn (that is what the router reads), the validation queries are run against it, and the
+next candidate follows — one batch, one progress screen, and the line that offers it states what it
+costs. When the batch lands the same table carries the new percentages, still and only this table,
+with the cursor on what the new rates recommend. `SKILL.md` is left holding the last candidate
+measured; nothing is applied until you pick one.
+
+**A rate over part of the set is marked `of N`.** A batch you cancelled, or one whose queries all died
+at launch, leaves a rate over the queries that happened to land — and `1/1 100%` beside `3/3 100%` is a
+batch that stopped competing with one that finished. The cell says how many of the set's validation
+queries it actually judged, the table says what that mark means, and the recommendation never picks
+such a row: `v` runs the whole set for it again. `x` on the run screen stops the batch at the candidate
+it is on — the queue behind it is dropped rather than walked through, and an aborted batch writes no
+measurement, so nothing stopped enters the ledger as an iteration.
+
+**A wording nothing has run yet is named, not drawn.** A revision saved and then revised again before
+any run leaves a candidate the ledger holds and no train run measured. It is not an iteration, so it has
+no row; the line under the table names it, says that no train run has measured it, and points at the
+workbench's run, which is what measures it.
+
+**`✓ recommended by validation`** is the guide's selection rule computed — the best validation rate,
+a tie going to the earlier wording, the one that got there with less text and fewer revisions — and it
+is where the cursor opens, because walking to the winner by hand would be the reader repeating the
+arithmetic. The pick stays yours: `j k` walk the table and `enter` (or `a`) applies the row under the
+cursor to `SKILL.md` — frontmatter only, backed up, re-read through the parser, recorded in the ledger
+beside the measurement that earned it — after the loop's one confirmation. `f` opens that iteration in
+full, and `h` then runs the fresh queries once, apart from every rate the loop tuned on. With nothing
+validated yet the table has no rate to rank, and it says so instead of recommending a row.
 
 ### The gate
 
 Five measured iterations is the guide's bar — below it a validation rate is a coin and the difference
-between two wordings is noise. Generalization's run and results steps stay locked until then, and
-`ctrl+g` is the stated exception: it opens them and the report says the rate is unproven. The
-validation set itself can be written at any time; it is the run that waits.
+between two wordings is noise. Generalization's ranking stays locked until then, and `ctrl+g` is the
+stated exception: it opens it and the status row says the rate is unproven. The validation set itself
+can be written at any time; it is the run that waits.
 
 ### A run
 
 There is no screen between the key and the spend. `enter` on the workbench (or `R`, which is the same
 run against the same wording) starts the train run for the candidate being edited, and lands on the
-live log; a validation batch from generalization's run step and the holdout from the result list go the
-same way. What a run costs is decided before, on the section's pane — the runs per query and the dry
+live log; a validation batch from the ranking's `v` and the holdout from the same table go the same
+way. What a run costs is decided before, on the section's pane — the runs per query and the dry
 run are there, beside the rows they multiply — so the one thing left to read is the run itself:
 
 ```
@@ -472,15 +448,19 @@ run are there, beside the rows they multiply — so the one thing left to read i
 
 While it runs, one row per query carries a mark per attempt (`·` pending, `⟳` running, `✓` done, `✗`
 failed) with the newest eight lines of the arm's own stream underneath — the frames `activity.log`
-gets. `x` cancels and keeps what finished, `v` opens the arm's log in full, and the live screen is the
-one place `esc` does not leave: a half-read table of a run that is still spending money is worse than
-the wait. What the run measured — the candidate, the rate, the per-row verdicts — is in the ledger the
-workbench reads when it comes back.
+gets. `x` cancels the batch — the runner stops before it launches the next query and scores nothing, so
+an aborted run leaves no iteration behind rather than a table of cancelled rows; the directory it did
+create carries `aborted.json` and no `meta.json`, so the lab skips it and the next reader sees what
+stopped and why. `v` opens the arm's log in full, and the live screen is the one place `esc` does not
+leave: a half-read table of a run that is still spending money is worse than the wait. What the run
+measured — the candidate, the rate, the per-row verdicts — is in the ledger the workbench reads when it
+comes back.
 
 ### The frame
 
 The bar carries the path — `trigger optimization > skill > step` — and the tool with its build at the
 right edge. The rail sits under it, and the loop's own numbers sit at the right end of the rail's row.
+The two screens that draw no rail — the workbench and the ranking — spend that row on the body.
 
 **Where the keys are.** A screen here is one or more *regions* — a list, a table, a pane, a field — and
 exactly one of them has the keystrokes. It says so in two places and no more: the region that has them
