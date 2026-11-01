@@ -195,7 +195,119 @@ func TestTriggerLaneOpensTheSkillList(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------- the loop's state
+// ---------------------------------------------------------------- the section screen
+
+// TestTheSectionScreenShowsTheSetThatSectionWorks: the pane is the split the cursor stands on, not a
+// paragraph about it, and it follows the cursor.
+func TestTheSectionScreenShowsTheSetThatSectionWorks(t *testing.T) {
+	m, _, _ := fixture(t)
+	m.openSkill("slide-builder")
+	if m.sections.focus != sectionFocusList {
+		t.Fatalf("focus = %d, want the list: the screen opens on the choice", m.sections.focus)
+	}
+	pane := func() string { return stripMarks(strings.Join(m.sectionsBody(m.bodyHeight()), "\n")) }
+	if got := pane(); !strings.Contains(got, "train set") || !strings.Contains(got, "build me slides from this outline") {
+		t.Fatalf("the pane must show the train set beside iteration:\n%s", got)
+	}
+	press(m, "j") // generalization
+	if m.sections.cursor != secGeneralization {
+		t.Fatalf("cursor = %d", m.sections.cursor)
+	}
+	if len(m.sections.rows) != 2 || m.sections.rows[0].Split != store.SplitValidation {
+		t.Fatalf("rows = %+v, want the validation split", m.sections.rows)
+	}
+	if got := pane(); !strings.Contains(got, "validation set") || !strings.Contains(got, "turn PO-RevB into a deck") {
+		t.Fatalf("the pane must follow the cursor onto the validation set:\n%s", got)
+	}
+}
+
+// TestThePaneEditsTheSetItShows: the pane's keys are the step screen's keys, and they write the file.
+func TestThePaneEditsTheSetItShows(t *testing.T) {
+	m, root, _ := fixture(t)
+	m.openSkill("slide-builder")
+	press(m, "tab")
+	if m.sections.focus != sectionFocusSet {
+		t.Fatalf("focus = %d, want the set", m.sections.focus)
+	}
+	before := m.sections.rows[0].Label
+	press(m, "space")
+	if m.sections.rows[0].Label == before {
+		t.Fatalf("the label did not move (%q)", before)
+	}
+	blob, err := os.ReadFile(filepath.Join(root, "trigger", "trigger-evals.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"should_trigger": false`
+	if before == "no" {
+		want = `"should_trigger": true`
+	}
+	if !strings.Contains(string(blob), want) {
+		t.Fatalf("the pane wrote nothing:\n%s", blob)
+	}
+}
+
+// TestThePaneDeletesAndComesBackToItself: a delete from the pane returns to the section screen, not to
+// a step screen the pane was never inside.
+func TestThePaneDeletesAndComesBackToItself(t *testing.T) {
+	m, _, _ := fixture(t)
+	m.openSkill("slide-builder")
+	press(m, "tab")
+	press(m, "d")
+	if m.mode != screenAsk {
+		t.Fatalf("mode = %v, want the confirmation", m.mode)
+	}
+	press(m, "y")
+	if m.mode != screenSections {
+		t.Fatalf("mode = %v, want the section screen back", m.mode)
+	}
+	if len(m.sections.rows) != 1 {
+		t.Fatalf("rows = %d, want the one that is left", len(m.sections.rows))
+	}
+}
+
+// TestAQueryAddedFromThePaneLandsInTheSplitOnScreen: the form writes the split the pane is showing and
+// hands the keys back to the pane.
+func TestAQueryAddedFromThePaneLandsInTheSplitOnScreen(t *testing.T) {
+	m, _, s := fixture(t)
+	m.openSkill("slide-builder")
+	press(m, "j") // generalization
+	press(m, "tab")
+	press(m, "n")
+	if m.mode != screenForm || m.form == nil || m.form.split != store.SplitValidation {
+		t.Fatalf("mode = %v split = %q, want the validation split", m.mode, m.form.split)
+	}
+	m.form.query = "make a deck from these notes"
+	m.form.why = "held back"
+	m.form.apply(m)
+	if m.mode != screenSections {
+		t.Fatalf("mode = %v, want the pane back", m.mode)
+	}
+	rows := s.Rows(store.LaneTrigger, store.Filter{Skill: "slide-builder", Split: store.SplitValidation})
+	if len(rows) != 3 || rows[2].Text != "make a deck from these notes" {
+		t.Fatalf("rows = %+v, want the new validation row", rows)
+	}
+	if len(m.sections.rows) != 3 {
+		t.Fatalf("the pane must re-read the split: %d rows", len(m.sections.rows))
+	}
+}
+
+// TestEnterInThePaneOpensTheWorkbenchOnItsSet: enter on either side goes deeper, and the pane's own
+// enter opens the step that owns the set it is showing.
+func TestEnterInThePaneOpensTheWorkbenchOnItsSet(t *testing.T) {
+	m, _, _ := fixture(t)
+	m.openSkill("slide-builder")
+	press(m, "j") // generalization, in the list
+	press(m, "tab")
+	press(m, "enter")
+	if m.mode != screenFlow || m.flow.sec != secGeneralization || m.flow.step != 1 {
+		t.Fatalf("mode = %v section = %d step = %d, want the validation set",
+			m.mode, m.flow.sec, m.flow.step)
+	}
+	if len(m.flow.rows) != 2 || m.flow.rows[0].Split != store.SplitValidation {
+		t.Fatalf("the workbench opened on the wrong split: %+v", m.flow.rows)
+	}
+}
 
 func TestResumeLandsOnTheStepTheDiskIsAt(t *testing.T) {
 	m, _, _ := fixture(t)

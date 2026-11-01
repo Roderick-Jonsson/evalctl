@@ -27,6 +27,9 @@ type formState struct {
 	index   int // store index of the row being edited
 	id      int
 	split   string
+	// back is where esc and a save hand the keys: the step screen the form was opened from, or the
+	// section screen whose pane it was opened from.
+	back screen
 
 	label    bool
 	labelSel string
@@ -113,7 +116,7 @@ func (f *formState) update(m *Model, msg tea.KeyMsg) tea.Cmd {
 	case "ctrl+s":
 		return f.apply(m)
 	case "esc":
-		m.form, m.mode = nil, screenFlow
+		m.form, m.mode = nil, f.target()
 		m.setStatus("discarded — nothing was written", false)
 		return nil
 	}
@@ -125,10 +128,19 @@ func (f *formState) update(m *Model, msg tea.KeyMsg) tea.Cmd {
 	case huh.StateCompleted:
 		return f.apply(m)
 	case huh.StateAborted:
-		m.form, m.mode = nil, screenFlow
+		m.form, m.mode = nil, f.target()
 		return nil
 	}
 	return cmd
+}
+
+// target is where the form hands the keys back. A form is opened from the step screen or from the
+// section screen's pane, and never from the door.
+func (f *formState) target() screen {
+	if f.back == screenLane {
+		return screenFlow
+	}
+	return f.back
 }
 
 func (f *formState) updateMsg(msg tea.Msg) tea.Cmd {

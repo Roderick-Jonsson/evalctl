@@ -19,6 +19,18 @@ type askState struct {
 	lines []string
 	yes   string // what y does, in words: "delete it", "apply it"
 	then  func(m *Model) tea.Cmd
+	// back is the screen the dialog hands the keys back to. It is named rather than assumed, because
+	// a set is edited from the section screen's pane as well as from its own step screen.
+	back screen
+}
+
+// target is where the dialog returns to. A dialog is never opened from the front door, so the zero
+// value falls back to the step screen instead of the door.
+func (a *askState) target() screen {
+	if a.back == screenLane {
+		return screenFlow
+	}
+	return a.back
 }
 
 func (a *askState) body(h int) []string {
@@ -40,12 +52,12 @@ func (a *askState) update(m *Model, msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "y", "Y", "enter":
 		then := a.then
-		m.ask, m.mode = nil, screenFlow
+		m.ask, m.mode = nil, a.target()
 		if then != nil {
 			return then(m)
 		}
 	case "n", "N", "esc", "q":
-		m.ask, m.mode = nil, screenFlow
+		m.ask, m.mode = nil, a.target()
 		m.setStatus("nothing happened", false)
 	}
 	return nil

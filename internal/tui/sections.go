@@ -5,16 +5,39 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"evalctl/internal/store"
 )
 
-// The section screen: iteration or generalization.
+// The section screen: iteration or generalization, and the set that section works.
 //
 // The two halves of the loop use their two sets for opposite things — one is what a revision may
 // learn from, the other is what must never shape one — so they are chosen here, explicitly, and each
-// opens on its own steps. It is the same shape as the door and the skill chooser: the choice on the
-// left, the one under the cursor explained on the right.
+// opens on its own steps. The choice is on the left and the one under the cursor is on the right,
+// the same shape as the door and the skill chooser.
+//
+// The right half is the split that choice works, not a paragraph about it: the train set beside
+// iteration and the validation set beside generalization, with the rows editable in place. The
+// moment before entering the workbench is exactly when someone wants to look at the set and fix a
+// label or a why, so the pane is a small table with the step screen's own keys — a mini workbench —
+// and enter on either side goes deeper into the real one.
 
-type sectionState struct{ cursor, top int }
+// sectionFocus is which of the screen's two things has the keys: the two halves of the loop on the
+// left, or the split's rows on the right.
+const (
+	sectionFocusList = iota
+	sectionFocusSet
+)
+
+type sectionState struct {
+	cursor, top int // the list of sections
+	focus       int
+	// rows is the split the cursored section works — train for iteration, validation for
+	// generalization — read from the file, so the pane shows what a run would read.
+	rows []store.Entry
+	sel  int
+	rtop int
+}
 
 var sectionRows = []struct {
 	sec   int
@@ -25,12 +48,23 @@ var sectionRows = []struct {
 }
 
 func (m *Model) sectionsBody(h int) []string {
-	listW := min(34, max(24, m.width/3))
-	paneW := min(96, m.width-listW-3)
-	if paneW < 38 {
+	paneW := m.sectionPaneWidth()
+	if paneW == 0 {
 		return m.sectionsNarrow(h)
 	}
-	return m.splitBody(h, listW, paneW, m.sectionsList(), m.sectionPreview(paneW, h))
+	listW := min(34, max(24, m.width/3))
+	return m.splitBody(h, listW, paneW, m.sectionsList(), m.sectionSet(paneW, h))
+}
+
+// sectionPaneWidth is the width the set beside the list gets, and 0 when the window cannot hold one:
+// the list and the pane are two thirds of a screen each, and a table squeezed under 38 columns is a
+// column of ellipses with a cursor in it.
+func (m *Model) sectionPaneWidth() int {
+	listW := min(34, max(24, m.width/3))
+	if paneW := min(96, m.width-listW-3); paneW >= 38 {
+		return paneW
+	}
+	return 0
 }
 
 func (m *Model) sectionsList() []string {
@@ -38,7 +72,13 @@ func (m *Model) sectionsList() []string {
 	for i, row := range sectionRows {
 		mark := "  "
 		if i == m.sections.cursor {
-			mark = cursorMark.Render(glyphs.Cursor)
+			// Two marks for one cursor: the bold accent says the keystrokes are here, the quiet one
+			// says this is the section the pane belongs to while the pane has the keys.
+			if m.sections.focus == sectionFocusList {
+				mark = cursorMark.Render(glyphs.Cursor)
+			} else {
+				mark = selMark.Render(glyphs.Cursor)
+			}
 		}
 		state := dimStyle.Render(m.sectionTag(row.sec))
 		lines = append(lines, mark+titleStyle.Render(row.title)+"  "+state, "")
@@ -69,7 +109,7 @@ func (m *Model) sectionTag(sec int) string {
 	return "to validate"
 }
 
-// sectionLead is that state as a sentence, for the pane's second line.
+// sectionLead is that state as a sentence, for the pane's head row.
 func (m *Model) sectionLead(sec int) string {
 	f := m.flow
 	if f == nil {
@@ -91,81 +131,70 @@ func (m *Model) sectionLead(sec int) string {
 	return "ready to validate the measured wordings"
 }
 
-func (m *Model) sectionPreview(w, h int) []string {
-	row := sectionRows[m.sections.cursor]
-	d := &docWriter{w: w, label: 12}
-	var blocks [][]string
-	from := len(d.lines)
-	block := func() {
-		blocks = append(blocks, append([]string(nil), d.lines[from:]...))
-		from = len(d.lines)
+// sectionSet is the pane: the cursored section's split as a table, with the step screen's columns and
+// its keys. It is the mini workbench — enough to manage the set before going in, and not the place
+// the run happens.
+func (m *Model) sectionSet(w, h int) []string {
+	s := &m.sections
+	sec := sectionRows[s.cursor].sec
+	train := sec == secIteration
+	focused := s.focus == sectionFocusSet
+
+	name := "train set"
+	if !train {
+		name = "validation set"
 	}
-	f := m.flow
+	// The pane's title is its focus cue: bright when the keystrokes are in it, quiet when they are
+	// still in the list.
+	headStyle := dimStyle
+	if focused {
+		headStyle = titleStyle
+	}
+	lines := []string{
+		"",
+		endsLine("  "+headStyle.Render(name), dimStyle.Render(m.sectionLead(sec))+" ", w),
+		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, w-4))),
+	}
 
-	d.title(strings.ToUpper(row.title))
-	d.lead(m.sectionLead(row.sec))
-	d.rule()
-	block()
-
-	if row.sec == secIteration {
-		d.para("The train set is the only measurement a revision may learn from, and the work is a comparison: one failed query read in full, the set's verdicts, the wording you change, and every rate the loop has scored so far. They share one screen — four quadrants, one decision. The validation set is never opened here, so nothing a revision learns can come from it.")
-		block()
-		d.card("On the screen")
-		d.fact("failed query", "the row that failed, and what to change about it")
-		d.fact("train set", "the queries with their verdict, edited in place")
-		d.fact("description", "the wording itself, editable, in SKILL.md's field")
-		d.fact("iterations", "every run so far and what it scored")
-		block()
-		d.card("The ledger")
-		d.fact("wordings", plural(len(f.lab.Candidates), "candidate"))
-		applied := "none yet"
-		if f.lab.Applied != nil {
-			applied = fmt.Sprintf("#%d", f.lab.Applied.Candidate)
-		}
-		d.fact("applied", applied)
-		block()
+	// The counts and the one warning about this split sit at the bottom, where the step screen puts
+	// them too: the rule the guide states is worth more than a row of the table.
+	facts := wrapPlain(m.splitFacts(s.rows, train), max(20, w-6))
+	if len(facts) > 2 {
+		facts = facts[:2]
+	}
+	foot := []string{"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, w-4)))}
+	for _, line := range facts {
+		foot = append(foot, "  "+dimStyle.Render(line))
+	}
+	if warn := m.splitWarning(s.rows); warn != "" {
+		foot = append(foot, "  "+badgeWarn.Render("!")+" "+dimStyle.Render(ellipsis(warn, max(10, w-4))))
 	} else {
-		d.para("The validation set is what judges a wording, and it never shapes one. Here it is run once against every wording the iteration produced, and the result list ranks them by it — the best wording is often not the last one written.")
-		block()
-		d.card("Its steps")
-		d.fact("1 validation set", "the queries that judge the wording")
-		d.fact("2 validate", "one run per measured wording")
-		d.fact("3 results", "train beside validation, for every iteration")
-		block()
-		d.card("The gate")
-		d.fact("measured", fmt.Sprintf("%d of %d iterations", len(f.iters), iterationsRequired))
-		if !f.gateOpen() && len(f.iters) > 0 {
-			d.fact("ctrl+g", "validate early, with the warning")
-		}
-		block()
+		foot = append(foot, "")
 	}
 
-	actDoc := &docWriter{w: w}
-	if len(stepsOf(row.sec)) == 1 {
-		actDoc.action("enter", "open the workbench")
-	} else {
-		step := 1
-		if f.lab != nil && f.lab.ValidationRows > 0 {
-			step = 2
-			if allValidated(f.lab) {
-				step = 3
-			}
-		}
-		actDoc.action("enter", fmt.Sprintf("open at step %d — %s", step, stepNameAt(row.sec, step)))
+	if len(s.rows) == 0 {
+		lines = append(lines, "", "  "+dimStyle.Render("no rows in this split yet"),
+			"", "  "+titleStyle.Render("n")+"  "+dimStyle.Render("add the first query"))
+		return fitRows(append(lines, foot...), h)
 	}
-	room := h - len(actDoc.lines)
-	var out []string
-	for _, b := range blocks {
-		if len(out)+len(b) > room {
-			break
-		}
-		out = append(out, b...)
+
+	cols := queryCols(w)
+	lines = append(lines, queryHeader(cols, focused))
+	room := max(1, h-len(lines)-len(foot))
+	clampWindow(&s.sel, &s.rtop, len(s.rows), room)
+	for i := s.rtop; i < len(s.rows) && i < s.rtop+room; i++ {
+		on := focused && i == s.sel
+		lines = append(lines, queryRow(s.rows[i], cols, on, on))
 	}
-	return fitRows(append(out, actDoc.lines...), h)
+	for len(lines) < h-len(foot) {
+		lines = append(lines, "")
+	}
+	return fitRows(append(lines, foot...), h)
 }
 
 // sectionsNarrow is the section screen without a pane: each row carries its own tag, and the one
-// under the cursor carries a sentence.
+// under the cursor carries a sentence. A terminal that cannot hold a table beside a list gets the
+// list and the numbers, and the set is managed one screen in.
 func (m *Model) sectionsNarrow(h int) []string {
 	lines := []string{""}
 	for i, row := range sectionRows {
@@ -182,38 +211,122 @@ func (m *Model) sectionsNarrow(h int) []string {
 			for _, line := range wrapPlain(blurb, max(20, m.width-8)) {
 				lines = append(lines, "    "+dimStyle.Render(line))
 			}
+			if n := len(m.sections.rows); n > 0 {
+				lines = append(lines, "    "+dimStyle.Render(plural(n, "row")+" in this split"))
+			}
 		}
 		lines = append(lines, "")
 	}
 	return fitRows(lines, h)
 }
 
+// ---------------------------------------------------------------- keys
+
 func (m *Model) updateSections(msg tea.KeyMsg) tea.Cmd {
+	if msg.String() == "tab" {
+		if m.sectionPaneWidth() == 0 {
+			m.setStatus("no room beside the list for the set — widen the window, or manage it one screen in", true)
+			return nil
+		}
+		m.sections.focus = 1 - m.sections.focus
+		return nil
+	}
+	if m.sections.focus == sectionFocusSet && m.sectionPaneWidth() > 0 {
+		return m.updateSectionSet(msg)
+	}
+	return m.updateSectionList(msg)
+}
+
+func (m *Model) updateSectionList(msg tea.KeyMsg) tea.Cmd {
+	s := &m.sections
 	switch msg.String() {
 	case "j", "down":
-		m.sections.cursor = min(m.sections.cursor+1, len(sectionRows)-1)
+		s.cursor = min(s.cursor+1, len(sectionRows)-1)
+		m.loadSectionRows()
 	case "k", "up":
-		m.sections.cursor = max(0, m.sections.cursor-1)
+		s.cursor = max(0, s.cursor-1)
+		m.loadSectionRows()
 	case "g", "home":
-		m.sections.cursor = 0
+		s.cursor = 0
+		m.loadSectionRows()
 	case "G", "end":
-		m.sections.cursor = len(sectionRows) - 1
+		s.cursor = len(sectionRows) - 1
+		m.loadSectionRows()
 	case "enter":
-		return m.openSection(sectionRows[m.sections.cursor].sec)
+		return m.openSectionStep(sectionRows[s.cursor].sec, 0)
 	}
 	return nil
 }
 
-// openSection enters one half of the loop at the step the disk says that half is at. The gate is not
-// enforced here: generalization's first step is its query set, and a set can be written at any time —
-// it is the run that waits.
-func (m *Model) openSection(sec int) tea.Cmd {
+// updateSectionSet is the pane's mini workbench. The keys are the step screen's own — add, edit,
+// relabel, delete — because it is the same set, and a second vocabulary for one list is a second
+// thing to learn.
+func (m *Model) updateSectionSet(msg tea.KeyMsg) tea.Cmd {
+	s := &m.sections
+	sec := sectionRows[s.cursor].sec
+	switch msg.String() {
+	case "j", "down":
+		s.sel = min(s.sel+1, max(0, len(s.rows)-1))
+	case "k", "up":
+		s.sel = max(0, s.sel-1)
+	case "g", "home":
+		s.sel = 0
+	case "G", "end":
+		s.sel = max(0, len(s.rows)-1)
+	case "n":
+		m.openFormIn(splitOf(sec), nil, screenSections)
+	case "e":
+		if len(s.rows) > 0 {
+			row := s.rows[s.sel]
+			m.openFormIn(splitOf(sec), &row, screenSections)
+		}
+	case " ", "space":
+		if len(s.rows) > 0 {
+			return m.toggleRow(s.rows[s.sel])
+		}
+	case "d":
+		if len(s.rows) > 0 {
+			m.askDeleteEntry(s.rows[s.sel], sectionRows[s.cursor].title, screenSections, nil)
+		}
+	case "enter":
+		// The pane's forward move: the workbench, opened on the set it is showing.
+		return m.openSectionStep(sec, 1)
+	}
+	return nil
+}
+
+// loadSectionRows reads the split the cursored section works, so the pane always draws the file a run
+// would read rather than a copy of it.
+func (m *Model) loadSectionRows() {
+	s := &m.sections
+	if m.skill == "" {
+		s.rows, s.sel, s.rtop = nil, 0, 0
+		return
+	}
+	s.rows = m.store.Rows(store.LaneTrigger, store.Filter{Skill: m.skill, Split: splitOf(sectionRows[s.cursor].sec)})
+	if s.sel >= len(s.rows) {
+		s.sel = max(0, len(s.rows)-1)
+	}
+	if s.sel < 0 {
+		s.sel = 0
+	}
+}
+
+// openSectionStep enters one half of the loop: at the step the disk says the work is at (step 0), or
+// at a named step. The gate is not enforced here — generalization's first step is its query set, and
+// a set can be written at any time; it is the run that waits.
+func (m *Model) openSectionStep(sec, step int) tea.Cmd {
 	f := m.flow
 	if f == nil {
 		return nil
 	}
 	f.sec = sec
-	f.resumeIn(m)
 	m.mode = screenFlow
+	if step == 0 {
+		f.resumeIn(m)
+		return nil
+	}
+	f.step = step
+	f.enterStep(m)
 	return nil
 }

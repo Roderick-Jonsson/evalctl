@@ -191,38 +191,36 @@ one column.
 ### The two sections
 
 ```
- trigger optimization > slide-builder                                                                 evalctl v0.8.0
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                                   │ 
-                                   │   ITERATION
-▶ iteration  0 of 5                │   0 of 5 iterations measured
-                                   │   ────────────────────────────────────────────────────────────────
-  generalization  gated            │   The train set is the only measurement a revision may learn from, and the work
-                                   │   is a comparison: one failed query read in full, the set's verdicts, the
-                                   │   wording you change, and every rate the loop has scored so far. They share one
-                                   │   screen — four quadrants, one decision. The validation set is never opened
-                                   │   here, so nothing a revision learns can come from it.
-                                   │ 
-                                   │   On the screen
-                                   │   failed query the row that failed, and what to change about it
-                                   │   train set    the queries with their verdict, edited in place
-                                   │   description  the wording itself, editable, in SKILL.md's field
-                                   │   iterations   every run so far and what it scored
-                                   │ 
-                                   │   The ledger
-                                   │   wordings     1 candidate
-                                   │   applied      none yet
-                                   │ 
-                                   │   → enter  open the workbench
-                                   │ 
-                                   │ 
-                                   │ 
-                                   │ 
-                                   │ 
-                                   │ 
-                                   │ 
-j k move · enter open · esc skills                                                                           ? keys 
- candidate #1 adopted from slide-builder/SKILL.md                                                             1 / 2 
+ trigger optimization > slide-builder                                                           evalctl v0.8.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                                   │
+                                   │   train set                                   0 of 5 iterations measured
+▶ iteration  0 of 5                │   ─────────────────────────────────────────────────────────────────────
+                                   │   ID    TRIGGER  QUERY                                 WHY
+  generalization  gated            │   1     yes      build me slides from this outline     core ask
+                                   │   2     no       research the operator pattern for me  near miss
+                                   │
+                                   │
+                                   │
+                                   │
+                                   │
+                                   │
+                                   │
+                                   │
+                                   │
+                                   │
+                                   │
+                                   │
+                                   │
+                                   │
+                                   │
+                                   │
+                                   │   ─────────────────────────────────────────────────────────────────────
+                                   │   2 rows · 1 should trigger · 1 should not · 50% of the set (the
+                                   │   guide asks ~60/40)
+                                   │
+j k move · tab the set · enter open · esc skills                                                       ? keys
+ the wording may learn from these rows — nothing else shapes a revision                                 1 / 2
 ```
 
 The loop is two activities, not four steps in a row, because the two sets are used for opposite
@@ -231,6 +229,17 @@ things. **Iteration** works the train set — the only measurement a revision ma
 one. Each owns its query set and its own steps, so the rail inside a section only ever lists the work
 that belongs to it, and `esc` goes up one level: a step back to its section, a section back to the
 skills.
+
+The pane beside the two is the split the section works, as a table: the train set beside iteration, the
+validation set beside generalization, with the same columns and the same keys the step screen's own set
+has. That is the moment a set wants fixing — a label that is wrong, a why that is missing — and cards
+about it would be a paragraph where a table belongs. `tab` moves the keys between the two
+halves; the focused half is the bright one and the footer lists its keys.
+
+`enter` goes deeper from either side, and the two are not the same move: from the list it opens the
+workbench at the step the disk is at, and from the pane it opens the step that owns the set on screen.
+Below the width that buys a pane (about 65 columns, once the list has its own) the set is managed one
+screen in, and the list carries its own counts.
 
 ### Iteration — four quadrants
 

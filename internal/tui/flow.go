@@ -122,7 +122,14 @@ func (f *flowState) split() string {
 	if f.step != 1 {
 		return ""
 	}
-	if f.sec == secGeneralization {
+	return splitOf(f.sec)
+}
+
+// splitOf is the split a section works: iteration learns from the train set, generalization judges on
+// the validation set. The section screen's pane reads it too, so the pane and the step that follows
+// can never disagree about which set is on screen.
+func splitOf(sec int) string {
+	if sec == secGeneralization {
 		return store.SplitValidation
 	}
 	return store.SplitTrain

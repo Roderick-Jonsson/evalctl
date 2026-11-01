@@ -38,6 +38,22 @@ func TestOpensTheRealTree(t *testing.T) {
 		}
 		// Both sections, every step of each, plus the section screen itself.
 		m.mode = screenSections
+		// The section screen draws the split beside the choice, and the real sets are longer than the
+		// fixture's: the pane has to scroll inside its own window without touching the frame.
+		for sec := secIteration; sec <= secGeneralization; sec++ {
+			m.sections.cursor = sec
+			m.loadSectionRows()
+			m.sections.focus = sectionFocusSet
+			view := m.View()
+			if got := len(strings.Split(view, "\n")); got != m.height {
+				t.Fatalf("%s section %d: the section screen is %d rows", name, sec, got)
+			}
+			for _, line := range strings.Split(view, "\n") {
+				if w := len([]rune(line)); w > m.width {
+					t.Fatalf("%s section %d: the pane is %d cells wide", name, sec, w)
+				}
+			}
+		}
 		for sec := secIteration; sec <= secGeneralization; sec++ {
 			for step := 1; step <= len(stepsOf(sec)); step++ {
 				m.mode = screenFlow

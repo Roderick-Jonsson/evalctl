@@ -20,10 +20,14 @@ import (
 // It exists to walk the agentskills.io description loop: define the train set, define the validation
 // set, iterate (run, read the failures, revise, repeat), then generalize and compare what each
 // iteration scored on the held-back split. Every screen therefore belongs to a step of that loop,
-// and the only moves are the ones the loop has — forward with enter, back with esc, and the one verb
-// the current step is asking for. There is no table to sort, no column to focus and no second menu:
-// what used to be spread over four tabs and a skill list is now the rail at the top of every step
-// screen, which is also the resume point.
+// and the moves are the ones the loop has — forward with enter, back with esc, and the one verb the
+// current step is asking for. What used to be spread over four tabs and a skill list is now the rail
+// at the top of every step screen, which is also the resume point.
+//
+// One screen has two things with keys rather than one: the section screen shows the two halves of the
+// loop and, beside them, the split the chosen half works. There the keys belong to whichever half of
+// that screen had them last — tab says which — because a set you cannot look at before entering the
+// workbench is a set you enter the workbench to look at.
 //
 // What the loop measures comes from internal/runner (the trigger lane) and what it writes comes from
 // internal/store (the ledger, SKILL.md, the query set), so the TUI holds no state of its own that a
@@ -137,6 +141,11 @@ func (m *Model) reload() {
 	m.flow.iters = iterationsOf(lab)
 	if s := m.flow.split(); s != "" {
 		m.flow.rows = m.store.Rows(store.LaneTrigger, store.Filter{Skill: m.skill, Split: s})
+	}
+	// The section screen keeps a table of the split its cursor stands on: a write from that pane has
+	// to show up there the same way a write from a step shows up in the step's own table.
+	if m.mode == screenSections {
+		m.loadSectionRows()
 	}
 }
 
@@ -592,7 +601,15 @@ func (m *Model) hints() []hint {
 	case screenSkill:
 		return []hint{{"j k", "move"}, {"enter", "open the loop"}, {"esc", "lanes"}}
 	case screenSections:
-		return []hint{{"j k", "move"}, {"enter", "open"}, {"esc", "skills"}}
+		if m.sections.focus == sectionFocusSet && m.sectionPaneWidth() > 0 {
+			// The pane has the keys: the set's own vocabulary, one line short of the step screen's.
+			return []hint{{"j k", "rows"}, {"n e d", "new · edit · delete"}, {"space", "trigger"},
+				{"tab", "sections"}, {"enter", "open the workbench"}}
+		}
+		if m.sectionPaneWidth() == 0 {
+			return []hint{{"j k", "move"}, {"enter", "open"}, {"esc", "skills"}}
+		}
+		return []hint{{"j k", "move"}, {"tab", "the set"}, {"enter", "open"}, {"esc", "skills"}}
 	case screenFlow:
 		if m.flow != nil {
 			return m.flow.hints(m)
@@ -646,7 +663,12 @@ func (m *Model) stateText() string {
 	case screenSkill:
 		return plural(len(m.skillNames()), "skill") + " with a description to tune"
 	case screenSections:
-		return "iteration works the train set; generalization judges the wording on the validation set"
+		// The rule the section works under, where the pane used to spend a paragraph on it. What is
+		// on screen is the set; what belongs on the status row is what that set is for.
+		if sectionRows[m.sections.cursor].sec == secGeneralization {
+			return "these rows judge the wording; they are never used to write one"
+		}
+		return "the wording may learn from these rows — nothing else shapes a revision"
 	case screenFlow:
 		if m.flow != nil {
 			return m.flow.stateText()
@@ -679,6 +701,9 @@ func (m *Model) position() string {
 			return pos
 		}
 	case screenSections:
+		if m.sections.focus == sectionFocusSet && len(m.sections.rows) > 0 {
+			return fmt.Sprintf("row %d of %d", m.sections.sel+1, len(m.sections.rows))
+		}
 		return fmt.Sprintf("%d / 2", m.sections.cursor+1)
 	case screenSkill:
 		return fmt.Sprintf("%d / %d", m.skills.cursor+1, max(1, len(m.skillNames())))
@@ -743,6 +768,10 @@ func (m *Model) helpLines() []string {
 		head("the two sections"),
 		[]string{
 			"  j k        iteration or generalization, on the skill's section screen",
+			"  tab        the keys: the two sections, or the set beside them",
+			"  n e d      new, edit, delete a query in that set",
+			"  space      flip should-trigger: the row asks the router yes or no",
+			"  enter      open the workbench — at the step the disk is at, or at the set",
 			"  esc        one level back: a step to its section, a section to the skills",
 		},
 		head("iteration — the workbench"),

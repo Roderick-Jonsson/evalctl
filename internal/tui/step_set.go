@@ -44,19 +44,16 @@ func (m *Model) setBody(h int) []string {
 		return fitRows(lines, h)
 	}
 	f.clampSet(room)
-	head := "  " + headerFocus.Render(fitTo("ID", 4)) + "  " + headerFocus.Render(fitTo("TRIGGER", 7)) + "  " +
-		headerFocus.Render(fitTo("QUERY", max(20, m.width-4-4-5-6-2-30))) + "  " +
-		headerFocus.Render("WHY")
-	lines = append(lines, head)
+	lines = append(lines, queryHeader(queryCols(m.width), true))
 	for i := f.top; i < len(f.rows) && len(lines) < 2+room; i++ {
-		lines = append(lines, m.setRow(i, m.width))
+		lines = append(lines, queryRow(f.rows[i], queryCols(m.width), true, i == f.sel))
 	}
 	for len(lines) < 2+room {
 		lines = append(lines, "")
 	}
 	lines = append(lines, "  "+dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4)))))
 	lines = append(lines, "  "+dimStyle.Render(m.setFacts(train)))
-	if w := m.setWarning(train); w != "" {
+	if w := m.setWarning(); w != "" {
 		lines = append(lines, "  "+badgeWarn.Render("!")+" "+dimStyle.Render(w))
 	} else {
 		lines = append(lines, "")
@@ -64,28 +61,58 @@ func (m *Model) setBody(h int) []string {
 	return fitRows(lines, h)
 }
 
-// setRow is one query: the id, whether it should trigger, the text, and the reason it is in
-// the set — which is the field the ladder reads back to you when the row fails.
-func (m *Model) setRow(i, w int) string {
-	f := m.flow
-	e := f.rows[i]
+// queryCols is the width each column takes in a table of w cells: the id and the label are fixed,
+// the query takes what is left, and the why gets a third of the space until the table is too narrow
+// to carry it at all — a why squeezed to four cells is a column of ellipses, so it goes instead.
+//
+// Every table that lists queries asks this one function, so the pane on the section screen and the
+// step screen's own set cannot drift apart in their columns.
+type queryColumns struct{ id, trig, query, why int }
+
+func queryCols(w int) queryColumns {
+	const id, trig = 4, 7
+	rest := w - 2 - id - 2 - trig - 2 // the cursor's two cells and the gaps between columns
+	why := min(30, max(12, rest/3))
+	if query := max(12, rest-2-why); query >= 20 {
+		return queryColumns{id: id, trig: trig, query: query, why: why}
+	}
+	return queryColumns{id: id, trig: trig, query: max(12, rest)}
+}
+
+func queryHeader(c queryColumns, focused bool) string {
+	style := dimStyle
+	if focused {
+		style = headerFocus
+	}
+	line := "  " + style.Render(fitTo("ID", c.id)) + "  " + style.Render(fitTo("TRIGGER", c.trig)) +
+		"  " + style.Render(fitTo("QUERY", c.query))
+	if c.why > 0 {
+		line += "  " + style.Render("WHY")
+	}
+	return line
+}
+
+// queryRow is one query: the id, whether it should trigger, the text, and the reason it is in the
+// set — which is the field the ladder reads back to you when the row fails.
+func queryRow(e store.Entry, c queryColumns, cursor, sel bool) string {
 	mark := "  "
-	if i == f.sel {
+	if cursor {
 		mark = cursorMark.Render(glyphs.Cursor)
 	}
-	label := colYes.Render(fitTo("yes", 7))
+	label := colYes.Render(fitTo("yes", c.trig))
 	if e.Label == "no" {
-		label = colNo.Render(fitTo("no", 7))
+		label = colNo.Render(fitTo("no", c.trig))
 	}
-	queryW := max(20, w-4-4-7-6-2-30)
-	why := e.Why
-	if why == "" {
-		why = "—"
+	line := mark + colID.Render(fitTo(fmt.Sprint(e.ID), c.id)) + "  " + label + "  " +
+		colText.Render(fitTo(oneLine(e.Text), c.query))
+	if c.why > 0 {
+		why := e.Why
+		if why == "" {
+			why = "—"
+		}
+		line += "  " + colSplit.Render(fitTo(oneLine(why), c.why))
 	}
-	line := mark + colID.Render(fitTo(fmt.Sprint(e.ID), 4)) + "  " + label + "  " +
-		colText.Render(fitTo(oneLine(e.Text), queryW)) + "  " +
-		colSplit.Render(fitTo(oneLine(why), 30))
-	if i == f.sel {
+	if sel {
 		line = selected(line)
 	}
 	return line
@@ -94,9 +121,17 @@ func (m *Model) setRow(i, w int) string {
 // setFacts is the count line: what the split holds and how it is balanced, with the guide's own
 // ratio beside the real one so the comparison needs no memory.
 func (m *Model) setFacts(train bool) string {
-	f := m.flow
+	if m.flow == nil {
+		return ""
+	}
+	return m.splitFacts(m.flow.rows, train)
+}
+
+// splitFacts is that line for any list of rows: the step screens pass their own split, the section
+// screen's pane passes the split the cursor is standing on, and both get the same arithmetic.
+func (m *Model) splitFacts(rows []store.Entry, train bool) string {
 	yes, no := 0, 0
-	for _, e := range f.rows {
+	for _, e := range rows {
 		if e.Label == "yes" {
 			yes++
 		} else {
@@ -104,15 +139,15 @@ func (m *Model) setFacts(train bool) string {
 		}
 	}
 	parts := []string{
-		plural(len(f.rows), "row"),
+		plural(len(rows), "row"),
 		fmt.Sprintf("%d should trigger", yes),
 		fmt.Sprintf("%d should not", no),
 	}
-	if f.lab != nil {
-		if total := f.lab.TrainRows + f.lab.ValidationRows; total > 0 {
-			share := f.lab.ValidationRows
+	if m.flow != nil && m.flow.lab != nil {
+		if total := m.flow.lab.TrainRows + m.flow.lab.ValidationRows; total > 0 {
+			share := m.flow.lab.ValidationRows
 			if train {
-				share = f.lab.TrainRows
+				share = m.flow.lab.TrainRows
 			}
 			parts = append(parts, fmt.Sprintf("%d%% of the set (the guide asks ~60/40)",
 				(share*100+total/2)/total))
@@ -123,15 +158,21 @@ func (m *Model) setFacts(train bool) string {
 
 // setWarning is the one thing about this split worth saying without being asked: a label the split
 // does not carry, a duplicate, or a row with no reason on it.
-func (m *Model) setWarning(train bool) string {
-	f := m.flow
-	if len(f.rows) == 0 {
+func (m *Model) setWarning() string {
+	if m.flow == nil {
+		return ""
+	}
+	return m.splitWarning(m.flow.rows)
+}
+
+func (m *Model) splitWarning(rows []store.Entry) string {
+	if len(rows) == 0 {
 		return ""
 	}
 	yes, no := 0, 0
 	noWhy, dupes := 0, 0
 	seen := map[string]bool{}
-	for _, e := range f.rows {
+	for _, e := range rows {
 		if e.Label == "yes" {
 			yes++
 		} else {
@@ -162,20 +203,24 @@ func (m *Model) setWarning(train bool) string {
 	return strings.Join(out, " · ")
 }
 
-func (f *flowState) clampSet(room int) {
-	if f.sel < f.top {
-		f.top = f.sel
+// clampWindow keeps a table's cursor inside its rows and its rows inside the window. Two screens now
+// scroll a table of queries, and a scroll position that works on one and not the other is a bug.
+func clampWindow(sel, top *int, n, room int) {
+	if *sel < *top {
+		*top = *sel
 	}
-	if f.sel >= f.top+room {
-		f.top = f.sel - room + 1
+	if *sel >= *top+room {
+		*top = *sel - room + 1
 	}
-	if f.top < 0 {
-		f.top = 0
+	if *top < 0 {
+		*top = 0
 	}
-	if f.sel >= len(f.rows) {
-		f.sel = max(0, len(f.rows)-1)
+	if *sel >= n {
+		*sel = max(0, n-1)
 	}
 }
+
+func (f *flowState) clampSet(room int) { clampWindow(&f.sel, &f.top, len(f.rows), room) }
 
 func (m *Model) updateSet(msg tea.KeyMsg) tea.Cmd {
 	f := m.flow
@@ -225,11 +270,19 @@ func (m *Model) leaveSet() tea.Cmd {
 	return m.jumpStep(2)
 }
 
-// toggleLabel flips the row's label and writes the file at once: the set is what the next run reads
-// from disk, so a change that only lives in memory would measure something nobody wrote.
+// toggleLabel flips the label of the row under the step screen's cursor.
 func (m *Model) toggleLabel() tea.Cmd {
 	f := m.flow
-	e := f.rows[f.sel]
+	if f == nil || len(f.rows) == 0 {
+		return nil
+	}
+	return m.toggleRow(f.rows[f.sel])
+}
+
+// toggleRow flips a row's label and writes the file at once: the set is what the next run reads from
+// disk, so a change that only lives in memory would measure something nobody wrote. Both tables of
+// queries — the step screen's and the section screen's pane — come through here.
+func (m *Model) toggleRow(e store.Entry) tea.Cmd {
 	qs := m.store.Queries()
 	if e.Index < 0 || e.Index >= len(qs) {
 		return nil
@@ -253,13 +306,24 @@ func (m *Model) toggleLabel() tea.Cmd {
 	return nil
 }
 
-// askDeleteRow confirms a delete in the same dialog every other destructive step uses. The set is
-// the instrument the whole loop depends on, so a keystroke never removes a row silently.
+// askDeleteRow confirms a delete from the step screen's own set.
 func (m *Model) askDeleteRow() {
 	f := m.flow
-	e := f.rows[f.sel]
+	if f == nil || len(f.rows) == 0 {
+		return
+	}
+	m.askDeleteEntry(f.rows[f.sel], f.sectionName(), screenFlow, func(m *Model) {
+		f.sel = min(f.sel, max(0, len(f.rows)-1))
+	})
+}
+
+// askDeleteEntry confirms a delete in the same dialog every other destructive step uses. The set is
+// the instrument the whole loop depends on, so a keystroke never removes a row silently. after runs
+// once the file is written and re-read, for the caller that keeps a cursor of its own.
+func (m *Model) askDeleteEntry(e store.Entry, scope string, back screen, after func(*Model)) {
 	m.ask = &askState{
-		scope: f.sectionName(),
+		scope: scope,
+		back:  back,
 		title: fmt.Sprintf("delete q%d?", e.ID),
 		lines: []string{
 			oneLine(e.Text),
@@ -277,7 +341,9 @@ func (m *Model) askDeleteRow() {
 				return nil
 			}
 			m.reload()
-			f.sel = min(f.sel, max(0, len(f.rows)-1))
+			if after != nil {
+				after(m)
+			}
 			m.setStatus(fmt.Sprintf("q%d deleted", e.ID), false)
 			return nil
 		},
@@ -287,15 +353,21 @@ func (m *Model) askDeleteRow() {
 
 // ---------------------------------------------------------------- writing a row
 
-// openForm opens the query form on a row of the current split. A new row takes the next free id
-// without asking: ids are the tool's business, not the operator's, and the guided flow has no
-// second place to fix a collision.
+// openForm opens the query form on a row of the step screen's split. A new row takes the next free id
+// without asking: ids are the tool's business, not the operator's, and the guided flow has no second
+// place to fix a collision.
 func (m *Model) openForm(e *store.Entry) {
 	split := store.SplitTrain
 	if m.flow != nil && m.flow.split() == store.SplitValidation {
 		split = store.SplitValidation
 	}
-	f := &formState{split: split, width: m.width, height: m.bodyHeight()}
+	m.openFormIn(split, e, screenFlow)
+}
+
+// openFormIn is the same form for any split and any screen: the section screen's pane writes a row of
+// the split it is showing and hands the keys back to itself.
+func (m *Model) openFormIn(split string, e *store.Entry, back screen) {
+	f := &formState{split: split, width: m.width, height: m.bodyHeight(), back: back}
 	if e != nil {
 		f.editing = true
 		f.index = e.Index
@@ -349,7 +421,7 @@ func (f *formState) apply(m *Model) tea.Cmd {
 		f.errMsg = err.Error()
 		return nil
 	}
-	m.form, m.mode = nil, screenFlow
+	m.form, m.mode = nil, f.target()
 	m.reload()
 	verb := "added"
 	if f.editing {

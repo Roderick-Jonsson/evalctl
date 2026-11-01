@@ -244,9 +244,10 @@ func (m *Model) openSkill(name string) {
 		}
 	}
 	// The skill opens on the choice between its two activities, with the cursor on the one the disk
-	// says the work is waiting in.
+	// says the work is waiting in, and the split that choice works beside it.
 	sec, _ := loopOpen(m.flow.lab)
 	m.sections = sectionState{cursor: sec}
+	m.loadSectionRows()
 	m.mode = screenSections
 }
 
