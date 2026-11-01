@@ -98,6 +98,14 @@ func (d *docWriter) title(text string) {
 	}
 }
 
+// head is a quadrant's name, in the register every region uses: the workbench's four areas are
+// four keyboard areas, and a document title in one of them would read like a screen that has no
+// keys at all.
+func (d *docWriter) head(name string, focused bool) {
+	d.blank()
+	d.lines = append(d.lines, regionHead(d.w, ellipsis(name, max(4, d.body()-2)), "", focused))
+}
+
 // card is a block's own heading: the failure card's first line, one step louder than its facts.
 func (d *docWriter) card(text string) {
 	d.lines = append(d.lines, "", "  "+titleStyle.Render(text))

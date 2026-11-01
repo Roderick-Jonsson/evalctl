@@ -118,6 +118,10 @@ func (m *Model) validationBody(h int) []string {
 	return fitRows(d.lines, h)
 }
 
+// resultsName is the result list's name, in the register every region uses. Its head carries the
+// fact that the sentence used to: what the ranking is by.
+const resultsName = "RESULTS"
+
 // resultBody is the draft's result list: iteration, train, validation.
 func (m *Model) resultBody(h int) []string {
 	f := m.flow
@@ -129,10 +133,10 @@ func (m *Model) resultBody(h int) []string {
 	}
 	f.res = min(f.res, len(f.iters)-1)
 	best := bestIteration(f)
-	head := "  " + headerFocus.Render(fitTo("ITERATION", 10)) + " " + headerFocus.Render(fitTo("TRAIN", 12)) + "  " +
-		headerFocus.Render(fitTo("VALIDATION", 12)) + " " + headerFocus.Render(fitTo("GAP", 6)) + " " +
-		headerFocus.Render(fitTo("CHARS", 6)) + "  " + headerFocus.Render("NOTE")
-	lines := []string{"", "  " + titleStyle.Render("results · every measured wording, ranked by the validation set"),
+	head := "  " + dimStyle.Render(fitTo("ITERATION", 10)) + " " + dimStyle.Render(fitTo("TRAIN", 12)) + "  " +
+		dimStyle.Render(fitTo("VALIDATION", 12)) + " " + dimStyle.Render(fitTo("GAP", 6)) + " " +
+		dimStyle.Render(fitTo("CHARS", 6)) + "  " + dimStyle.Render("NOTE")
+	lines := []string{"", regionHead(m.width, resultsName, "ranked by the validation set", true),
 		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4)))), head}
 	room := max(1, h-len(lines)-3)
 	top := max(0, f.res-room+1)
@@ -319,7 +323,8 @@ func (m *Model) openHoldout() tea.Cmd {
 func (m *Model) openIterationDoc(it iteration) tea.Cmd {
 	d := &docWriter{w: max(28, m.width-6)}
 	valid := it.valid()
-	d.title(fmt.Sprintf("iteration %d · candidate #%d", it.N, it.Cand.ID))
+	// The reader's head carries which iteration and which candidate; the body opens with what the
+	// two rates mean, so the title is not said twice.
 	d.lead("Train is what the wording was revised against; validation is what it was measured on. The gap is the part of the train rate that did not carry over.")
 	d.rule()
 	d.fact("train", fmt.Sprintf("%s (%d of %d)", pct(it.Train.Train.Passed, it.Train.Train.Judged),
@@ -348,7 +353,8 @@ func (m *Model) openIterationDoc(it iteration) tea.Cmd {
 	for _, line := range wrapPlain(oneLine(it.Cand.Text), max(30, m.width-8)) {
 		d.lines = append(d.lines, "    "+line)
 	}
-	m.doc = &docState{scope: "iteration", title: fmt.Sprintf("iteration %d", it.N), lines: d.lines}
+	m.doc = &docState{scope: "iteration", title: fmt.Sprintf("iteration %d · candidate #%d", it.N, it.Cand.ID),
+		lines: d.lines}
 	m.backTo = screenFlow
 	m.mode = screenDoc
 	return nil

@@ -3,6 +3,7 @@ package version
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // withGlobals runs a check with the stamp variables set, then puts them back: they are package
@@ -69,6 +70,30 @@ func TestUnstampedFallsBackToBuildInfo(t *testing.T) {
 			t.Error("go version is empty")
 		}
 	})
+}
+
+// TestClockIsTheStampedTimeAndNothingElse: the header corner must say when THIS binary was built.
+// A plain `go build` puts the commit's time in BuiltAt, and a corner that shows it is a corner that
+// makes a stale binary look fresh — so it says nothing instead.
+func TestClockIsTheStampedTimeAndNothingElse(t *testing.T) {
+	withGlobals(t, "abcdef1234", "2026-10-29T12:34:56Z", "false", func() {
+		info := Resolve()
+		want := "12:34"
+		if t0, err := time.Parse(time.RFC3339, "2026-10-29T12:34:56Z"); err == nil {
+			want = t0.Local().Format("15:04")
+		}
+		if got := info.Clock(); got != want {
+			t.Errorf("clock = %q, want %q (the stamp, in the local clock)", got, want)
+		}
+	})
+	// Not stamped: the fallback time is the commit's, not the build's.
+	info := Info{Version: "1.2.3", BuiltAt: "2026-10-29T12:34:56Z", Source: "buildinfo"}
+	if got := info.Clock(); got != "" {
+		t.Errorf("an unstamped binary claimed a build time %q", got)
+	}
+	if _, ok := info.Built(); ok {
+		t.Error("an unstamped binary reported a build time")
+	}
 }
 
 func TestFormatsWithoutACommit(t *testing.T) {

@@ -167,6 +167,26 @@ func (m *Model) splitBody(h, listW, paneW int, left, right []string) []string {
 	return out
 }
 
+// regionHead is the one way this app says which of a screen's areas has the keys. A region is a
+// list, a table, a pane or a field; a screen may show four of them at once, and before this there
+// were four different answers — an accented column head here, a brightened pane title there, a
+// textarea caret that blinks, and two cursor marks on the same screen. Now every region names
+// itself the same way: a block and the accent when the keystrokes go to it, two quiet spaces and a
+// muted name when they do not.
+//
+// The mark sits in the two cells every region already indented by, so the focused and the idle
+// title are the same width and nothing below them shifts when the keys move.
+func regionHead(w int, name, right string, focused bool) string {
+	mark, label := "  ", regionOff.Render(name)
+	if focused {
+		mark, label = blockMark.Render(glyphs.Block)+" ", regionOn.Render(name)
+	}
+	if right == "" {
+		return mark + label
+	}
+	return endsLine(mark+label, dimStyle.Render(right)+" ", w)
+}
+
 // pct is a rate as the screens print it: a judged count, never an average of averages.
 func pct(passed, judged int) string { return format.Pct(passed, judged) }
 

@@ -17,7 +17,10 @@ import (
 // failure here is a fact about the wording and not a row to reword.
 func (m *Model) openFailures(it *iteration) tea.Cmd {
 	d := &docWriter{w: max(28, m.width-6)}
-	d.title(fmt.Sprintf("candidate #%d · %s", it.Cand.ID,
+	// A document's head is drawn by the reader above the rule; the body opens with the sentence
+	// that belongs to it. Two titles stacked is the one place this screen had a register of its
+	// own.
+	d.lead(fmt.Sprintf("candidate #%d · %s", it.Cand.ID,
 		fmt.Sprintf("train %s · %d of %d pass", pct(it.Train.Train.Passed, it.Train.Train.Judged),
 			it.Train.Train.Passed, it.Train.Train.Judged)))
 	d.lead("A query that fails here is evidence about the description, not a query to reword. Validation is not shown: it judges the revision, so it must stay unread.")

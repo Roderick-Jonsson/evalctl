@@ -16,7 +16,9 @@ import (
 // terminal that has not got the font. The data columns stay words.
 type glyphSet struct {
 	Name     string
-	Cursor   string // the row, rung or step under the cursor
+	Cursor   string // the row under the cursor, in the region that has the keys
+	Block    string // the focused region's own mark, in front of its name
+	Here     string // the step the flow is standing on, in the rail
 	Running  string // a run in flight
 	Done     string // a finished run, a step that is done, a pass
 	Failed   string // a failed arm or query
@@ -29,11 +31,11 @@ type glyphSet struct {
 
 var (
 	unicodeGlyphs = glyphSet{
-		Name: "unicode", Cursor: "▶ ", Running: "⟳", Done: "✓", Failed: "✗", Seam: "│",
+		Name: "unicode", Cursor: "▶ ", Block: "▌", Here: "●", Running: "⟳", Done: "✓", Failed: "✗", Seam: "│",
 		Arrow: "→", Rule: "─", Heavy: "━", Ellipsis: "…",
 	}
 	asciiGlyphs = glyphSet{
-		Name: "ascii", Cursor: "> ", Running: "~", Done: "+", Failed: "x", Seam: "|",
+		Name: "ascii", Cursor: "> ", Block: "|", Here: "*", Running: "~", Done: "+", Failed: "x", Seam: "|",
 		Arrow: ">", Rule: "-", Heavy: "=", Ellipsis: "~",
 	}
 )

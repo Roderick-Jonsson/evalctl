@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"evalctl/internal/store"
 )
@@ -52,36 +53,49 @@ func (m *Model) sectionsBody(h int) []string {
 	if paneW == 0 {
 		return m.sectionsNarrow(h)
 	}
-	listW := min(34, max(24, m.width/3))
-	return m.splitBody(h, listW, paneW, m.sectionsList(), m.sectionSet(paneW, h))
+	return m.splitBody(h, m.sectionListWidth(), paneW, m.sectionsList(), m.sectionSet(paneW, h))
 }
+
+// sectionListWidth is the list's column. The two halves of the loop are short words, so it is a
+// third of the window and no wider; the pane gets the rest.
+func (m *Model) sectionListWidth() int { return min(34, max(24, m.width/3)) }
 
 // sectionPaneWidth is the width the set beside the list gets, and 0 when the window cannot hold one:
 // the list and the pane are two thirds of a screen each, and a table squeezed under 38 columns is a
 // column of ellipses with a cursor in it.
 func (m *Model) sectionPaneWidth() int {
-	listW := min(34, max(24, m.width/3))
-	if paneW := min(96, m.width-listW-3); paneW >= 38 {
+	if paneW := min(96, m.width-m.sectionListWidth()-3); paneW >= 38 {
 		return paneW
 	}
 	return 0
 }
 
+// sectionListName is what the list calls itself, in the title row where every other region names
+// itself. The pane beside it says "train set"; without a name of its own the list looked like the
+// screen's background with rows on it.
+const sectionListName = "SECTIONS"
+
+// sectionsList is the two halves of the loop, each with the state of the set it works. The cursor
+// mark is drawn only while this list has the keys: a mark in a list nobody is driving is a second
+// cursor on the screen, and the one question this screen has to answer is where the keys are.
 func (m *Model) sectionsList() []string {
-	lines := []string{"", ""}
+	w := m.sectionListWidth()
+	ruled := "  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, w-4)))
+	lines := []string{"", regionHead(w, sectionListName, "", m.sections.focus == sectionFocusList), ruled}
 	for i, row := range sectionRows {
 		mark := "  "
-		if i == m.sections.cursor {
-			// Two marks for one cursor: the bold accent says the keystrokes are here, the quiet one
-			// says this is the section the pane belongs to while the pane has the keys.
-			if m.sections.focus == sectionFocusList {
-				mark = cursorMark.Render(glyphs.Cursor)
-			} else {
-				mark = selMark.Render(glyphs.Cursor)
-			}
+		if i == m.sections.cursor && m.sections.focus == sectionFocusList {
+			mark = cursorMark.Render(glyphs.Cursor)
 		}
 		state := dimStyle.Render(m.sectionTag(row.sec))
-		lines = append(lines, mark+titleStyle.Render(row.title)+"  "+state, "")
+		line := mark + titleStyle.Render(row.title) + "  " + state
+		// The band and the mark are the same thing seen twice — this is the row the keys are on —
+		// so it is drawn only while this list has them. A banded row in a list nobody is driving is
+		// exactly the second selection this screen used to have.
+		if i == m.sections.cursor && m.sections.focus == sectionFocusList {
+			line = selected(line)
+		}
+		lines = append(lines, line, "")
 	}
 	return lines
 }
@@ -140,21 +154,20 @@ func (m *Model) sectionSet(w, h int) []string {
 	s := &m.sections
 	sec := sectionRows[s.cursor].sec
 	train := sec == secIteration
-	focused := s.focus == sectionFocusSet
-
-	name := "train set"
-	if !train {
-		name = "validation set"
-	}
-	// The pane's title is its focus cue: bright when the keystrokes are in it, quiet when they are
-	// still in the list.
-	headStyle := dimStyle
-	if focused {
-		headStyle = titleStyle
+	// The caret in the fields under the table is the pane losing the keys, not a second focus: the
+	// set's mark goes with them.
+	focused := s.focus == sectionFocusSet && !m.formActive()
+	name := setRegionName(train)
+	// The pane's name is the thing that must survive a narrow pane: the sentence beside it goes
+	// first, because "VALIDATIO…" is a region that cannot be named.
+	head := regionHead(w, name, "", focused)
+	lead := dimStyle.Render(m.sectionLead(sec)) + " "
+	if lipgloss.Width(head)+lipgloss.Width(lead) > w {
+		lead = ""
 	}
 	lines := []string{
 		"",
-		endsLine("  "+headStyle.Render(name), dimStyle.Render(m.sectionLead(sec))+" ", w),
+		endsLine(head, lead, w),
 		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, w-4))),
 	}
 
@@ -194,11 +207,10 @@ func (m *Model) sectionSet(w, h int) []string {
 	}
 
 	cols := queryCols(w)
-	lines = append(lines, queryHeader(cols, focused))
+	lines = append(lines, queryHeader(cols))
 	clampWindow(&s.sel, &s.rtop, len(s.rows), room)
 	for i := s.rtop; i < len(s.rows) && i < s.rtop+room; i++ {
-		on := focused && i == s.sel
-		lines = append(lines, queryRow(s.rows[i], cols, on, on))
+		lines = append(lines, queryRow(s.rows[i], cols, focused && i == s.sel, focused && i == s.sel))
 	}
 	// The table keeps its height so the fields do not jump when a short set is edited — but it never
 	// takes a row the block or the footer needs.

@@ -336,7 +336,10 @@ func (f *flowState) rail(w int) string {
 		label := fmt.Sprintf("%d %s", i+1, name)
 		switch f.stepState(i + 1) {
 		case stateCurrent:
-			b.WriteString(cursorMark.Render(glyphs.Cursor + label))
+			// The rail is where you are in the flow, not where your keys go: a filled dot, the
+			// same family as the tick and the lock, and never the arrow the cursor uses — a second
+			// arrow on the screen is a second cursor.
+			b.WriteString(stepHere.Render(glyphs.Here + " " + label))
 		case stateDone:
 			b.WriteString(styleOn.Render(glyphs.Done + " " + label))
 		case stateLocked:

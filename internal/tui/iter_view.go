@@ -34,8 +34,6 @@ const (
 	focusCount
 )
 
-var focusNames = []string{"set", "wording", "note"}
-
 // iterDraft is the wording being edited, seeded from the candidate under test.
 type iterDraft struct {
 	parent   int    // the candidate this text was seeded from
@@ -83,7 +81,9 @@ func (m *Model) quadFailure(w, h int) []string {
 	build := func(full bool) []string {
 		d := &docWriter{w: w}
 		if row == nil {
-			d.title("FAILED QUERY")
+			// A quadrant that takes no keys names itself in the quiet register, so the one
+			// that has them is the only one in the accent.
+			d.head("FAILED QUERY", false)
 			switch {
 			case f.pending() != nil:
 				d.lead(fmt.Sprintf("candidate #%d has not been run yet", f.pending().ID))
@@ -98,9 +98,9 @@ func (m *Model) quadFailure(w, h int) []string {
 			}
 			return d.lines
 		}
-		d.title(fmt.Sprintf("FAILED QUERY · q%d", row.ID))
-		d.lead(fmt.Sprintf("should %s · fired %d of %d runs", triggerWord(row.ShouldTrigger), row.Triggers, row.Runs))
+		d.head(fmt.Sprintf("FAILED QUERY · q%d", row.ID), false)
 		d.rule()
+		d.lead(fmt.Sprintf("should %s · fired %d of %d runs", triggerWord(row.ShouldTrigger), row.Triggers, row.Runs))
 		if row.Query != "" {
 			d.fact("the ask", row.Query)
 		}
@@ -156,7 +156,11 @@ func (m *Model) quadSetRow(i, idW, trigW, resW, queryW int) string {
 	f := m.flow
 	e := f.rows[i]
 	mark := "  "
-	if i == f.sel {
+	// Only the region with the keys draws the cursor, and the band goes with it: a row that is
+	// marked in a pane nobody is driving reads as a second cursor, which is the thing this screen
+	// had two of.
+	on := i == f.sel && f.focus == focusSet && !m.formActive()
+	if on {
 		mark = cursorMark.Render(glyphs.Cursor)
 	}
 	trig := colYes.Render(padCell("yes", trigW, false))
@@ -173,7 +177,7 @@ func (m *Model) quadSetRow(i, idW, trigW, resW, queryW int) string {
 	}
 	line := mark + colID.Render(padCell(fmt.Sprint(e.ID), idW, true)) + "   " + trig + " " +
 		result + "  " + colText.Render(padCell(oneLine(e.Text), queryW, false))
-	if i == f.sel {
+	if on {
 		line = selected(line)
 	}
 	return line
@@ -194,27 +198,35 @@ func (m *Model) quadWording(w, h int) []string {
 	} else if n > store.DescriptionLimit*4/5 {
 		style = badgeWarn
 	}
-	lines := []string{"", endsLine("  "+titleStyle.Render("THE DESCRIPTION"), style.Render(counter)+" ", w)}
+	lines := []string{"", endsLine("  "+regionHead(w, "THE DESCRIPTION", "", f.focus == focusWording),
+		style.Render(counter)+" ", w)}
 	for _, line := range strings.Split(strings.TrimRight(d.text.View(), "\n"), "\n") {
 		lines = append(lines, "  "+line)
 	}
-	// The note is the reason this wording exists; the ledger keeps it beside the text.
-	label := dimStyle.Render("note")
+	// The note is the reason this wording exists; the ledger keeps it beside the text. It is its own
+	// region — the caret goes into it on the next tab — so it carries its own mark rather than
+	// borrowing the description's.
+	label := regionOff.Render("note")
+	prefix := "  "
 	if f.focus == focusNote {
-		label = cursorMark.Render("note")
+		label, prefix = regionOn.Render("note"), blockMark.Render(glyphs.Block)+" "
 	}
-	lines = append(lines, "  "+label+"  "+d.note.View())
+	lines = append(lines, prefix+label+"  "+d.note.View())
 	return fitRows(lines, h)
 }
 
 // quadIterations is the loop's own history: every run, and what it scored on the train set. It is
 // the only place you can see whether the last four revisions bought anything.
+//
+// It takes no keys, so its name says so: no block, no accent, and no band on the newest row. A band
+// here used to mark "the wording you are revising", and beside the set's own cursor it made two
+// rows on one screen look selected.
 func (m *Model) quadIterations(w, h int) []string {
 	f := m.flow
 	head := "  " + dimStyle.Render(padCell("ITER", 5, true)) + " " +
 		dimStyle.Render(padCell("TRAIN", 12, true)) + " " +
 		dimStyle.Render(padCell("CHARS", 6, true)) + "  " + dimStyle.Render("NOTE")
-	lines := []string{"", m.quadTitle(w, "ITERATIONS", fmt.Sprintf("%d of %d", len(f.iters), iterationsRequired)), head}
+	lines := []string{"", regionHead(w, "ITERATIONS", fmt.Sprintf("%d of %d", len(f.iters), iterationsRequired), false), head}
 	room := max(1, h-len(lines)-2)
 	start := max(0, len(f.iters)-room)
 	for i := start; i < len(f.iters); i++ {
@@ -224,9 +236,6 @@ func (m *Model) quadIterations(w, h int) []string {
 			colText.Render(padCell(rate, 12, true)) + " " +
 			colSplit.Render(padCell(fmt.Sprint(it.Cand.Chars), 6, true)) + "  " +
 			colText.Render(ellipsis(oneLine(it.Cand.Note), max(6, w-32)))
-		if i == len(f.iters)-1 {
-			row = selected(row)
-		}
 		lines = append(lines, row)
 	}
 	if len(f.iters) == 0 {
@@ -238,15 +247,6 @@ func (m *Model) quadIterations(w, h int) []string {
 			plural(max(0, iterationsRequired-len(f.iters)), "iteration"))))
 	}
 	return fitRows(lines, h)
-}
-
-// quadTitle is a quadrant's head: the name, and the fact that belongs beside it on the right.
-func (m *Model) quadTitle(w int, name, right string) string {
-	left := "  " + titleStyle.Render(name)
-	if right == "" {
-		return left
-	}
-	return endsLine(left, dimStyle.Render(right)+" ", w)
 }
 
 // ---------------------------------------------------------------- the narrow fallback

@@ -18,9 +18,10 @@
 // a status glyph that does not exist.
 //
 // Colour is also never the only cue: a should-trigger row says the word "yes" or "no" (the label is
-// a fact about the row, not a verdict, so it carries no pass/fail glyph), headers keep their bold and
-// underline, group rows keep their heading text, and the cursor keeps its mark. That is what makes a
-// palette survive a colour-blind reader and a 16-colour terminal.
+// a fact about the row, not a verdict, so it carries no pass/fail glyph), region names keep their
+// bold, group rows keep their heading text, the cursor keeps its mark, and the focused region carries
+// a block in front of its name. That is what makes a palette survive a colour-blind reader and a
+// 16-colour terminal.
 package theme
 
 import (
@@ -45,7 +46,7 @@ type Palette struct {
 	Text    string // body text: the default foreground, the table's values
 	Muted   string // second tier: ids, separators, counts, out-of-focus state
 	Faint   string // third tier: placeholders, hints, anything you look away from
-	Accent  string // the primary identifier: the skill column, the active tab, headings
+	Accent  string // the pointer: the cursor, the region that has the keys, the skill column
 	Accent2 string // structural labels: group headers, sub-headings
 	OK      string // yes, pass, healthy
 	Warn    string // dupes, warnings, tool calls, run notes

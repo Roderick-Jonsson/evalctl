@@ -52,6 +52,9 @@ const (
 type Model struct {
 	store *store.Store
 	ver   string
+	// built is the build's clock, local, when the binary was stamped: the corner of the header says
+	// which binary is on screen, so a stale `bin/evalctl` is one glance and not a bug hunt.
+	built string
 	skill string // the skill being optimized ("" on the front door)
 
 	width, height int
@@ -113,7 +116,8 @@ func Run(s *store.Store, skill, lane, glyphProfile string) int {
 }
 
 func newModel(s *store.Store) *Model {
-	m := &Model{store: s, ver: version.Resolve().Short(), mode: screenLane}
+	info := version.Resolve()
+	m := &Model{store: s, ver: info.Short(), built: info.Clock(), mode: screenLane}
 	// The stamp the store was opened at: a screen drawn from it is current until the tree says
 	// otherwise. A tree that cannot be stamped reads as changed, and the first tick re-reads it.
 	m.stamp, _ = store.TreeStamp(s.Root)
@@ -415,7 +419,11 @@ func (m *Model) View() string {
 func (m *Model) headLines() []string {
 	// The tool's name and the build sit together at the right edge: what you are looking at is read
 	// from the left margin inward, and which evalctl drew it is one look at the corner.
-	bar := endsLine(m.barLeft(), brandName.Render(" evalctl")+" "+brandVer.Render(m.ver), m.width)
+	brand := brandName.Render(" evalctl") + " " + brandVer.Render(m.ver)
+	if m.built != "" {
+		brand += brandVer.Render(" · " + m.built)
+	}
+	bar := endsLine(m.barLeft(), brand, m.width)
 	rule := tabRule.Render(strings.Repeat(glyphs.Heavy, max(1, m.width)))
 	head := []string{bar, rule}
 	// The context row is the rail on a step screen and a line of prose elsewhere — and nowhere at
@@ -640,7 +648,59 @@ func (m *Model) statusRow() string {
 	if left == "" {
 		left = m.stateText()
 	}
-	return endsLine(" "+style.Render(left), statValue.Render(m.position())+" ", m.width)
+	return endsLine(" "+style.Render(left), m.hereLine(), m.width)
+}
+
+// hereLine is the right edge of the status row: the region the keystrokes are going into, and where
+// the cursor stands inside it. The frame says the same thing in colour and a glyph, and this says it
+// in words — which is the answer that survives a palette a terminal cannot draw, a screenshot, and
+// two regions that both look plausible at a glance.
+func (m *Model) hereLine() string {
+	region, pos := m.region(), m.position()
+	switch {
+	case region == "" && pos == "":
+		return ""
+	case region == "":
+		return statValue.Render(pos) + " "
+	case pos == "":
+		return regionLabel.Render(region) + " "
+	}
+	return regionLabel.Render(region) + statValue.Render(" · "+pos) + " "
+}
+
+// region is the area the keys are going into, in the words the frame names it with. Screens with one
+// area return "": naming a region there would say the obvious and cost the position its room.
+func (m *Model) region() string {
+	switch m.mode {
+	case screenSections:
+		if m.formActive() {
+			return "editor"
+		}
+		if m.sections.focus == sectionFocusList || m.sectionPaneWidth() == 0 {
+			return "sections"
+		}
+		return setRegionWord(sectionRows[m.sections.cursor].sec == secIteration)
+	case screenFlow:
+		if m.formActive() {
+			return "editor"
+		}
+		if m.flow == nil {
+			return ""
+		}
+		if m.flow.sec == secIteration {
+			switch m.flow.focus {
+			case focusWording:
+				return "description"
+			case focusNote:
+				return "note"
+			}
+			return setRegionWord(true)
+		}
+		if m.flow.step == 1 {
+			return setRegionWord(false)
+		}
+	}
+	return ""
 }
 
 // stateText is what the status line says when nothing has just happened: the frame's own fact about
@@ -684,23 +744,32 @@ func (m *Model) position() string {
 	switch m.mode {
 	case screenFlow:
 		if m.formActive() {
-			return fmt.Sprintf("editing q%d", m.form.id)
+			return fmt.Sprintf("q%d", m.form.id)
 		}
-		if m.flow != nil && m.flow.stepCount() > 1 {
-			return fmt.Sprintf("step %d of %d", m.flow.step, m.flow.stepCount())
+		f := m.flow
+		if f == nil {
+			return ""
 		}
-		if m.flow != nil {
-			pos := focusNames[m.flow.focus]
-			if m.flow.draftChanged() {
-				pos += " · unsaved"
-			}
-			return pos
+		// The area names the region (see region); this says where the cursor stands inside it.
+		if f.stepCount() > 1 {
+			return fmt.Sprintf("step %d of %d", f.step, f.stepCount())
 		}
+		var parts []string
+		if f.focus == focusSet && len(f.rows) > 0 {
+			parts = append(parts, fmt.Sprintf("row %d of %d", f.sel+1, len(f.rows)))
+		}
+		if f.draftChanged() {
+			parts = append(parts, "unsaved")
+		}
+		return strings.Join(parts, " · ")
 	case screenSections:
 		if m.formActive() {
-			return fmt.Sprintf("editing q%d", m.form.id)
+			return fmt.Sprintf("q%d", m.form.id)
 		}
-		if m.sections.focus == sectionFocusSet && len(m.sections.rows) > 0 {
+		if m.sections.focus == sectionFocusSet && m.sectionPaneWidth() > 0 {
+			if len(m.sections.rows) == 0 {
+				return "no rows"
+			}
 			return fmt.Sprintf("row %d of %d", m.sections.sel+1, len(m.sections.rows))
 		}
 		return fmt.Sprintf("%d / 2", m.sections.cursor+1)

@@ -41,10 +41,7 @@ var laneRows = []struct {
 // you are on; that is the shape every other screen here uses, something on the left and its detail on
 // the right.
 func (m *Model) laneBody(h int) []string {
-	// The list takes a third of the width, the pane takes the rest up to a readable measure. A list
-	// wide enough for "output optimization  not built" and no wider: the pane is where the detail is,
-	// and a pane squeezed to pay for empty list cells explains nothing.
-	listW := min(36, max(26, m.width/3))
+	listW := m.laneListWidth()
 	paneW := min(96, m.width-listW-3)
 	if paneW < 38 {
 		return m.laneNarrow(h)
@@ -52,10 +49,21 @@ func (m *Model) laneBody(h int) []string {
 	return m.splitBody(h, listW, paneW, m.laneList(), m.lanePreview(paneW, h))
 }
 
+// laneListWidth is the list's column: wide enough for "output optimization  not built" and no wider.
+// The pane is where the detail is, and a pane squeezed to pay for empty list cells explains nothing.
+func (m *Model) laneListWidth() int { return min(36, max(32, m.width/3)) }
+
+// laneListName is what the list calls itself, in the register every region uses. It is the container
+// and not the verb: "what to optimize" is the bar's last segment two rows above, and a region that
+// says the same words twice in the same column has said nothing.
+const laneListName = "OPTIMIZATIONS"
+
 // laneList is the whole choice: two rows, the one under the cursor marked, and whether the lane is
 // built. Nothing else belongs here — a description under a row is what the pane is for.
 func (m *Model) laneList() []string {
-	lines := []string{"", ""}
+	w := m.laneListWidth()
+	lines := []string{"", regionHead(w, laneListName, "", true),
+		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, w-4)))}
 	for i, row := range laneRows {
 		mark := "  "
 		if i == m.lanes.cursor {
@@ -87,13 +95,16 @@ func (m *Model) lanePreview(w, h int) []string {
 		from = len(d.lines)
 	}
 
-	d.title(strings.ToUpper(row.title))
+	d.head(strings.ToUpper(row.title), false)
+	// The rule closes the head, and the sentence under it explains the row — the same order the
+	// frame uses (path, rule, the line that says where you are), and the same line the list's own
+	// rule is drawn on.
+	d.rule()
 	if row.built {
 		d.lead("built · the description loop")
 	} else {
 		d.lead("not built yet")
 	}
-	d.rule()
 	block()
 
 	if row.built {
@@ -146,7 +157,8 @@ func (m *Model) lanePreview(w, h int) []string {
 // laneNarrow is the door without its pane. Below the width that buys one, the row under the cursor
 // carries its one-line explanation and nothing is hidden behind a divider that is not there.
 func (m *Model) laneNarrow(h int) []string {
-	lines := []string{""}
+	lines := []string{"", regionHead(m.width, laneListName, "", true),
+		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, m.width-4)))}
 	for i, row := range laneRows {
 		mark := "  "
 		if i == m.lanes.cursor {
@@ -352,9 +364,15 @@ func (m *Model) skillBody(h int) []string {
 	return m.skillStacked(h)
 }
 
+// skillListName is the chooser's list, in the register every region uses — the container, not the
+// verb the bar already says two rows above.
+const skillListName = "SKILLS"
+
 // skillSplit is the table on the left and the row under the cursor on the right.
 func (m *Model) skillSplit(h, paneW int) []string {
-	left := []string{"", m.skillHead(false)}
+	left := []string{"", regionHead(skillTableW, skillListName, "", true),
+		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, skillTableW-4))),
+		m.skillHead(false)}
 	room := max(1, h-len(left))
 	m.clampSkills(room)
 	for i := m.skills.top; i < len(m.skills.rows) && i < m.skills.top+room; i++ {
@@ -367,7 +385,9 @@ func (m *Model) skillSplit(h, paneW int) []string {
 // out in a block below it, where the emptiness under four rows is.
 func (m *Model) skillStacked(h int) []string {
 	withState := m.width >= 72
-	lines := []string{"", m.skillHead(withState)}
+	lines := []string{"", regionHead(m.width, skillListName, "", true),
+		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, m.width-4))),
+		m.skillHead(withState)}
 
 	// The block below the list is worth its rows only when the whole list fits above it; with more
 	// skills than window, the list wins — the list is what you are choosing from.
@@ -429,9 +449,10 @@ func (m *Model) skillTableRow(i int, withState bool) string {
 		colText.Render(padCell(fmt.Sprint(r.valid), skillValidW, true)) + " " +
 		colSplit.Render(padCell(fmt.Sprint(r.iters)+"/"+fmt.Sprint(iterationsRequired), skillItersW, true))
 	if withState {
-		state := dimStyle.Render(r.state)
+		text := ellipsis(r.state, max(8, m.width-skillTableW-2))
+		state := dimStyle.Render(text)
 		if r.gated {
-			state = styleOn.Render(r.state)
+			state = styleOn.Render(text)
 		}
 		line += "  " + state
 	}
@@ -455,9 +476,9 @@ func (m *Model) skillPane(w, h int) []string {
 		from = len(d.lines)
 	}
 
-	d.title(strings.ToUpper(r.name))
-	d.lead(fmt.Sprintf("%s · step %d of %d, %s", secNames[r.sec], r.step, len(stepsOf(r.sec)), stepNameAt(r.sec, r.step)))
+	d.head(strings.ToUpper(r.name), false)
 	d.rule()
+	d.lead(fmt.Sprintf("%s · step %d of %d, %s", secNames[r.sec], r.step, len(stepsOf(r.sec)), stepNameAt(r.sec, r.step)))
 	block()
 
 	d.para(stateWord(r))

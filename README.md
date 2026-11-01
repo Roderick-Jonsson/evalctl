@@ -40,8 +40,8 @@ commits behind the screen someone was looking at. It is per-clone: run it once a
 inside the repo just works, installed or not.
 
 `--glyphs auto|unicode|ascii` (`$EVALCTL_GLYPHS` as the default) picks the marks the frame draws
-itself: the cursor, the rule under the bar, the rail's marks for a step that is done, current or
-locked, and a run in flight. `auto` follows the locale. The ASCII profile draws the same frame in `> | - + x` for a
+itself: the cursor, the block in front of the region that has the keys, the rail's marks for a step that
+is done, current or locked, and a run in flight. `auto` follows the locale. The ASCII profile draws the same frame in `> | - + x` for a
 terminal without UTF-8 — same widths, same columns, and a test that no frame mark escapes it.
 
 ## Version
@@ -50,7 +50,12 @@ The number lives in `internal/version/version.go` and is hand-edited: bump it wh
 store rules, the profiles or the case format change, because an iteration measured by a different
 harness is not comparable with the last one. It is also the first thing in the artifact:
 
-- the TUI header carries `v0.8.0` (a `+` means the tool's own sources were dirty at build time);
+- the TUI header's right corner carries `v0.8.0+ · 11:06` — the version, a `+` when the tool's own
+  sources were dirty at build time, and then the build's own clock, local time, read from the ldflags
+  stamp. It is there because the binary somebody is looking at and the binary somebody built are not
+  always the same one: a stale `bin/evalctl` looks exactly like a fresh one until the corner says
+  when it was made. An unstamped `go build` shows no clock rather than the commit's time, which is
+  the one number in this tool that would make a stale binary look fresh;
 - `<skill>-workspace/iteration-N/meta.json` and `trigger-workspace/trigger-N/meta.json` record `provenance.tool`
   (version, commit, dirty, `built_at`);
 - both `report.md` files name the build that generated them, and a run's start line prints it.
@@ -89,14 +94,14 @@ the one you are looking at, and the numbers moved to the right end of the rail's
 already are.
 
 ```
- what to optimize                                                                                     evalctl v0.8.0
+ what to optimize                                                                             evalctl v0.8.0 · 11:06
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                                      │ 
-                                     │   TRIGGER OPTIMIZATION
+▌ OPTIMIZATIONS                      │   TRIGGER OPTIMIZATION
+  ────────────────────────────────   │   ────────────────────────────────────────────────────────────────
 ▶ trigger optimization  built        │   built · the description loop
-                                     │   ────────────────────────────────────────────────────────────────
-  output optimization  not built     │   A skill only helps if it gets loaded, and the description is the whole of
-                                     │   the input — an agent decides from that one paragraph. This lane measures
+                                     │   A skill only helps if it gets loaded, and the description is the whole of
+  output optimization  not built     │   the input — an agent decides from that one paragraph. This lane measures
                                      │   the wording, revises it on what the train set failed, and generalizes on a
                                      │   split no revision could read.
                                      │ 
@@ -131,13 +136,13 @@ door says plainly that it is not built rather than opening a "coming soon" scree
 ### Which skill
 
 ```
- trigger optimization > choose a skill                                                                evalctl v0.8.0
+ trigger optimization > choose a skill                                                        evalctl v0.8.0 · 11:06
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                                            │ 
-  SKILL                TRAIN VALID   ITERS │   SLIDE-BUILDER
-▶ slide-builder            2     2     0/5 │   iteration · step 1 of 1, the loop
-                                           │   ────────────────────────────────────────────────────────────────
-                                           │   set ready — nothing measured yet
+▌ SKILLS                                   │   SLIDE-BUILDER
+  ──────────────────────────────────────   │   ────────────────────────────────────────────────────────────────
+  SKILL                TRAIN VALID   ITERS │   iteration · step 1 of 1, the loop
+▶ slide-builder            2     2     0/5 │   set ready — nothing measured yet
                                            │ 
                                            │   The set
                                            │   train        2 queries · 1 trigger · 1 do not
@@ -191,14 +196,14 @@ one column.
 ### The two sections
 
 ```
- trigger optimization > slide-builder                                                           evalctl v0.8.0
+ trigger optimization > slide-builder                                                   evalctl v0.8.0 · 11:06
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                                    │
-                                   │   train set                                   0 of 5 iterations measured
-▶ iteration  0 of 5                │   ─────────────────────────────────────────────────────────────────────
-                                   │   ID    TRIGGER  QUERY                                 WHY
-  generalization  gated            │   1     yes      build me slides from this outline     core ask
-                                   │   2     no       research the operator pattern for me  near miss
+▌ SECTIONS                         │   TRAIN SET                                   0 of 5 iterations measured
+  ──────────────────────────────   │   ─────────────────────────────────────────────────────────────────────
+▶ iteration  0 of 5                │   ID    TRIGGER  QUERY                                 WHY
+                                   │   1     yes      build me slides from this outline     core ask
+  generalization  gated            │   2     no       research the operator pattern for me  near miss
                                    │
                                    │
                                    │
@@ -220,7 +225,7 @@ one column.
                                    │   guide asks ~60/40)
                                    │
 j k move · tab the set · enter open · esc skills                                                       ? keys
- the wording may learn from these rows — nothing else shapes a revision                                 1 / 2
+ the wording may learn from these rows — nothing else shapes a revision                      sections · 1 / 2
 ```
 
 The loop is two activities, not four steps in a row, because the two sets are used for opposite
@@ -234,7 +239,8 @@ The pane beside the two is the split the section works, as a table: the train se
 validation set beside generalization, with the same columns and the same keys the step screen's own set
 has. That is the moment a set wants fixing — a label that is wrong, a why that is missing — and cards
 about it would be a paragraph where a table belongs. `tab` moves the keys between the two
-halves; the focused half is the bright one and the footer lists its keys.
+halves: the half that has them is the accent, with a block in front of its name; the other is quiet, and
+the status row says which one it is in words.
 
 `enter` goes deeper from either side, and the two are not the same move: from the list it opens the
 workbench at the step the disk is at, and from the pane it opens the step that owns the set on screen.
@@ -256,13 +262,13 @@ three of them while you worked on the fourth.
 ```
 
 ```
- trigger optimization > slide-builder > iteration                                                     evalctl v0.8.0
+ trigger optimization > slide-builder > iteration                                             evalctl v0.8.0 · 11:06
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  iteration 1 of 5 · 1 of 2 pass (50%)
                                                │ 
-  FAILED QUERY · q2                            │   TRAIN SET                                              2 queries 
-  should not trigger · fired 0 of 3 runs       │     ID   TRIGGER RESULT  QUERY                                   
-  ──────────────────────────────────────────── │ ▶    1   yes     pass    build me slides from this outline       
+  FAILED QUERY · q2                            │ ▌ TRAIN SET                                              2 queries 
+  ──────────────────────────────────────────── │     ID   TRIGGER RESULT  QUERY                                   
+  should not trigger · fired 0 of 3 runs       │ ▶    1   yes     pass    build me slides from this outline       
   verdict        unstable — failed to hold in  │      2   no      FAIL    research the operator pattern for me    
                  3 of 3 runs                   │ 
                                                │ 
@@ -287,7 +293,7 @@ three of them while you worked on the fourth.
   note  the description in SKILL.md when the … │ 
                                                │ 
 enter run the train set · tab the description · R run again · n new · e edit · d delete · space trigger · …  ? keys 
- the wording may learn from these rows — nothing else shapes a revision                                         set 
+ the wording may learn from these rows — nothing else shapes a revision                            train set · row 1 of 2 
 ```
 
 | quadrant | what it holds |
@@ -328,7 +334,7 @@ verdicts, then the description. The failures keep their full cards behind `f`.
 ### Generalization — the validation set
 
 ```
- ✓ 1 validation set ─── ▶ 2 validate ─── 3 results
+ ✓ 1 validation set ─── ● 2 validate ─── 3 results
 ```
 
 **Step 1 — the validation set.** The same table with the other job: these rows judge the wording and
@@ -338,9 +344,9 @@ the way a row that turned out not to be held-back becomes a train row instead.
 **Step 2 — validate.** One run per measured wording, in the order the loop wrote them:
 
 ```
- trigger optimization > slide-builder > generalization > validate                                     evalctl v0.8.0
+ trigger optimization > slide-builder > generalization > validate                             evalctl v0.8.0 · 11:06
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- ✓ 1 validation set ─── ▶ 2 validate ─── 3 results                                                 2 of 2 validated 
+ ✓ 1 validation set ─── ● 2 validate ─── 3 results                                                 2 of 2 validated 
 
   Every measured wording has been validated
   Nothing is left to run against the validation set. The result list ranks the wordings by it, and there is
@@ -379,11 +385,11 @@ is left holding the last candidate measured; nothing is applied until you choose
 **Step 3 — results.** The ranking, in the draft's own table:
 
 ```
- trigger optimization > slide-builder > generalization > results                                      evalctl v0.8.0
+ trigger optimization > slide-builder > generalization > results                              evalctl v0.8.0 · 11:06
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- ✓ 1 validation set ─── ✓ 2 validate ─── ▶ 3 results                                          2 iterations measured 
+ ✓ 1 validation set ─── ✓ 2 validate ─── ● 3 results                                          2 iterations measured 
 
-  results · every measured wording, ranked by the validation set
+▌ RESULTS                                                                                              ranked by the validation set 
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ITERATION  TRAIN         VALIDATION   GAP    CHARS   NOTE
 ▶ 1          1/2 50%       2/2 100%     −50%   52      the description in SKILL.md when the loop started ✓ in file
@@ -449,7 +455,17 @@ the wait.
 ### The frame
 
 The bar carries the path — `trigger optimization > skill > step` — and the tool with its build at the
-right edge. The rail sits under it, and the loop's own numbers sit at the right end of the rail's row. The key band and the status row are the last two rows of the window,
+right edge. The rail sits under it, and the loop's own numbers sit at the right end of the rail's row.
+
+**Where the keys are.** A screen here is one or more *regions* — a list, a table, a pane, a field — and
+exactly one of them has the keystrokes. It says so in two places and no more: the region that has them
+is drawn in the accent with a block in front of its name, every other region's name is quiet, and the
+cursor mark and the selected row exist only inside that region. A second bright thing is a second
+answer to the only question the frame has to answer. The same fact is spelled out at the right edge of
+the status row — `sections · 1 / 2`, `train set · row 3 of 6`, `editor · q3`, `note` — which is the form
+of it that survives a screenshot, a colour-blind reader, and a terminal drawing neither the accent nor
+the block. The rail's `●` is a different mark on purpose: it says which step of the flow you are in,
+which stays true whichever region has the keys, and it is never the arrow the cursor uses. The key band and the status row are the last two rows of the window,
 always; `esc` is one level up and the footer names the level. `--glyphs ascii` draws the same frame in
 `> - + ~`, and a narrow window cuts the hints before it cuts the `? keys` cap.
 
@@ -641,6 +657,11 @@ Views never name a colour, they name a role — `Text`, `Muted`, `Faint`, `Accen
 `Warn`, `Err`, `Border`, `Line`, `Sel`, `CodeBG`/`CodeFG` — and `internal/theme` decides what each
 role is. `Line` is the frame's dividers (the rule under the bar, the seams between table cells): brighter
 than a box edge, because it is structure you are meant to find, and well below the text it divides.
+One register, both surfaces: a column head is `Faint` in the TUI's tables and in every printed one, and
+the quiet words — ids, hints, splits — take the same role in both, so `evalctl ls` and the workbench
+agree on what a head looks like. `evalctl theme NAME` draws a sample screen with the frame's own focus
+marks in it, because a palette has to be judged on its cue and not on a swatch.
+
 Three palettes ship:
 
 | palette | for | held to |
@@ -670,7 +691,8 @@ above claims.
 
 The tests hold the palettes to their numbers (`internal/theme/theme_test.go`) and check that the
 three status colours stay apart under simulated protanopia and deuteranopia — colour is never the
-only cue, since `✓`/`✗`, bold and underline carry the same information.
+only cue, since `✓`/`✗`, bold, the cursor arrow, and the block in front of the focused region's name
+carry the same information.
 
 ## What a run writes
 

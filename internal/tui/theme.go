@@ -32,10 +32,9 @@ var (
 	styleOn = lipgloss.NewStyle()
 	// styleCur is the row under the cursor: a background, so the row's own foregrounds survive.
 	styleCur = lipgloss.NewStyle()
-	// The gutter's two marks. Accent means "keystrokes go here", and it is the only thing on a
+	// The gutter's mark. Accent means "the keys go here", and it is the only thing on a
 	// row that carries it — green/amber/red stay reserved for state.
 	cursorMark = lipgloss.NewStyle()
-	selMark    = lipgloss.NewStyle()
 
 	statusOk   = lipgloss.NewStyle()
 	statusBad  = lipgloss.NewStyle()
@@ -46,37 +45,26 @@ var (
 	dimStyle = lipgloss.NewStyle()
 	// activityTool colours the tool-call lines of a live activity log.
 	activityTool = lipgloss.NewStyle()
-	// Header states: focus, sort and group are shown by styling the column's own header cell,
-	// which keeps the header aligned with the rows below it.
-	headerFocus = lipgloss.NewStyle()
-	headerSort  = lipgloss.NewStyle()
-	headerGroup = lipgloss.NewStyle()
-	// The two lanes of the current scope, drawn in the header as a switch.
-	tabActive  = lipgloss.NewStyle()
-	tabIdle    = lipgloss.NewStyle()
-	styleGroup = lipgloss.NewStyle()
+	// A region is one keyboard area — a list, a table, a pane, a field — and a screen may show four
+	// of them. Exactly one has the keys, and the two styles below are the whole of how that is
+	// said: the name of the region that has them is accent and bold and carries a block in front
+	// of it, and every other region's name is bold and muted. Neither is a cursor, so neither can
+	// be read as a row.
+	regionOn  = lipgloss.NewStyle()
+	regionOff = lipgloss.NewStyle()
+	blockMark = lipgloss.NewStyle()
+	// stepHere is the rail's current step: bold, in the text colour, behind its own dot. The flow's
+	// "you are here" is a fact about the path and not about the keys, so it is not the accent.
+	stepHere = lipgloss.NewStyle()
 	// The tab bar is the top edge of every list screen: the scope on the left, its views as chips,
-	// the build in hand on the right, and a heavier rule under all of it. The rule is the border
-	// role because it is structure — the same reason the pane's divider is — and the bar uses
-	// exactly one fill (the active chip), so "you are here" is the only bright thing on the row.
-	tabSep  = lipgloss.NewStyle()
+	// the build in hand on the right, and a heavier rule under all of it.
 	tabRule = lipgloss.NewStyle()
-	// tabScope is the skill the tabs belong to. It is a title and not a tab: accent, bold, no
-	// fill, so it never reads as another thing to switch to.
+	// tabScope is the skill the tabs belong to, and the last segment of the path: the loud end of
+	// a breadcrumb is not a place the keys go, so it is bold text and not accent.
 	tabScope = lipgloss.NewStyle()
-	// The build in hand, parked at the right edge of the bar: a filled name and a quiet number.
+	// The build in hand, parked at the right edge of the bar: a name, quietly.
 	brandName = lipgloss.NewStyle()
 	brandVer  = lipgloss.NewStyle()
-
-	// The pane's divider and its title. The divider is structure (border role) and stays a line
-	// whether or not the pane has the keys; the title is the loud half, and it is the only thing
-	// that turns accent when the keystrokes move into the pane.
-	seamLine  = lipgloss.NewStyle()
-	paneTitle = lipgloss.NewStyle()
-	// paneSeam is the divider while the PANE has the keys. Accent means "the keystrokes go
-	// here", and there are exactly two places they can go — the table (cursor mark, focused
-	// column head) and the pane (this seam). Nothing else may take the accent.
-	paneSeam = lipgloss.NewStyle()
 
 	// The footer is one band across the bottom: a background surface with its keys bold and its
 	// actions soft, and a help chip at the right edge. footSeq is that background as a raw escape,
@@ -87,7 +75,9 @@ var (
 	helpChip = lipgloss.NewStyle()
 	// statValue is a number or a path in the footer: present, never loud.
 	statValue = lipgloss.NewStyle()
-	footSeq   string
+	// regionLabel is the footer's name for the region that has the keys.
+	regionLabel = lipgloss.NewStyle()
+	footSeq     string
 
 	// badgeWarn has no width on purpose: colDupe is a 4-cell column style, and wrapping a
 	// sentence in it folds the header one character per line.
@@ -129,7 +119,6 @@ func applyStyles(p theme.Palette) {
 	styleCur = lipgloss.NewStyle().Background(p.Color(p.Sel))
 	selSeq = escapeOf(styleCur)
 	cursorMark = lipgloss.NewStyle().Foreground(p.Color(p.Accent)).Bold(true)
-	selMark = lipgloss.NewStyle().Foreground(p.Color(p.Accent))
 
 	statusOk = lipgloss.NewStyle().Foreground(p.Color(p.OK))
 	statusBad = lipgloss.NewStyle().Foreground(p.Color(p.Err))
@@ -140,22 +129,18 @@ func applyStyles(p theme.Palette) {
 	// warning.
 	activityTool = lipgloss.NewStyle().Foreground(p.Color(p.Accent2))
 
-	headerFocus = lipgloss.NewStyle().Bold(true).Underline(true).Foreground(p.Color(p.Accent))
-	headerSort = lipgloss.NewStyle().Underline(true).Foreground(p.Color(p.Text))
-	headerGroup = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Text))
-	tabActive = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Text)).Background(p.Color(p.Sel))
-	tabIdle = lipgloss.NewStyle().Foreground(p.Color(p.Muted))
-	tabSep = lipgloss.NewStyle().Foreground(p.Color(p.Line))
+	// The focused region says so in the accent, and nothing else on the screen may: a second
+	// region in the accent is a second answer to "where are the keys", and the block in front of
+	// the name is a left edge — the one place a frame can point at an area instead of a row.
+	regionOn = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Accent))
+	regionOff = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Faint))
+	blockMark = lipgloss.NewStyle().Foreground(p.Color(p.Accent))
+	stepHere = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Text))
 	tabRule = lipgloss.NewStyle().Foreground(p.Color(p.Line))
-	tabScope = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Accent))
-	// The brand is the one cell on the screen that is filled with the accent instead of text on
-	// it: a name, not a cue, so it takes the accent for identity and never for focus.
-	brandName = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.BG)).Background(p.Color(p.Accent))
+	tabScope = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Text))
+	// The build is a signature on the frame, not a cue: quiet name, quieter number.
+	brandName = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Muted))
 	brandVer = lipgloss.NewStyle().Foreground(p.Color(p.Faint))
-	// The divider is a line, not a label: border role when the table has the keys, accent when the
-	// pane does — the one cue that says which of the two the keystrokes are going into.
-	seamLine = lipgloss.NewStyle().Foreground(p.Color(p.Line))
-	paneTitle = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Text))
 	footBar = lipgloss.NewStyle().Background(p.Color(p.Sel))
 	footSeq = escapeOf(footBar)
 	footKey = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Text))
@@ -164,10 +149,9 @@ func applyStyles(p theme.Palette) {
 	// faint role, text from the palette's own background — the two roles that are furthest apart.
 	helpChip = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.BG)).Background(p.Color(p.Faint))
 	statValue = lipgloss.NewStyle().Foreground(p.Color(p.Muted))
-	// The pane's seam only becomes the accent while the pane has the keys: a frame that colours
-	// both halves of a split at once has not said where you are.
-	paneSeam = lipgloss.NewStyle().Foreground(p.Color(p.Accent))
-	styleGroup = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Text))
+	// regionLabel is the status row's name for the region that has the keys: the same name the
+	// frame's accent is pointing at, said in words.
+	regionLabel = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Text))
 	badgeWarn = lipgloss.NewStyle().Foreground(p.Color(p.Warn))
 
 	colCases = lipgloss.NewStyle().Foreground(p.Color(p.Text))

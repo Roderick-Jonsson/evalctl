@@ -21,18 +21,49 @@ import (
 // labels in both splits, and roughly 60/40 between them. It is a warning line, not a blocker — a
 // set of nine positives and one negative is a bad set, not an invalid one.
 
+// setRegionName is the split in the register every region uses. The pane on the section screen, the
+// workbench's right column and this step are all the same set, so they all call it the same thing —
+// a name that changes shape between two screens is a name you have to translate.
+func setRegionName(train bool) string {
+	if train {
+		return "TRAIN SET"
+	}
+	return "VALIDATION SET"
+}
+
+// setRegionWord is the same set in running text: the status row names the region the keys are in,
+// and it names it in lower case because it is a sentence and not a heading.
+func setRegionWord(train bool) string {
+	if train {
+		return "train set"
+	}
+	return "validation set"
+}
+
+// setRegionLead is the rule that set works under, one line under its name.
+func setRegionLead(train bool) string {
+	if train {
+		return "the queries the wording may learn from"
+	}
+	return "the queries that judge the wording, never shape it"
+}
+
 func (m *Model) setBody(h int) []string {
 	m.syncSetForm()
 	f := m.flow
 	train := f.sec == secIteration
-	title := "train set — the queries the wording may learn from"
-	if !train {
-		title = "validation set — the queries that judge the wording, never shape it"
-	}
+	ruled := "  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4))))
+	// The set has the keys until the caret goes into the fields under it, and then it does not:
+	// one region at a time, and the name says which.
 	lines := []string{
 		"",
-		"  " + titleStyle.Render(title),
-		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4)))),
+		regionHead(m.width, setRegionName(train), "", !m.formActive()),
+		ruled,
+	}
+	// The rule closes the head and the sentence under it explains the set, the order the frame itself
+	// uses for the bar, its rule and the line beneath: one pattern, every region.
+	for _, line := range wrapPlain(setRegionLead(train), max(10, min(96, m.width-4))) {
+		lines = append(lines, "  "+dimStyle.Render(line))
 	}
 	// The footer is bottom-anchored: the counts and the one warning are the screen's standing
 	// advice, and they must not scroll away with the table.
@@ -68,9 +99,10 @@ func (m *Model) setBody(h int) []string {
 		return fitRows(append(lines, foot...), h)
 	}
 	f.clampSet(room)
-	lines = append(lines, queryHeader(queryCols(m.width), true))
+	lines = append(lines, queryHeader(queryCols(m.width)))
 	for i := f.top; i < len(f.rows) && len(lines) < 2+room; i++ {
-		lines = append(lines, queryRow(f.rows[i], queryCols(m.width), true, i == f.sel))
+		on := !m.formActive() && i == f.sel
+		lines = append(lines, queryRow(f.rows[i], queryCols(m.width), on, on))
 	}
 	// The table keeps its height so the fields do not jump when a short set is edited — but it never
 	// takes a row the fields or the footer need.
@@ -119,11 +151,11 @@ func queryCols(w int) queryColumns {
 	return queryColumns{id: id, trig: trig, query: max(12, rest)}
 }
 
-func queryHeader(c queryColumns, focused bool) string {
+// queryHeader is the table's column head. It is quiet whether or not the table has the keys: the
+// region's name above it already says where the keystrokes are, and a second accented thing on the
+// same table is a second cursor.
+func queryHeader(c queryColumns) string {
 	style := dimStyle
-	if focused {
-		style = headerFocus
-	}
 	line := "  " + style.Render(fitTo("ID", c.id)) + "  " + style.Render(fitTo("TRIGGER", c.trig)) +
 		"  " + style.Render(fitTo("QUERY", c.query))
 	if c.why > 0 {
@@ -405,7 +437,8 @@ func (m *Model) setPane(w, h int) []string {
 		dimStyle.Render(padCell("TRIGGER", trigW, false)) + " " +
 		dimStyle.Render(padCell("RESULT", resW, false)) + "  " +
 		dimStyle.Render(padCell("QUERY", queryW, false))
-	lines := []string{"", m.quadTitle(w, "TRAIN SET", pluralOf(len(f.rows), "query", "queries")), head}
+	lines := []string{"", regionHead(w, setRegionName(true), pluralOf(len(f.rows), "query", "queries"),
+		f.focus == focusSet && !m.formActive()), head}
 
 	facts := wrapPlain(m.setFacts(true), max(20, w-6))
 	form := m.inlineForm()
@@ -423,7 +456,11 @@ func (m *Model) setPane(w, h int) []string {
 	}
 	if form != nil {
 		lines = append(lines, dimStyle.Render("  "+strings.Repeat(glyphs.Rule, max(8, w-4))))
-		lines = append(lines, form.body(w, formH)...)
+		// The fields are drawn two cells inside the pane, like every other line in it, and the
+		// width they are told to be is the width they are drawn at: syncSetForm re-seeds a form
+		// whose width does not match the pane's, and a form re-seeded on every frame is a caret
+		// that is thrown away between two keystrokes.
+		lines = append(lines, form.body(w-2, formH)...)
 	}
 	for i, line := range facts {
 		if i == 1 && len(lines) >= h {

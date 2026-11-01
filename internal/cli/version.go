@@ -41,6 +41,10 @@ func runVersion(args []string) int {
 	if built == "" {
 		built = "(unknown)"
 	}
+	if t, ok := info.Built(); ok {
+		// The header shows this clock; the record keeps UTC.
+		built += " (" + t.Format("15:04") + " local)"
+	}
 	fmt.Printf("  built       %s\n", built)
 	fmt.Printf("  from        %s\n", versionSource(info.Source))
 	fmt.Printf("  go          %s\n", info.GoVersion)

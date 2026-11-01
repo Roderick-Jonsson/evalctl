@@ -31,9 +31,12 @@ func init() { applyTheme(theme.Current()) }
 // applyTheme rebuilds the table from a palette.
 func applyTheme(p theme.Palette) {
 	// Dim is a colour, not Faint(true): SGR 2 is dropped by some terminals, and a hint that is
-	// styled with nothing is a hint at full brightness.
-	styleDim = lipgloss.NewStyle().Foreground(p.Color(p.Muted))
-	styleHead = lipgloss.NewStyle().Bold(true).Underline(true).Foreground(p.Color(p.Text))
+	// styled with nothing is a hint at full brightness. It is the same role the TUI's dim text
+	// takes, so the two surfaces' quiet words are the same shade of quiet.
+	styleDim = lipgloss.NewStyle().Foreground(p.Color(p.Faint))
+	// A column head is the quiet register in both surfaces — the TUI's tables and these share the
+	// role, not just the idea, so `evalctl ls` and the workbench agree on what a head looks like.
+	styleHead = lipgloss.NewStyle().Foreground(p.Color(p.Faint))
 	// yes/no is a property of a row (should the skill load?), not a verdict: a "no" row is a valid
 	// negative test. Both read as text, so green stays "passed" and red stays "failed".
 	styleYes = lipgloss.NewStyle().Foreground(p.Color(p.Text))
@@ -129,25 +132,57 @@ func runTheme(args []string) int {
 // on the thing it is for and not on a swatch alone.
 func themeSample(w io.Writer, p theme.Palette) {
 	skill := lipgloss.NewStyle().Foreground(p.Color(p.Accent)).Bold(true).Width(20)
-	id := lipgloss.NewStyle().Foreground(p.Color(p.Faint))
+	id := lipgloss.NewStyle().Foreground(p.Color(p.Faint)).Width(4)
 	slug := lipgloss.NewStyle().Foreground(p.Color(p.Text)).Width(24)
 	split := lipgloss.NewStyle().Foreground(p.Color(p.Muted)).Width(11)
 	yes := lipgloss.NewStyle().Foreground(p.Color(p.OK)).Width(4)
 	no := lipgloss.NewStyle().Foreground(p.Color(p.Err)).Width(4)
 	dupe := lipgloss.NewStyle().Foreground(p.Color(p.Warn)).Width(4)
-	frame := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(p.Color(p.Border))
+	frame := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(p.Color(p.Border)).
+		MarginLeft(2)
+	// The frame's own focus marks, drawn as the screens draw them: the block and the accent on the
+	// region that has the keys, the arrow on the row the cursor is on, and that row on the selection
+	// colour. A palette judged on a table without them has not been judged on the screen's cue.
+	focus := lipgloss.NewStyle().Foreground(p.Color(p.Accent))
+	quiet := lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Faint))
+	cursor := lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Accent))
 
-	fmt.Fprintln(w, styleHead.Render(fmt.Sprintf("%-20s %-4s %-24s %-11s %-4s %-4s",
+	// One row, one shape: the cursor's two cells, then the columns every row below is measured
+	// against. The band is painted over the finished line, so the cells keep their own colours.
+	row := func(mark, name, idn, slugName, spl, verdict, dup string) string {
+		return mark + skill.Render(name) + " " + id.Render(idn) + " " + slug.Render(slugName) + " " +
+			split.Render(spl) + " " + verdict + " " + dupe.Render(dup)
+	}
+
+	fmt.Fprintf(w, "%s   %s\n", focus.Render("▌ TRAIN SET"), quiet.Render("ITERATIONS"))
+	fmt.Fprintln(w, styleHead.Render(fmt.Sprintf("  %-20s %-4s %-24s %-11s %-4s %-4s",
 		"SKILL", "ID", "SLUG", "SPLIT", "ASR", "DUP")))
 	fmt.Fprintln(w, styleGroup.Render("▾ slide-builder"))
-	fmt.Fprintf(w, "%s %s %s %s %s %s\n", skill.Render("slide-builder"), id.Render("3"),
-		slug.Render("dense-argument-slide"), split.Render("train"), yes.Render("✓"), dupe.Render(""))
-	fmt.Fprintf(w, "%s %s %s %s %s %s\n", skill.Render("slide-builder"), id.Render("4"),
-		slug.Render("no-bullet-wall"), split.Render("holdout"), no.Render("✗"), dupe.Render("dup"))
-	fmt.Fprintf(w, "%s %s %s %s %s %s\n", skill.Render("slide-critique"), id.Render("12"),
-		slug.Render("contrast-check"), split.Render("train"), yes.Render("✓"), dupe.Render(""))
+	banded := bandRow(lipgloss.NewStyle().Background(p.Color(p.Sel)))
+	fmt.Fprintln(w, banded(row(cursor.Render("▶ "), "slide-builder", "3", "dense-argument-slide",
+		"train", yes.Render("✓"), "")))
+	fmt.Fprintln(w, row("  ", "slide-builder", "4", "no-bullet-wall", "holdout", no.Render("✗"), "dup"))
+	fmt.Fprintln(w, row("  ", "slide-critique", "12", "contrast-check", "train", yes.Render("✓"), ""))
 	fmt.Fprintln(w, frame.Render("run 7 · 6/9 passed · report.md"))
 	fmt.Fprintf(w, "%s  %s  %s\n", styleWarn.Render("warn  tool calls"), styleErr.Render("err  failures"),
 		styleDim.Render("muted  ids, splits, hints"))
 	fmt.Fprintf(w, "%s\n", styleGroup.Render("▸ group header"))
+}
+
+// bandRow paints a finished row with a background, re-opening the fill after every reset Lip Gloss
+// writes at the end of a styled cell: wrapping the line alone leaves the fill on the gaps between
+// columns and nowhere else. It is the CLI's copy of the TUI's `selected`, for the one row in the
+// sample that has the cursor on it.
+func bandRow(st lipgloss.Style) func(string) string {
+	seq := ""
+	out := st.Render("x")
+	if i := strings.IndexByte(out, 'x'); i > 0 {
+		seq = out[:i]
+	}
+	if seq == "" {
+		return func(line string) string { return line }
+	}
+	return func(line string) string {
+		return seq + strings.ReplaceAll(line, "\x1b[0m", "\x1b[0m"+seq) + "\x1b[0m"
+	}
 }

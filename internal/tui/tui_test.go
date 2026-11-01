@@ -69,14 +69,15 @@ func write(t *testing.T, path, body string) {
 func stripMarks(s string) string {
 	var out strings.Builder
 	for i := 0; i < len(s); i++ {
-		if s[i] == 0x1b {
-			for i < len(s) && !(s[i] >= 'a' && s[i] <= 'z') && s[i] != 'm' {
-				i++
-			}
-			i++
+		if s[i] != 0x1b {
+			out.WriteByte(s[i])
 			continue
 		}
-		out.WriteByte(s[i])
+		// Skip to the sequence's final byte; the loop's own step then lands on the first character
+		// of the text, which used to be thrown away with it.
+		for i < len(s) && s[i] != 'm' {
+			i++
+		}
 	}
 	return out.String()
 }
@@ -210,7 +211,7 @@ func TestTheSectionScreenShowsTheSetThatSectionWorks(t *testing.T) {
 		t.Fatalf("focus = %d, want the list: the screen opens on the choice", m.sections.focus)
 	}
 	pane := func() string { return stripMarks(strings.Join(m.sectionsBody(m.bodyHeight()), "\n")) }
-	if got := pane(); !strings.Contains(got, "train set") || !strings.Contains(got, "build me slides from this outline") {
+	if got := pane(); !strings.Contains(got, setRegionName(true)) || !strings.Contains(got, "build me slides from this outline") {
 		t.Fatalf("the pane must show the train set beside iteration:\n%s", got)
 	}
 	press(m, "j") // generalization
@@ -220,7 +221,7 @@ func TestTheSectionScreenShowsTheSetThatSectionWorks(t *testing.T) {
 	if len(m.sections.rows) != 2 || m.sections.rows[0].Split != store.SplitValidation {
 		t.Fatalf("rows = %+v, want the validation split", m.sections.rows)
 	}
-	if got := pane(); !strings.Contains(got, "validation set") || !strings.Contains(got, "turn PO-RevB into a deck") {
+	if got := pane(); !strings.Contains(got, setRegionName(false)) || !strings.Contains(got, "turn PO-RevB into a deck") {
 		t.Fatalf("the pane must follow the cursor onto the validation set:\n%s", got)
 	}
 }
@@ -644,6 +645,22 @@ func TestTheBarIsAPathNotASentence(t *testing.T) {
 	m.width = 60
 	if got := stripMarks(strings.Split(m.View(), "\n")[0]); strings.Contains(got, "evalctl v") == false {
 		t.Fatalf("the build left the bar:\n%s", got)
+	}
+}
+
+// TestTheCornerNamesTheBuild: which binary is on screen is a fact of the frame, not of `evalctl
+// version` in another window — a stale bin/ looks exactly like a fresh one otherwise.
+func TestTheCornerNamesTheBuild(t *testing.T) {
+	m, _, _ := fixture(t)
+	m.ver, m.built = "v0.8.0+", "11:06"
+	if got := stripMarks(strings.Split(m.View(), "\n")[0]); !strings.Contains(got, "v0.8.0+ · 11:06") {
+		t.Fatalf("the build time is not in the corner:\n%s", got)
+	}
+	// An unstamped binary says nothing rather than a time it does not have.
+	m.built = ""
+	got := stripMarks(strings.Split(m.View(), "\n")[0])
+	if strings.Contains(got, "·") || !strings.Contains(got, "evalctl v0.8.0+") {
+		t.Fatalf("an unstamped build grew a corner it cannot fill:\n%s", got)
 	}
 }
 

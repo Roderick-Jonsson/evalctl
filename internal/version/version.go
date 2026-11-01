@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"time"
 )
 
 // Version is the declared version of the tool: bump it when the runner, the store rules, the
@@ -81,6 +82,31 @@ func (i Info) Short() string {
 		return "v" + i.Version + "+"
 	}
 	return "v" + i.Version
+}
+
+// Built is the build's own clock, and only the build's: the stamp is written by the Makefile as
+// RFC3339 in UTC, because that is what a record should be. A binary built without ldflags carries
+// the commit's time in BuiltAt instead, and showing that as a build time is worse than showing
+// nothing — it is how a stale binary looks fresh.
+func (i Info) Built() (time.Time, bool) {
+	if i.Source != "ldflags" || strings.TrimSpace(i.BuiltAt) == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, i.BuiltAt)
+	if err != nil {
+		return time.Time{}, false
+	}
+	// The record stays UTC; the corner of a header wants the clock of the person reading it.
+	return t.Local(), true
+}
+
+// Clock is the build time in the few cells a header corner has: "11:06", local. Empty means the
+// binary was never stamped, and the corner then says nothing rather than a wrong time.
+func (i Info) Clock() string {
+	if t, ok := i.Built(); ok {
+		return t.Format("15:04")
+	}
+	return ""
 }
 
 // String is the one-line identity used in reports: "0.5.0 (2622cb0, dirty)".
