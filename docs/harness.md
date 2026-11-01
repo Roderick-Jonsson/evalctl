@@ -36,9 +36,10 @@ Two consequences worth naming, because they are rules, not accidents:
   two workspaces hold it, `evalctl` refuses to guess and asks for `<skill>@N`. `evalctl runs` lists
   the workspace in its own column.
 - **The produced tree is `outputs/`.** Everything the agent wrote is under the arm's `outputs/`
-  dir; the harness's own evidence (stream, timing, changes, grading) sits beside it. `changes.json`,
-  containment checks, `promote` and `references` all read `outputs/`, so "what the run made" is
-  always exactly one directory.
+  dir; the harness's own evidence (stream, timing, changes, grading) sits beside it, and the judge's
+  own call (`judge-stream.jsonl`, `judge-stderr.txt`) with it. `changes.json`, containment checks,
+  `promote` and `references` all read `outputs/`, so "what the run made" is always exactly one
+  directory.
 
 One `evals/evals.json` per stage skill, in the agentskills.io format: every case is
 `id`, `slug`, `prompt`, `expected_output`, `files`, and — once a run has shown what good looks
@@ -58,8 +59,9 @@ per the guide they are added after the first graded iteration, so a case without
 whose shape is not known yet, not a case with an empty list. `evalctl` treats them as part of the
 format rather than a stray key: `evalctl skills` counts them per skill (`ASR 2/3`), the case view
 lists them, `evalctl edit … --assertions` replaces them (one per line), and a search reads them.
-The runner does not grade them yet — `grading.json` still carries no verdicts, so a run is
-graded by hand into `feedback.json` (see *Grading and iterating*).
+`evalctl grade` has the judge grade them and writes one verdict per assertion into each arm's
+`grading.json` (see *Grading and iterating*). A run alone leaves `assertion_results` empty and says
+in its note that the arm is ungraded.
 
 > The four stage skills are still drafts. The runner, the profiles and the cases are ready; the
 > first real iteration should wait until a skill is out of draft, otherwise the delta measures a
@@ -209,6 +211,9 @@ evalctl run --dry-run                       # plan + exact hermes commands, writ
 evalctl run --skill source-research         # one stage, next free iteration-N
 evalctl run --skill learning-path --case 1,3
 evalctl run --skill slide-builder --iteration 2 --resume    # add cases to an iteration
+evalctl grade --skill source-research       # judge the newest iteration (one call per arm)
+evalctl run --skill source-research --grade # run, then grade in one command
+evalctl lab --skill source-research --lane output   # iterations, rates, delta, the next move
 evalctl runs                                # iterations on disk, with pass rates
 evalctl runs --skill slide-builder          # that skill's output runs + the trigger runs that measured it
 ```
@@ -257,11 +262,27 @@ case's assertions does not make the runner grade them, so grading stays manual.
 
 ## Grading and iterating
 
-Per arm: `grading.json` (mechanical checks, the loaded skills and the final response — the
-assertions are read out of `evals.json` while you grade), then `benchmark.json` with
-per-configuration pass rate / time / tokens and the delta — a pass rate only exists once
-`feedback.json` has verdicts — then `feedback.json` with your own review notes per case. The loop: grade → read the delta and the
-transcripts → change the skill → rerun into `iteration-<N+1>/`.
+Per arm: `grading.json` (mechanical checks, the loaded skills, the final response, and — after
+grading — one verdict per assertion with its evidence plus a `summary`), then `benchmark.json` with
+per-configuration pass rate / time / tokens and the delta, then `feedback.json` with your own review
+notes per case. The loop: run → grade → read the failures, the delta and the transcripts → change
+the skill → rerun into `iteration-<N+1>/` → grade → compare; stop when it is satisfactory or flat.
+
+**Grading.** `evalctl grade --skill S [--iteration N]` runs one judge call per arm of the iteration
+(`--iteration` defaults to the newest; `--force` re-grades arms that already have verdicts). The
+judge is a Hermes call in `eval-vcc-without` — no skill installed, no pinned cwd, memories wiped —
+launched with `--in <arm dir>`, so it can read `outputs/`. Its prompt carries the case's prompt, the
+expected output, the declared assertions and the arm's final reply, and it never says which arm it
+is reading: the comparison is blind. It must answer with one JSON object
+(`assertion_results: [{text, passed, evidence}]`); a missing verdict is a FAIL with the reason, never
+a default pass, and the summary is recounted from the verdicts rather than trusted from the judge.
+One failed judge call leaves that arm ungraded and says so — a guessed verdict is worse than a
+missing one.
+
+**Patterns.** `report.md` and the lab read the whole iteration's verdicts per assertion text:
+passes with and without the skill (no signal — remove or replace it), fails in both arms (broken or
+too hard), passes with and fails without (the skill's contribution), passes without and fails with
+(a regression). The guide's stddev is over cases and only printed above one case.
 
 Mechanical checks (files exist, Subject line, citation format, containment, manifest/audio
 durations) should come from the skills' own `scripts/ verify` and small shell checks rather than an

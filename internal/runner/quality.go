@@ -169,23 +169,7 @@ func (r *Runner) runSkillIteration(ctx context.Context, cases []Case, o Options)
 	if err != nil {
 		return err
 	}
-	bench := BenchmarkOf(collected, iteration)
-	if err := writeJSONFile(filepath.Join(iterDir, "benchmark.json"), bench); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(iterDir, "report.md"), []byte(Report(collected, bench, skill, iteration)), 0o644); err != nil {
-		return err
-	}
-
-	feedbackPath := filepath.Join(iterDir, "feedback.json")
-	feedback := map[string]string{}
-	_ = readJSONFile(feedbackPath, &feedback)
-	for _, run := range collected {
-		if _, ok := feedback[run.Slug]; !ok {
-			feedback[run.Slug] = ""
-		}
-	}
-	if err := writeJSONFile(feedbackPath, feedback); err != nil {
+	if err := r.RefreshIteration(skill, iteration); err != nil {
 		return err
 	}
 
@@ -234,6 +218,24 @@ func (r *Runner) runSkillIteration(ctx context.Context, cases []Case, o Options)
 		msg += fmt.Sprintf(" — %d run(s) did not exit 0, check stderr.txt in those arm directories", failures)
 	}
 	r.emit(Event{Kind: EventDone, Lane: LaneOutput, Case: fmt.Sprintf("%s@iteration-%d", skill, iteration), Message: msg})
+	if o.Grade {
+		return r.gradeAfterRun(ctx, skill, iteration, o)
+	}
+	return nil
+}
+
+// gradeAfterRun is --grade: the same judge the `grade` command runs, on the iteration that was
+// just written. A grading failure does not throw the run away — the runs are on disk and the note
+// in grading.json says they are ungraded.
+func (r *Runner) gradeAfterRun(ctx context.Context, skill string, iteration int, o Options) error {
+	out, err := r.GradeIteration(ctx, skill, iteration, GradeOptions{Model: o.Model, Budget: DefaultGradeBudget})
+	if err != nil {
+		r.message("%s: run kept, grading failed: %v", skill, err)
+		return nil
+	}
+	if out.Graded == 0 {
+		r.message("%s: nothing to grade — no case in iteration %d declares assertions", skill, iteration)
+	}
 	return nil
 }
 

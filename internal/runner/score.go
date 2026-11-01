@@ -2,6 +2,7 @@ package runner
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -19,6 +20,7 @@ type CollectedRun struct {
 	SkillTreeSHA   string               `json:"skill_tree_sha,omitempty"`
 	Prompt         string               `json:"prompt"`
 	ExpectedOutput string               `json:"expected_output"`
+	Assertions     []string             `json:"assertions,omitempty"`
 	Arms           map[string]ArmResult `json:"arms"`
 }
 
@@ -53,7 +55,7 @@ func (r *Runner) CollectRuns(iterDir, skill string) ([]CollectedRun, error) {
 			continue
 		}
 		record := CollectedRun{Skill: c.Skill, ID: c.ID, Slug: c.Slug, Prompt: c.Prompt,
-			ExpectedOutput: c.ExpectedOutput, Arms: map[string]ArmResult{}}
+			ExpectedOutput: c.ExpectedOutput, Assertions: c.Assertions, Arms: map[string]ArmResult{}}
 		for _, arm := range AllArms {
 			armDir := filepath.Join(iterDir, c.Slug, arm)
 			if info, err := os.Stat(armDir); err != nil || !info.IsDir() {
@@ -73,18 +75,39 @@ type Stat struct {
 	Values []int64 `json:"values"`
 }
 
-// ArmSummary is one arm's aggregate across the iteration.
-type ArmSummary struct {
-	Cases       int  `json:"cases"`
-	FailedRuns  int  `json:"failed_runs"`
-	DurationMS  Stat `json:"duration_ms"`
-	TotalTokens Stat `json:"total_tokens"`
+// Rate is a pass rate with its per-case values: the guide's mean + stddev, computed over cases.
+// The values are kept because two iterations with equal means can differ in consistency, and the
+// guide reads that second fact off the stddev.
+type Rate struct {
+	Mean   float64   `json:"mean"`
+	Stddev float64   `json:"stddev,omitempty"`
+	Values []float64 `json:"values,omitempty"`
 }
 
-// Delta is with-skill minus without-skill, the number the comparison exists for.
+// GradeTally is the raw arithmetic behind one arm's rate: assertions judged, of which passed.
+// A rate whose denominator is not printed is a number nobody can check.
+type GradeTally struct {
+	Judged int `json:"judged"`
+	Passed int `json:"passed"`
+	Cases  int `json:"cases"`
+}
+
+// ArmSummary is one arm's aggregate across the iteration.
+type ArmSummary struct {
+	Cases       int         `json:"cases"`
+	FailedRuns  int         `json:"failed_runs"`
+	DurationMS  Stat        `json:"duration_ms"`
+	TotalTokens Stat        `json:"total_tokens"`
+	Graded      *GradeTally `json:"graded,omitempty"`
+	PassRate    *Rate       `json:"pass_rate,omitempty"`
+}
+
+// Delta is with-skill minus without-skill, the number the comparison exists for. PassRate is in
+// percentage points of the same 0..1 scale (0.25 means +25 points), null when either arm is ungraded.
 type Delta struct {
-	DurationMS  int64 `json:"duration_ms"`
-	TotalTokens int64 `json:"total_tokens"`
+	DurationMS  int64    `json:"duration_ms"`
+	TotalTokens int64    `json:"total_tokens"`
+	PassRate    *float64 `json:"pass_rate,omitempty"`
 }
 
 // Benchmark is benchmark.json.
@@ -102,35 +125,53 @@ func BenchmarkOf(runs []CollectedRun, iteration int) Benchmark {
 		Iteration:  iteration,
 		Generated:  timestamp(),
 		RunSummary: map[string]ArmSummary{},
-		Assertions: "none yet — pass_rate unavailable until assertions are added to evals.json",
+	}
+	declared, gradedArms, totalArms := 0, 0, 0
+	for _, run := range runs {
+		declared += len(run.Assertions)
 	}
 	for _, arm := range AllArms {
-		var durations, tokens []int64
+		var rates []float64
+		var durationsMS, tokensI []int64
 		failed := 0
+		graded := GradeTally{}
 		for _, run := range runs {
 			data, ok := run.Arms[arm]
 			if !ok || !timingPresent(data.Timing) {
 				continue
 			}
-			durations = append(durations, data.Timing.DurationMS)
+			durationsMS = append(durationsMS, data.Timing.DurationMS)
 			if data.Timing.TotalTokens != nil {
-				tokens = append(tokens, int64(*data.Timing.TotalTokens))
+				tokensI = append(tokensI, int64(*data.Timing.TotalTokens))
 			} else {
-				tokens = append(tokens, 0)
+				tokensI = append(tokensI, 0)
 			}
 			if data.Timing.ExitCode != nil && *data.Timing.ExitCode != 0 {
 				failed++
 			}
+			if s := data.Grading.Summary; s != nil && s.Total > 0 {
+				rates = append(rates, s.PassRate)
+				graded.Judged += s.Total
+				graded.Passed += s.Passed
+				graded.Cases++
+			}
 		}
-		if len(durations) == 0 {
+		if len(durationsMS) == 0 {
 			continue
 		}
-		bench.RunSummary[arm] = ArmSummary{
-			Cases:       len(durations),
+		totalArms++
+		summary := ArmSummary{
+			Cases:       len(durationsMS),
 			FailedRuns:  failed,
-			DurationMS:  Stat{Mean: mean(durations), Values: durations},
-			TotalTokens: Stat{Mean: mean(tokens), Values: tokens},
+			DurationMS:  Stat{Mean: mean(durationsMS), Values: durationsMS},
+			TotalTokens: Stat{Mean: mean(tokensI), Values: tokensI},
 		}
+		if graded.Cases > 0 {
+			summary.Graded = &graded
+			summary.PassRate = &Rate{Mean: meanFloat(rates), Stddev: stddevFloat(rates), Values: rates}
+			gradedArms++
+		}
+		bench.RunSummary[arm] = summary
 	}
 	if with, ok := bench.RunSummary[ArmWith]; ok {
 		if without, ok := bench.RunSummary[ArmWithout]; ok {
@@ -138,9 +179,48 @@ func BenchmarkOf(runs []CollectedRun, iteration int) Benchmark {
 				DurationMS:  with.DurationMS.Mean - without.DurationMS.Mean,
 				TotalTokens: with.TotalTokens.Mean - without.TotalTokens.Mean,
 			}
+			if with.PassRate != nil && without.PassRate != nil {
+				delta := with.PassRate.Mean - without.PassRate.Mean
+				bench.Delta.PassRate = &delta
+			}
 		}
 	}
+	switch {
+	case declared == 0:
+		bench.Assertions = "none yet — no case declares assertions, so there is no pass rate to compare"
+	case gradedArms == 0:
+		bench.Assertions = fmt.Sprintf("%d assertion(s) across %d case(s) — not graded yet", declared, len(runs))
+	default:
+		bench.Assertions = fmt.Sprintf("%d assertion(s) across %d case(s) — %d of %d arm(s) graded",
+			declared, len(runs), gradedArms, totalArms)
+	}
 	return bench
+}
+
+func meanFloat(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	var sum float64
+	for _, v := range values {
+		sum += v
+	}
+	return sum / float64(len(values))
+}
+
+// stddevFloat is the population standard deviation, and only meaningful above one value: the guide
+// says so, and a single case has no spread to report.
+func stddevFloat(values []float64) float64 {
+	if len(values) < 2 {
+		return 0
+	}
+	mean := meanFloat(values)
+	var sum float64
+	for _, v := range values {
+		d := v - mean
+		sum += d * d
+	}
+	return math.Sqrt(sum / float64(len(values)))
 }
 
 // timingPresent mirrors the old Python runner's truthiness test on timing.json: an arm directory without one
@@ -166,11 +246,10 @@ func Report(runs []CollectedRun, bench Benchmark, skill string, iteration int) s
 	fmt.Fprintf(&b, "# %s · eval iteration %d\n\n", skill, iteration)
 	fmt.Fprintf(&b, "Generated %s · %d case(s) · arms: with_skill / without_skill · evalctl %s\n\n",
 		bench.Generated, len(runs), version.Resolve())
-	b.WriteString("No assertions exist yet, so there is no pass rate. Read the expected output next to what " +
-		"each arm actually produced, then write your verdict into `feedback.json`.\n\n")
-	b.WriteString("## Timing\n\n")
-	b.WriteString("| Arm | Cases | Failed runs | Mean duration (s) | Mean tokens |\n")
-	b.WriteString("|---|---|---|---|---|\n")
+	fmt.Fprintf(&b, "Assertions: %s.\n\n", bench.Assertions)
+	b.WriteString("## Grading\n\n")
+	b.WriteString("| Arm | Assertions passed | Pass rate | Cases graded |\n")
+	b.WriteString("|---|---|---|---|\n")
 	arms := make([]string, 0, len(bench.RunSummary))
 	for arm := range bench.RunSummary {
 		arms = append(arms, arm)
@@ -181,6 +260,35 @@ func Report(runs []CollectedRun, bench Benchmark, skill string, iteration int) s
 		}
 		return arms[i] < arms[j]
 	})
+	anyGraded := false
+	for _, arm := range arms {
+		s := bench.RunSummary[arm]
+		if s.Graded == nil {
+			fmt.Fprintf(&b, "| %s | — | — | 0 |\n", arm)
+			continue
+		}
+		anyGraded = true
+		stddev := ""
+		if s.PassRate != nil && len(s.PassRate.Values) > 1 && s.PassRate.Stddev > 0 {
+			stddev = fmt.Sprintf(" ± %.2f", s.PassRate.Stddev)
+		}
+		rate := "—"
+		if s.PassRate != nil {
+			rate = fmt.Sprintf("%.0f%%%s", s.PassRate.Mean*100, stddev)
+		}
+		fmt.Fprintf(&b, "| %s | %d/%d | %s | %d |\n", arm, s.Graded.Passed, s.Graded.Judged, rate, s.Graded.Cases)
+	}
+	if bench.Delta != nil && bench.Delta.PassRate != nil {
+		fmt.Fprintf(&b, "\nDelta pass rate (with − without): %+.0f points\n", *bench.Delta.PassRate*100)
+	}
+	if !anyGraded {
+		b.WriteString("\nNo verdicts yet. Grade with `evalctl grade --skill " + skill +
+			" --iteration " + fmt.Sprint(iteration) + "`, or press g on the iteration screen.\n")
+	}
+
+	b.WriteString("\n## Timing\n\n")
+	b.WriteString("| Arm | Cases | Failed runs | Mean duration (s) | Mean tokens |\n")
+	b.WriteString("|---|---|---|---|---|\n")
 	for _, arm := range arms {
 		s := bench.RunSummary[arm]
 		fmt.Fprintf(&b, "| %s | %d | %d | %.1f | %s |\n", arm, s.Cases, s.FailedRuns,
@@ -193,6 +301,13 @@ func Report(runs []CollectedRun, bench Benchmark, skill string, iteration int) s
 		}
 		fmt.Fprintf(&b, "\nDelta (with − without): %s%.1fs, %s tokens\n", sign,
 			float64(bench.Delta.DurationMS)/1000, signedThousands(bench.Delta.TotalTokens))
+	}
+
+	if patterns := patternLines(runs); len(patterns) > 0 {
+		b.WriteString("\n## Patterns\n\n")
+		for _, line := range patterns {
+			b.WriteString(line + "\n")
+		}
 	}
 
 	for _, run := range runs {
@@ -222,6 +337,18 @@ func Report(runs []CollectedRun, bench Benchmark, skill string, iteration int) s
 				errorSuffix = ", error: " + *t.Error
 			}
 			fmt.Fprintf(&b, "### %s\n\n", arm)
+			if data.Grading.Summary != nil {
+				fmt.Fprintf(&b, "- assertions: %d/%d pass\n", data.Grading.Summary.Passed, data.Grading.Summary.Total)
+				for _, res := range data.Grading.AssertionResults {
+					mark := "FAIL"
+					if res.Passed {
+						mark = "PASS"
+					}
+					fmt.Fprintf(&b, "  - **%s** %s — %s\n", mark, res.Text, res.Evidence)
+				}
+			} else if note := data.Grading.Note; note != "" {
+				fmt.Fprintf(&b, "- assertions: %s\n", note)
+			}
 			fmt.Fprintf(&b, "- run: exit %s, %.1fs, %s tokens%s\n", exit, float64(t.DurationMS)/1000, tokens, errorSuffix)
 			fmt.Fprintf(&b, "- files changed: %d (new %d, modified %d, deleted %d)\n", data.Changes.Count,
 				len(data.Changes.New), len(data.Changes.Modified), len(data.Changes.Deleted))
@@ -277,6 +404,81 @@ func Report(runs []CollectedRun, bench Benchmark, skill string, iteration int) s
 		}
 	}
 	return b.String()
+}
+
+// patternLines is the guide's "Analyzing patterns", computed: the aggregates hide which assertions
+// are doing no work, which are broken, and which are the skill's actual contribution.
+func patternLines(runs []CollectedRun) []string {
+	type tally struct{ pass, total int }
+	with, without := map[string]*tally{}, map[string]*tally{}
+	texts := map[string]string{}
+	add := func(dst map[string]*tally, text string, passed bool) {
+		key := foldAssertion(text)
+		texts[key] = text
+		if dst[key] == nil {
+			dst[key] = &tally{}
+		}
+		dst[key].total++
+		if passed {
+			dst[key].pass++
+		}
+	}
+	for _, run := range runs {
+		for _, arm := range AllArms {
+			data, ok := run.Arms[arm]
+			if !ok || data.Grading.Summary == nil {
+				continue
+			}
+			for _, res := range data.Grading.AssertionResults {
+				if arm == ArmWith {
+					add(with, res.Text, res.Passed)
+				} else {
+					add(without, res.Text, res.Passed)
+				}
+			}
+		}
+	}
+	var dead, broken, value, regressed []string
+	keys := make([]string, 0, len(texts))
+	for key := range texts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		w, wo := with[key], without[key]
+		if w == nil || wo == nil || w.total == 0 || wo.total == 0 {
+			continue
+		}
+		switch {
+		case w.pass == w.total && wo.pass == wo.total:
+			dead = append(dead, texts[key])
+		case w.pass == 0 && wo.pass == 0:
+			broken = append(broken, texts[key])
+		case w.pass == w.total && wo.pass < wo.total:
+			value = append(value, texts[key])
+		case wo.pass == wo.total && w.pass < w.total:
+			regressed = append(regressed, texts[key])
+		}
+	}
+	var out []string
+	emit := func(label, hint string, items []string) {
+		if len(items) == 0 {
+			return
+		}
+		out = append(out, fmt.Sprintf("- **%s** — %s", label, hint))
+		for i, text := range items {
+			if i == 5 {
+				out = append(out, fmt.Sprintf("  - … and %d more", len(items)-5))
+				break
+			}
+			out = append(out, fmt.Sprintf("  - %s", text))
+		}
+	}
+	emit("no signal", "passes with and without the skill; it inflates both rates", dead)
+	emit("broken or too hard", "fails in both arms; fix the assertion or the case", broken)
+	emit("the skill's contribution", "passes with the skill and fails without it — say which instruction did it", value)
+	emit("regression", "passes without the skill and fails with it", regressed)
+	return out
 }
 
 func codeList(values map[string]int64, limit int) string {

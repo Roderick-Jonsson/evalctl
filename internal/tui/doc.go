@@ -6,6 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"evalctl/internal/markdown"
 )
 
 // The documents the loop reads: the train failures, a report, an activity log.
@@ -20,6 +22,24 @@ type docState struct {
 	lines []string
 	top   int
 	view  int // the body height of the last render, for the scroll arithmetic
+	// src is the document's markdown source, when it has one: report.md is written as markdown and
+	// is read as markdown, so the reader never asks anyone to read `## Output` and `| cell |`.
+	// lines are that source rendered at width; a resize re-renders rather than leaving a report
+	// laid out for the window the reader used to have.
+	src   string
+	width int // the pane width lines were rendered at; 0 until the first draw
+}
+
+// md renders src through glamour at the pane's width. It is idempotent, so a document is rendered
+// once per width and not once per frame: scrolling a report is reading, not re-typesetting.
+func (d *docState) md(w int) {
+	if d.src == "" || w <= 0 || w == d.width {
+		return
+	}
+	d.width = w
+	// One column short of the frame, like `evalctl report`: a table that fills the pane exactly is
+	// a table whose last cell touches the edge.
+	d.lines = markdown.Lines(d.src, max(markdown.MinWidth, w-1))
 }
 
 func (d *docState) body(h int) []string {

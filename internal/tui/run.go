@@ -28,6 +28,8 @@ const (
 	runTrain runKind = iota
 	runValidation
 	runHoldout
+	runQuality // the output lane's iteration: every case, both arms
+	runGrade   // the output lane's judge, over one finished iteration
 )
 
 func (k runKind) String() string {
@@ -36,6 +38,10 @@ func (k runKind) String() string {
 		return "validation run"
 	case runHoldout:
 		return "holdout run"
+	case runQuality:
+		return "output run"
+	case runGrade:
+		return "grading run"
 	}
 	return "training run"
 }
@@ -336,6 +342,19 @@ func (m *Model) finishRun() tea.Cmd {
 	m.run.live.done = true
 	m.run.live.cancel = nil
 	m.reload()
+	if m.run.kind == runQuality || m.run.kind == runGrade {
+		if m.run.live.err != nil {
+			m.setStatus(m.run.live.err.Error(), true)
+			return nil
+		}
+		if m.run.kind == runQuality {
+			m.run.live.summary = "iteration written — g grades it, tab ranks the iterations"
+		} else {
+			m.run.live.summary = "graded — the rates and the ranking are on the loop"
+		}
+		m.setStatus(m.run.live.summary, false)
+		return nil
+	}
 	if m.run.gen && m.flow != nil && m.flow.gen != nil {
 		g := m.flow.gen
 		if m.run.live.cancelled {
@@ -401,6 +420,13 @@ func (m *Model) leaveRun() tea.Cmd {
 	kind := m.run.kind
 	gen := m.run.gen
 	m.run = nil
+	if kind == runQuality || kind == runGrade {
+		if m.quality != nil {
+			m.quality.rank = false
+		}
+		m.mode = screenQuality
+		return nil
+	}
 	m.mode = screenFlow
 	switch {
 	case gen:

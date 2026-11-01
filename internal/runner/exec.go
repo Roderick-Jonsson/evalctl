@@ -44,23 +44,56 @@ type VerifyEntry struct {
 	Error     string         `json:"error,omitempty"`
 }
 
-// Grading is grading.json: mechanical checks plus the final response, no assertions yet.
+// Grading is grading.json: the mechanical checks, the final response, and — once the judge has run
+// — one verdict per assertion with the evidence it was decided on. The shape is the one
+// agentskills.io's evaluating-skills page prints: assertion_results plus a summary.
 type Grading struct {
-	AssertionResults []any  `json:"assertion_results"`
-	Summary          *any   `json:"summary"`
-	Note             string `json:"note"`
-	Checks           Checks `json:"checks"`
-	Response         string `json:"response"`
+	AssertionResults []AssertionResult `json:"assertion_results"`
+	Summary          *GradeSummary     `json:"summary"`
+	Note             string            `json:"note,omitempty"`
+	// Judge says which call produced the verdicts. A rate whose judge is unknown is not a
+	// measurement, and a re-grade by a different model is a different measurement.
+	Judge    *JudgeInfo `json:"judge,omitempty"`
+	Checks   Checks     `json:"checks"`
+	Response string     `json:"response"`
 }
 
-const gradingNote = "No assertions defined yet (agentskills.io: add them after the first graded " +
-	"iteration). Grade expected_output by hand or with an LLM judge, then record it in feedback.json."
+// AssertionResult is one declared assertion, graded. Evidence quotes the output; a PASS without
+// evidence is the judge's opinion, and the guide asks for the output's own words.
+type AssertionResult struct {
+	Text     string `json:"text"`
+	Passed   bool   `json:"passed"`
+	Evidence string `json:"evidence"`
+}
+
+// GradeSummary is the arithmetic the benchmark aggregates: passed/total, per arm.
+type GradeSummary struct {
+	Passed   int     `json:"passed"`
+	Failed   int     `json:"failed"`
+	Total    int     `json:"total"`
+	PassRate float64 `json:"pass_rate"`
+}
+
+// JudgeInfo records the call that graded an arm. The profile has no skill installed and the prompt
+// never names the arm, so the judge cannot know which side of the comparison it is reading.
+type JudgeInfo struct {
+	Profile string `json:"profile"`
+	Model   string `json:"model,omitempty"`
+	Started string `json:"started"`
+}
+
+const gradingNoteNoAssertions = "This case declares no assertions yet (agentskills.io: write them " +
+	"after the first run shows what good looks like). The expected output is what a human reads."
+
+const gradingNoteUngraded = "Assertions are declared but not graded yet — `evalctl grade --skill " +
+	"<skill> --iteration <N>` runs the judge, or press g on the iteration screen."
 
 // ArmResult is what one arm produced, as the report and the TUI read it.
 type ArmResult struct {
 	Timing   Timing  `json:"timing"`
 	Changes  Changes `json:"changes"`
 	Checks   Checks  `json:"checks"`
+	Grading  Grading `json:"grading"`
 	Response string  `json:"response"`
 	ArmDir   string  `json:"arm_dir"`
 }
@@ -256,12 +289,16 @@ loop:
 		Verify:       r.verifyWorkspaces(c.Skill, armDir, o),
 	}
 	response := truncateText(anyStringValue(result["text"]), 4000)
-	grading := Grading{AssertionResults: []any{}, Note: gradingNote, Checks: checks, Response: response}
+	note := gradingNoteNoAssertions
+	if len(c.Assertions) > 0 {
+		note = gradingNoteUngraded
+	}
+	grading := Grading{AssertionResults: []AssertionResult{}, Note: note, Checks: checks, Response: response}
 	if err := writeJSONFile(filepath.Join(armDir, "grading.json"), grading); err != nil {
 		return ArmResult{}, err
 	}
 
-	arm2 := ArmResult{Timing: timing, Changes: changes, Checks: checks, Response: response, ArmDir: armDir}
+	arm2 := ArmResult{Timing: timing, Changes: changes, Checks: checks, Grading: grading, Response: response, ArmDir: armDir}
 	r.emit(Event{Kind: EventArmDone, Arm: arm, Case: c.Slug, Message: armSummary(arm, arm2), Result: &arm2})
 	return arm2, nil
 }
@@ -292,6 +329,7 @@ func reloadArm(armDir string) ArmResult {
 	if err := readJSONFile(filepath.Join(armDir, "grading.json"), &grading); err == nil {
 		out.Checks = grading.Checks
 		out.Response = grading.Response
+		out.Grading = grading
 	}
 	return out
 }

@@ -30,7 +30,7 @@ var laneRows = []struct {
 	built              bool
 }{
 	{store.LaneTrigger, "trigger optimization", "does the right skill load? — tune the description until it does", true},
-	{store.LaneOutput, "output optimization", "does the skill produce the right thing? — not built yet", false},
+	{store.LaneOutput, "output optimization", "does the work come out right? — run both arms, grade, revise, rerun", true},
 }
 
 // The door: two selectors on the left, the one under the cursor explained on the right.
@@ -49,7 +49,7 @@ func (m *Model) laneBody(h int) []string {
 	return m.splitBody(h, listW, paneW, m.laneList(), m.lanePreview(paneW, h))
 }
 
-// laneListWidth is the list's column: wide enough for "output optimization  not built" and no wider.
+// laneListWidth is the list's column: wide enough for "output optimization  built" and no wider.
 // The pane is where the detail is, and a pane squeezed to pay for empty list cells explains nothing.
 func (m *Model) laneListWidth() int { return min(36, max(32, m.width/3)) }
 
@@ -100,14 +100,25 @@ func (m *Model) lanePreview(w, h int) []string {
 	// frame uses (path, rule, the line that says where you are), and the same line the list's own
 	// rule is drawn on.
 	d.rule()
-	if row.built {
-		d.lead("built · the description loop")
-	} else {
-		d.lead("not built yet")
-	}
+	d.lead("built · the output loop")
 	block()
 
-	if row.built {
+	if row.name == store.LaneOutput {
+		d.para("The other half of the question: with the skill loaded, does the work come out right? Every case runs twice — with the skill and without it — and the judge reads each arm's outputs against the case's assertions, PASS or FAIL with the evidence it saw.")
+		block()
+		d.card("The loop")
+		d.fact("run", "every case, both arms, into iteration-N/")
+		d.fact("grade", "one judge call per arm: assertions, evidence, pass rate")
+		d.fact("revise", "rewrite SKILL.md against the failed assertions and the human note")
+		d.fact("rerun", "iteration N+1, and rank it against the ones before")
+		block()
+		d.card("It writes")
+		d.fact("the set", "<skill>/evals/evals.json")
+		d.fact("the fixtures", "<skill>/evals/files/<slug>/")
+		d.fact("the runs", "<skill>-workspace/iteration-N/")
+		d.fact("the verdicts", "each arm's grading.json — never a guessed pass")
+		block()
+	} else {
 		d.para("A skill only helps if it gets loaded, and the description is the whole of the input — an agent decides from that one paragraph. This lane measures the wording, revises it on what the train set failed, and generalizes on a split no revision could read.")
 		block()
 		d.card("The two activities")
@@ -119,28 +130,14 @@ func (m *Model) lanePreview(w, h int) []string {
 		d.fact("wordings", "trigger/descriptions/<skill>.json")
 		d.fact("the winner", "SKILL.md — the frontmatter key, nothing else")
 		block()
-	} else {
-		d.para("The other half of the question: with the skill loaded, does the work come out right? Each case runs twice — with the skill and without it — and what came back is read against the case's expected output and its assertions.")
-		block()
-		d.card("What it will hold")
-		d.fact("cases", "the ask, and the fixture each one stages")
-		d.fact("assertions", "the checks a run is graded on")
-		d.fact("fixtures", "evals/files/<slug>/ — the inputs, never the answers")
-		d.fact("iterations", "the runs, their reports and their scores")
-		block()
-		d.para("Not built: the trigger loop came first, because a skill that never loads produces nothing worth grading.")
-		block()
 	}
 
 	// The action, reserved before anything above it is placed.
 	actDoc := &docWriter{w: w}
-	if row.built {
-		actDoc.action("enter", "pick the skill whose wording gets tuned")
+	if row.name == store.LaneOutput {
+		actDoc.action("enter", "pick the skill whose output gets graded")
 	} else {
-		actDoc.blank()
-		for _, line := range wrapPlain("not available yet — the trigger loop is the one that is built", actDoc.body()) {
-			actDoc.lines = append(actDoc.lines, "  "+dimStyle.Render(line))
-		}
+		actDoc.action("enter", "pick the skill whose wording gets tuned")
 	}
 	act := actDoc.lines
 	room := h - len(act)
@@ -190,10 +187,7 @@ func (m *Model) updateLane(msg tea.KeyMsg) tea.Cmd {
 	case "G", "end":
 		m.lanes.cursor = len(laneRows) - 1
 	case "enter":
-		if !laneRows[m.lanes.cursor].built {
-			m.setStatus("output optimization is not built yet — the trigger loop comes first", false)
-			return nil
-		}
+		m.lane = laneRows[m.lanes.cursor].name
 		m.mode = screenSkill
 		m.skills = skillState{}
 	}
@@ -228,8 +222,18 @@ type skillRow struct {
 	cands             int
 	applied           int
 	chars             int
-	sec               int // the section the loop opens in
-	step              int // the step inside it
+	// The output lane's row: the cases it declares, what the last iteration scored on each arm,
+	// and where the loop stands.
+	qCases   int
+	qAssert  int
+	qIters   int
+	qWith    string
+	qWithout string
+	qBest    int
+	qFail    int
+	qState   string
+	sec      int // the section the loop opens in
+	step     int // the step inside it
 }
 
 func (m *Model) skillNames() []string { return m.store.KnownSkills() }
@@ -266,6 +270,10 @@ func (m *Model) openSkill(name string) {
 // loadSkills fills the list. Each row needs the loop's own state, so this walks every skill's
 // ledger: four skills, one read each, and no measurement is ever recomputed by it.
 func (m *Model) loadSkills() {
+	if m.lane == store.LaneOutput {
+		m.loadQualitySkills()
+		return
+	}
 	m.skills.rows = nil
 	r := runner.New(m.store)
 	// One validation pass for the whole list, grouped by skill: the block under the table is the
@@ -354,11 +362,25 @@ const (
 // that keeps it would spend the pane's room on the same words twice.
 const skillTableW = 2 + skillNameW + 1 + skillTrainW + 1 + skillValidW + 1 + skillItersW
 
+// The output table's numbers are percentages, so its rate columns are wider than the trigger
+// table's counts and its own width is spelled separately.
+const (
+	skillRateW   = 8
+	skillQTableW = 2 + skillNameW + 1 + 5 + 1 + skillRateW + 1 + skillRateW + 1 + skillItersW
+)
+
+func (m *Model) skillTableWidth() int {
+	if m.lane == store.LaneOutput {
+		return skillQTableW
+	}
+	return skillTableW
+}
+
 func (m *Model) skillBody(h int) []string {
 	if len(m.skills.rows) == 0 {
 		m.loadSkills()
 	}
-	if paneW := min(96, m.width-skillTableW-2); paneW >= 44 {
+	if paneW := min(96, m.width-m.skillTableWidth()-2); paneW >= 44 {
 		return m.skillSplit(h, paneW)
 	}
 	return m.skillStacked(h)
@@ -370,15 +392,15 @@ const skillListName = "SKILLS"
 
 // skillSplit is the table on the left and the row under the cursor on the right.
 func (m *Model) skillSplit(h, paneW int) []string {
-	left := []string{"", regionHead(skillTableW, skillListName, "", true),
-		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, skillTableW-4))),
+	left := []string{"", regionHead(m.skillTableWidth(), skillListName, "", true),
+		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, m.skillTableWidth()-4))),
 		m.skillHead(false)}
 	room := max(1, h-len(left))
 	m.clampSkills(room)
 	for i := m.skills.top; i < len(m.skills.rows) && i < m.skills.top+room; i++ {
 		left = append(left, m.skillTableRow(i, false))
 	}
-	return m.splitBody(h, skillTableW, paneW, left, m.skillPane(paneW, h))
+	return m.splitBody(h, m.skillTableWidth(), paneW, left, m.skillPane(paneW, h))
 }
 
 // skillStacked is the chooser without a pane: the whole table, and the row under the cursor spelled
@@ -426,6 +448,13 @@ func (m *Model) clampSkills(room int) {
 // skillHead is the table's header: quiet, right-aligned where the cells are numbers, and with no rule
 // under it — the rule belongs to the bar, and a second one over four rows reads as a second bar.
 func (m *Model) skillHead(withState bool) string {
+	if m.lane == store.LaneOutput {
+		return "  " + dimStyle.Render(padCell("SKILL", skillNameW, false)) + " " +
+			dimStyle.Render(padCell("CASES", 5, true)) + " " +
+			dimStyle.Render(padCell("WITH", skillRateW, true)) + " " +
+			dimStyle.Render(padCell("WITHOUT", skillRateW, true)) + " " +
+			dimStyle.Render(padCell("ITERS", skillItersW, true))
+	}
 	head := "  " + dimStyle.Render(padCell("SKILL", skillNameW, false)) + " " +
 		dimStyle.Render(padCell("TRAIN", skillTrainW, true)) + " " +
 		dimStyle.Render(padCell("VALID", skillValidW, true)) + " " +
@@ -443,6 +472,17 @@ func (m *Model) skillTableRow(i int, withState bool) string {
 	mark := "  "
 	if i == m.skills.cursor {
 		mark = cursorMark.Render(glyphs.Cursor)
+	}
+	if m.lane == store.LaneOutput {
+		line := mark + colSkill.Render(padCell(r.name, skillNameW, false)) + " " +
+			colText.Render(padCell(fmt.Sprint(r.qCases), 5, true)) + " " +
+			dimStyle.Render(padCell(r.qWith, skillRateW, true)) + " " +
+			dimStyle.Render(padCell(r.qWithout, skillRateW, true)) + " " +
+			colSplit.Render(padCell(fmt.Sprint(r.qIters), skillItersW, true))
+		if i == m.skills.cursor {
+			line = selected(line)
+		}
+		return line
 	}
 	line := mark + colSkill.Render(padCell(r.name, skillNameW, false)) + " " +
 		colText.Render(padCell(fmt.Sprint(r.train), skillTrainW, true)) + " " +
@@ -467,6 +507,9 @@ func (m *Model) skillTableRow(i int, withState bool) string {
 // action line is reserved before the blocks are placed, so a short window drops the ledger before it
 // drops the sentence telling you what the key does.
 func (m *Model) skillPane(w, h int) []string {
+	if m.lane == store.LaneOutput {
+		return m.skillQualityPane(w, h)
+	}
 	r := m.skills.rows[m.skills.cursor]
 	d := &docWriter{w: w, label: 12}
 	var blocks [][]string
@@ -547,6 +590,9 @@ func (m *Model) skillBlock() []string {
 	if len(m.skills.rows) == 0 {
 		return nil
 	}
+	if m.lane == store.LaneOutput {
+		return m.skillQualityBlock()
+	}
 	r := m.skills.rows[m.skills.cursor]
 	rule := func(n int) string { return dimStyle.Render(strings.Repeat(glyphs.Rule, max(4, n))) }
 	lines := []string{
@@ -600,6 +646,10 @@ func (m *Model) updateSkills(msg tea.KeyMsg) tea.Cmd {
 		m.skills.cursor = len(m.skills.rows) - 1
 	case "enter":
 		if len(m.skills.rows) == 0 {
+			return nil
+		}
+		if m.lane == store.LaneOutput {
+			m.openQualitySkill(m.skills.rows[m.skills.cursor].name)
 			return nil
 		}
 		m.openSkill(m.skills.rows[m.skills.cursor].name)

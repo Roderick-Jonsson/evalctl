@@ -44,6 +44,8 @@ const (
 	screenAsk                    // a yes/no question
 	screenDoc                    // a scrollable document (failures, a report, a log)
 	screenRunLive                // the run, while it runs
+	screenQuality                // output lane: the cases of one iteration, and their verdicts
+	screenQRank                  // output lane: iterations ranked by pass rate
 	screenHelp
 )
 
@@ -55,6 +57,9 @@ type Model struct {
 	// which binary is on screen, so a stale `bin/evalctl` is one glance and not a bug hunt.
 	built string
 	skill string // the skill being optimized ("" on the front door)
+	// lane is which optimization the app is inside — the door's choice, kept for the whole
+	// session so a skill opens the loop it was chosen under.
+	lane string
 
 	width, height int
 	mode          screen
@@ -71,6 +76,7 @@ type Model struct {
 	stamp    string
 	sections sectionState
 	flow     *flowState
+	quality  *qualityState
 	form     *formState
 	ask      *askState
 	doc      *docState
@@ -103,8 +109,15 @@ func Run(s *store.Store, skill, lane, glyphProfile string) int {
 	if lane == store.LaneOutput {
 		m.lanes.cursor = 1
 	}
+	if lane == store.LaneOutput {
+		m.lane = store.LaneOutput
+	}
 	if skill != "" {
-		m.openSkill(skill)
+		if m.lane == store.LaneOutput {
+			m.openQualitySkill(skill)
+		} else {
+			m.openSkill(skill)
+		}
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
@@ -116,7 +129,7 @@ func Run(s *store.Store, skill, lane, glyphProfile string) int {
 
 func newModel(s *store.Store) *Model {
 	info := version.Resolve()
-	m := &Model{store: s, ver: info.Short(), built: info.Clock(), mode: screenLane}
+	m := &Model{store: s, ver: info.Short(), built: info.Clock(), mode: screenLane, lane: store.LaneTrigger}
 	// The stamp the store was opened at: a screen drawn from it is current until the tree says
 	// otherwise. A tree that cannot be stamped reads as changed, and the first tick re-reads it.
 	m.stamp, _ = store.TreeStamp(s.Root)
@@ -131,6 +144,10 @@ func (m *Model) Init() tea.Cmd { return watchEvery() }
 // split the current step is about. It is called after every write and every finished run, so no
 // screen shows a number that came from before the change.
 func (m *Model) reload() {
+	if m.lane == store.LaneOutput {
+		m.reloadQuality()
+		return
+	}
 	if m.skill == "" || m.flow == nil {
 		return
 	}
@@ -332,6 +349,10 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.updateSections(msg)
 	case screenFlow:
 		return m, m.updateFlow(msg)
+	case screenQuality:
+		return m, m.updateQuality(msg)
+	case screenQRank:
+		return m, m.updateQRank(msg)
 	case screenAsk:
 		return m, m.ask.update(m, msg)
 	case screenDoc:
@@ -364,6 +385,15 @@ func (m *Model) escUp() tea.Cmd {
 		m.mode = screenLane
 	case screenFlow:
 		m.mode = screenSections
+	case screenQRank:
+		if m.quality != nil {
+			m.quality.rank = false
+		}
+		m.mode = screenQuality
+	case screenQuality:
+		m.skill = ""
+		m.quality = nil
+		m.mode = screenSkill
 	case screenSections:
 		// The run's block is inside the pane, so esc leaves it before it leaves the screen: one
 		// level up, every time, is the only promise the key has to keep.
@@ -451,9 +481,15 @@ func (m *Model) pathSegments() []string {
 	case screenLane:
 		return []string{"what to optimize"}
 	case screenSkill:
+		if m.lane == store.LaneOutput {
+			return []string{"output optimization", "choose a skill"}
+		}
 		return []string{"trigger optimization", "choose a skill"}
 	}
 	segs := []string{"trigger optimization"}
+	if m.lane == store.LaneOutput {
+		segs = []string{"output optimization"}
+	}
 	if m.skill != "" {
 		segs = append(segs, m.skill)
 	}
@@ -466,6 +502,10 @@ func (m *Model) pathSegments() []string {
 				segs = append(segs, m.flow.stepName())
 			}
 		}
+	case screenQuality:
+		segs = append(segs, "iteration")
+	case screenQRank:
+		segs = append(segs, "ranking")
 	case screenDraft:
 		segs = append(segs, "revise")
 	case screenDoc:
@@ -561,12 +601,17 @@ func (m *Model) bodyLines(h int) []string {
 		if m.flow != nil {
 			return m.flow.body(m, h)
 		}
+	case screenQuality:
+		return m.qualityBody(h)
+	case screenQRank:
+		return m.qualityRankBody(h)
 	case screenAsk:
 		if m.ask != nil {
 			return m.ask.body(h)
 		}
 	case screenDoc:
 		if m.doc != nil {
+			m.doc.md(m.width)
 			return m.doc.body(h)
 		}
 	case screenRunLive:
@@ -635,6 +680,8 @@ func (m *Model) hints() []hint {
 		if m.flow != nil {
 			return m.flow.hints(m)
 		}
+	case screenQuality, screenQRank:
+		return qualityHints(m)
 	case screenAsk:
 		if m.ask != nil {
 			return m.ask.hints()
@@ -729,6 +776,9 @@ func (m *Model) stateText() string {
 		// done anything. The pane beside the list is where the explanation lives.
 		return ""
 	case screenSkill:
+		if m.lane == store.LaneOutput {
+			return plural(len(m.skillNames()), "skill") + " with cases to grade"
+		}
 		return plural(len(m.skillNames()), "skill") + " with a description to tune"
 	case screenSections:
 		if m.formActive() {
@@ -751,6 +801,13 @@ func (m *Model) stateText() string {
 		if m.run != nil && m.run.live != nil {
 			return m.run.live.stateText()
 		}
+	case screenQuality:
+		if q := m.quality; q != nil && q.lab != nil {
+			return fmt.Sprintf("%s · %s · %s", plural(q.lab.Cases, "case"),
+				plural(q.lab.Assertions, "assertion"), plural(len(q.lab.Iterations), "iteration"))
+		}
+	case screenQRank:
+		return "the best is the highest with-skill rate among complete iterations"
 	}
 	return ""
 }
@@ -810,6 +867,14 @@ func (m *Model) position() string {
 		return fmt.Sprintf("%d / 2", m.sections.cursor+1)
 	case screenSkill:
 		return fmt.Sprintf("%d / %d", m.skills.cursor+1, max(1, len(m.skillNames())))
+	case screenQuality:
+		if q := m.quality; q != nil && len(q.cases) > 0 {
+			return fmt.Sprintf("case %d of %d", q.sel+1, len(q.cases))
+		}
+	case screenQRank:
+		if q := m.quality; q != nil && q.lab != nil && len(q.lab.Iterations) > 0 {
+			return fmt.Sprintf("%d / %d", q.rsel+1, len(q.lab.Iterations))
+		}
 	case screenLane:
 		return fmt.Sprintf("%d / 2", m.lanes.cursor+1)
 	case screenDoc:
@@ -917,6 +982,15 @@ func (m *Model) helpLines() []string {
 			"  x          cancel the run; finished queries are kept",
 			"  v          the arm's activity log; esc back",
 			"  —          runs per query and dry run are set beside the two sections, on the set's pane",
+		},
+		head("output optimization — the loop"),
+		[]string{
+			"  R          run the next iteration: every case, both arms, in a fresh temp root",
+			"  g          grade the iteration on screen: one judge call per arm, PASS/FAIL with evidence",
+			"  j k        walk the cases; the pane is the evidence behind the row",
+			"  tab        the ranking: every iteration's two rates, and the best complete one",
+			"  enter      the iteration's report.md · f its failed assertions as one list",
+			"  esc        back to the skills (from the ranking, first back to the loop)",
 		},
 		dim("every write backs the old file up under .evalctl/backups/"),
 	)

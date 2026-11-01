@@ -179,17 +179,14 @@ func TestFrontDoorOffersBothLanes(t *testing.T) {
 	if !strings.Contains(joined, "trigger optimization") || !strings.Contains(joined, "output optimization") {
 		t.Fatalf("the door must name both optimizations:\n%s", joined)
 	}
-	if !strings.Contains(joined, "not built") {
-		t.Fatalf("output is not built and the door must say so:\n%s", joined)
+	if strings.Contains(joined, "not built") {
+		t.Fatalf("both optimizations are built and the door must not say otherwise:\n%s", joined)
 	}
-	// Down to output, then enter: the door stays put and says why.
+	// Down to output, then enter: the skill chooser, in the output lane.
 	press(m, "j")
 	press(m, "enter")
-	if m.mode != screenLane {
-		t.Fatalf("output opened a screen: mode = %v", m.mode)
-	}
-	if !strings.Contains(m.status, "not built") {
-		t.Fatalf("status = %q", m.status)
+	if m.mode != screenSkill || m.lane != "output" {
+		t.Fatalf("output opened mode %v lane %q, want the output skill list", m.mode, m.lane)
 	}
 }
 
@@ -985,7 +982,7 @@ func TestTheDoorIsASelectorWithAPane(t *testing.T) {
 	}
 	press(m, "j")
 	body = strings.Join(m.laneBody(m.bodyHeight()), "\n")
-	if !strings.Contains(body, "OUTPUT OPTIMIZATION") || !strings.Contains(body, "not built") {
+	if !strings.Contains(body, "OUTPUT OPTIMIZATION") || !strings.Contains(body, "the output loop") {
 		t.Fatalf("the pane did not follow the cursor:\n%s", body)
 	}
 	if strings.Contains(body, "The two activities") {
@@ -996,7 +993,7 @@ func TestTheDoorIsASelectorWithAPane(t *testing.T) {
 	if strings.Contains(narrow, glyphs.Seam) {
 		t.Fatalf("a narrow door drew a pane it has no room for:\n%s", narrow)
 	}
-	if !strings.Contains(narrow, "does the skill produce") {
+	if !strings.Contains(narrow, "does the work come out right") {
 		t.Fatalf("a narrow door hid the explanation entirely:\n%s", narrow)
 	}
 }

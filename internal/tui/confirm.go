@@ -63,7 +63,9 @@ func (a *askState) update(m *Model, msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// readLog reads a text file into lines for the document reader: an activity log, a report. A
+// readLog reads a stream's own text into lines for the document reader: an arm's activity log. Its
+// lines are already the layout the agent produced, so they are indented and nothing else — a report
+// is markdown and goes through docState.md instead. A
 // missing file is a message and not a crash — the run that wrote it may have been cancelled before
 // it wrote anything.
 func readLog(path string) ([]string, error) {

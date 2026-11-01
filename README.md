@@ -50,7 +50,7 @@ The number lives in `internal/version/version.go` and is hand-edited: bump it wh
 store rules, the profiles or the case format change, because an iteration measured by a different
 harness is not comparable with the last one. It is also the first thing in the artifact:
 
-- the TUI header's right corner carries `v0.8.0+ · 11:06` — the version, a `+` when the tool's own
+- the TUI header's right corner carries `v0.9.0+ · 11:06` — the version, a `+` when the tool's own
   sources were dirty at build time, and then the build's own clock, local time, read from the ldflags
   stamp. It is there because the binary somebody is looking at and the binary somebody built are not
   always the same one: a stale `bin/evalctl` looks exactly like a fresh one until the corner says
@@ -99,14 +99,14 @@ line about what it still owes are the whole flow of that screen — so it opens 
 body where the rail was.
 
 ```
- what to optimize                                                                             evalctl v0.8.0 · 11:06
+ what to optimize                                                                             evalctl v0.9.0 · 11:06
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                                      │ 
 ▌ OPTIMIZATIONS                      │   TRIGGER OPTIMIZATION
   ────────────────────────────────   │   ────────────────────────────────────────────────────────────────
 ▶ trigger optimization  built        │   built · the description loop
                                      │   A skill only helps if it gets loaded, and the description is the whole of
-  output optimization  not built     │   the input — an agent decides from that one paragraph. This lane measures
+  output optimization  built         │   the input — an agent decides from that one paragraph. This lane measures
                                      │   the wording, revises it on what the train set failed, and generalizes on a
                                      │   split no revision could read.
                                      │ 
@@ -135,13 +135,13 @@ enter open · q quit                                                            
 
 The two rows are the whole choice, and the pane beside them explains the one under the cursor: what
 the lane asks, what it does step by step, and what it leaves on disk. `j`/`k` move the pane with the
-cursor; `enter` opens the trigger loop. `output` is the second optimization the tool will grow, and the
-door says plainly that it is not built rather than opening a "coming soon" screen.
+cursor; `enter` opens the skill chooser for that lane. The output lane's chooser and loop are the
+same shape as the trigger lane's, with its own columns and its own two screens (below).
 
 ### Which skill
 
 ```
- trigger optimization > choose a skill                                                        evalctl v0.8.0 · 11:06
+ trigger optimization > choose a skill                                                        evalctl v0.9.0 · 11:06
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                                            │ 
 ▌ SKILLS                                   │   SLIDE-BUILDER
@@ -201,7 +201,7 @@ one column.
 ### The two sections
 
 ```
- trigger optimization > slide-builder                                                   evalctl v0.8.0 · 11:06
+ trigger optimization > slide-builder                                                   evalctl v0.9.0 · 11:06
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   SECTIONS                         │   THE RUN                                                 6 agent calls
   ──────────────────────────────   │   runs per query ‹ 3 ›     dry run ‹ off ›
@@ -375,7 +375,7 @@ result list that listed what had been, and the same rows were drawn on both with
 them.
 
 ```
- trigger optimization > slide-builder > generalization > ranking                              evalctl v0.8.0 · 11:06
+ trigger optimization > slide-builder > generalization > ranking                              evalctl v0.9.0 · 11:06
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ▌ RANKING                                                                        ranked by the validation set
@@ -464,6 +464,62 @@ leave: a half-read table of a run that is still spending money is worse than the
 measured — the candidate, the rate, the per-row verdicts — is in the ledger the workbench reads when it
 comes back.
 
+### The output lane
+
+The other optimization, and the other half of the question: with the skill loaded, does the work come
+out right? It is agentskills.io's *Evaluating skill output quality* loop, computed from disk. Every
+case in `<skill>/evals/evals.json` runs twice — with the skill and without it — into
+`<skill>-workspace/iteration-N/<slug>/with_skill|without_skill/`, and the judge grades each arm's
+declared assertions PASS or FAIL with the evidence it read.
+
+The skill chooser is the same table in this lane's terms: how many cases the skill declares, what the
+last iteration scored on each arm, and how many iterations it has measured.
+
+```
+ output optimization > choose a skill                                                         evalctl v0.9.0 · 11:06
+▌ SKILLS
+  SKILL                CASES     WITH  WITHOUT   ITERS
+▶ dummy                    2     100%     100%       1
+  learning-path            2        —        —       2
+```
+
+`enter` opens the loop at the newest iteration: the cases with both rates, the failed count, and — in
+the pane — the ask, the expected output, every failed assertion with the judge's evidence, and the
+human note. That pane is the work order a revision is written from.
+
+```
+ output optimization > dummy > iteration                                                      evalctl v0.9.0 · 11:06
+▌ CASES                                         │   dummy-2-three-dice
+  iteration 2 · 2 cases · 2026-11-01 12:22      │   with 3/3 · without 3/3 · 3 assertions
+  CASE                      WITH WITHOUT FAILED │
+  dummy-1-one-die           100%    100%      — │   The ask
+▶ dummy-2-three-dice        100%    100%      — │   Throw three twenty-sided dice and give me the faces and the total.
+                                                │
+                                                │   Verdict
+                                                │   Every assertion passes in both arms. That is not a win for the
+                                                │   skill: an assertion both arms pass measures the model, not the
+                                                │   procedure.
+```
+
+`g` grades the iteration on screen — one judge call per arm, verdicts into each arm's `grading.json`,
+then the benchmark and the report re-aggregated; an already-fully-graded iteration says so instead of
+spending again. `R` runs the next iteration; the live run is the trigger lane's screen with case rows
+and arm marks. `tab` is the ranking: every iteration's two rates, the delta, and the best **complete**
+one — a partial grade never ranks, the same rule the trigger lab enforces.
+
+```
+ output optimization > dummy > ranking                                                       evalctl v0.9.0 · 11:06
+▌ ITERATIONS
+    ITER       WITH    WITHOUT   DELTA  CASES  WHEN
+▶     #2   100% 5/5   100% 5/5      +0      2  2026-11-01 12:22  best
+
+  the best is the highest with-skill rate among iterations whose every case was graded — not the newest
+```
+
+The guide's stop condition is a fact here too: when the last two complete iterations tie, the ranking
+says it, and the lab's `next:` line says "stop, or sharpen the assertions". `f` opens the failed
+assertions as one list, and `enter` the iteration's report; `esc` walks back one level at a time.
+
 ### The frame
 
 The bar carries the path — `trigger optimization > skill > step` — and the tool with its build at the
@@ -544,6 +600,12 @@ evalctl run --skill source-research         # one stage, next free iteration-N
 evalctl run --skill learning-path --case 1,3
 evalctl run --skill slide-builder --iteration 2 --resume   # add cases to an iteration
 evalctl run --arms without_skill            # one side of the comparison only
+evalctl run --skill dummy --grade           # run, then judge every arm in one command
+
+evalctl grade --skill dummy                 # judge the newest iteration: one call per arm
+evalctl grade --skill dummy --iteration 2 --force   # re-grade after editing an assertion
+evalctl grade --skill dummy --dry-run       # the judge commands, nothing written
+evalctl lab --skill dummy --lane output     # the output loop: rates, delta, the next move
 
 evalctl trigger --list                                    # the query set, its labels and split
 evalctl trigger --split train                             # iterate here only
@@ -712,9 +774,11 @@ carry the same information.
 ```
 <skill>-workspace/iteration-N/meta.json                 contract + SOUL + skill-tree + fixture hashes
 <skill>-workspace/iteration-N/<slug>/prompt.txt
+<skill>-workspace/iteration-N/<slug>/judge-prompt.txt    what the judge was asked, verbatim
 <skill>-workspace/iteration-N/<slug>/<arm>/             the arm dir
   outputs/                                          the run root: fixture staged, then what it wrote
   stream.jsonl activity.log timing.json changes.json grading.json stderr.txt
+  judge-stream.jsonl judge-stderr.txt                    the grading call, after `grade`
 <skill>-workspace/iteration-N/benchmark.json report.md feedback.json
 
 trigger-workspace/trigger-N/meta.json                   query-file hash + every description verbatim
@@ -732,9 +796,13 @@ reason a query carries a `why`: a wording nobody can explain is one the next cha
 ahead of the last measurement.
 
 `grading.json` carries the mechanical checks (containment, root guard, the skills the run actually
-loaded, the skill's own `verify` output) and the final response. Grading itself stays manual until
-`assertions` exist: read `expected_output` next to what each arm produced and write the verdict into
-`feedback.json`.
+loaded, the skill's own `verify` output), the final response, and — once `evalctl grade` has run —
+one verdict per declared assertion (`text`, `passed`, `evidence`) plus the arm's summary. The judge is
+a Hermes call in the baseline profile (no skill installed, so the wording under test cannot bias it)
+whose prompt never names the arm; it reads `outputs/` and quotes what it saw. `benchmark.json` carries
+each arm's pass rate (mean and stddev over cases) beside its time and tokens, plus the quality delta;
+`report.md` adds the per-assertion verdicts and the guide's pattern analysis. `feedback.json` stays
+the human's own note per case, and the lab counts a non-empty one as review done.
 
 ## The rules it enforces
 

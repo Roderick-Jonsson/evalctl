@@ -46,7 +46,9 @@ const usage = `evalctl — manage and run the eval sets: trigger queries and out
   evalctl promote --to-trigger ...    a case's prompt becomes a trigger query
   evalctl dupes [--lane] [--threshold 0.60]   near-duplicate groups, the trim shortlist
   evalctl stats                      counts per skill / label / split
-  evalctl lab --skill S [--json]     where the description loop stands, and the guide's next move
+  evalctl lab --skill S [--lane trigger|output] [--json]
+                                     where that loop stands, and the guide's next move
+  evalctl grade --skill S [--iteration N]   output lane: the judge grades every arm's assertions
   evalctl validate [--strict] [--json]  check the tree against the runner's rules
   evalctl renumber                   close id gaps (breaks comparability with old results)
   evalctl version                    which build this is (version, commit, dirty, go)
@@ -58,7 +60,7 @@ const usage = `evalctl — manage and run the eval sets: trigger queries and out
   evalctl profiles [cmd]             status/check/ensure/render/sync/scrub the eval profiles
   evalctl theme [name]               the colour schemes, with each role's contrast on its background
 
-Run flags: --skill, --case, --iteration, --arms, --model, --budget, --resume, --force,
+Run flags: --skill, --case, --iteration, --arms, --model, --budget, --resume, --force, --grade,
            --no-verify, --isolate=false, --dry-run, --list, --log full|tools|off
 Trigger:   --query, --split, --runs, --threshold, --max-turns (same shared flags)
 
@@ -128,6 +130,8 @@ func Run(args []string) int {
 		return runRun(append([]string{"--lane", store.LaneTrigger}, rest...))
 	case "lab":
 		return runLab(rest)
+	case "grade":
+		return runGrade(rest)
 	case "runs", "results":
 		return runRuns(rest)
 	case "report":

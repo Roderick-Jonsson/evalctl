@@ -84,6 +84,9 @@ type Options struct {
 	Runs      int
 	Threshold float64
 	MaxTurns  int
+	// Grade runs the judge after an output iteration is written. It is the guide's fourth move in
+	// one command; the TUI offers it as g instead, because a judgment is a spend of its own.
+	Grade bool
 	// Log is how much of the agent's own stream reaches activity.log and the progress view.
 	Log ActivityLevel
 }
@@ -405,6 +408,27 @@ func (r *Runner) listRunsIn(workspace, prefix, lane, skill string) []RunInfo {
 				info.Cases = len(meta.Cases)
 				if lane == LaneTrigger {
 					info.Cases = len(meta.Queries)
+				}
+			}
+		}
+		if lane == LaneOutput {
+			// The iteration's rate is the with-skill arm's, read from the benchmark that grading
+			// wrote; an ungraded iteration has no rate and the table prints a dash.
+			var bench struct {
+				RunSummary map[string]struct {
+					Graded   *GradeTally `json:"graded"`
+					PassRate *Rate       `json:"pass_rate"`
+				} `json:"run_summary"`
+			}
+			if b, err := os.ReadFile(filepath.Join(path, "benchmark.json")); err == nil {
+				if json.Unmarshal(b, &bench) == nil {
+					if s, ok := bench.RunSummary[ArmWith]; ok && s.PassRate != nil {
+						rate := s.PassRate.Mean
+						info.PassRate = &rate
+						if s.Graded != nil {
+							info.Judged, info.Passed = s.Graded.Judged, s.Graded.Passed
+						}
+					}
 				}
 			}
 		}

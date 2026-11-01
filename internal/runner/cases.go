@@ -18,6 +18,7 @@ type Case struct {
 	Prompt         string              `json:"prompt"`
 	ExpectedOutput string              `json:"expected_output"`
 	Files          []string            `json:"files"`
+	Assertions     []string            `json:"assertions"`
 	Promoted       *store.PromotedFrom `json:"promoted_from,omitempty"`
 }
 
@@ -60,7 +61,7 @@ func LoadCases(s *store.Store, skills []string, only map[int]bool) ([]Case, erro
 				return nil, fmt.Errorf("%s case %d: %w", skill, c.ID, err)
 			}
 			cases = append(cases, Case{Skill: skill, ID: c.ID, Slug: slug, Prompt: c.Prompt,
-				ExpectedOutput: c.ExpectedOutput, Files: files, Promoted: promoted})
+				ExpectedOutput: c.ExpectedOutput, Files: files, Assertions: c.Assertions, Promoted: promoted})
 		}
 	}
 	// The slug is the fixture dir AND the results dir name, so it must be unique per iteration.
