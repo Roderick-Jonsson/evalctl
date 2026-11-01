@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"evalctl/internal/runner"
 	"evalctl/internal/store"
@@ -43,9 +44,10 @@ type iterDraft struct {
 	note     textinput.Model
 }
 
+// iterBody is the workbench, or the stacked fallback when the window cannot hold four panes.
 func (m *Model) iterBody(h int) []string {
 	m.ensureDraft()
-	if m.width < 90 || h < 18 {
+	if !m.itersTableDrawn() || h < 18 {
 		return m.iterStacked(h)
 	}
 	leftW := min(96, max(44, m.width*40/100))
@@ -68,85 +70,111 @@ func (m *Model) workbenchPaneWidth() int {
 	return m.width - leftW - 3
 }
 
+// itersTableDrawn reports whether the window can hold the workbench's four quadrants. It is asked in
+// two places — the body, which stacks when it cannot, and the top row, which keeps the loop's numbers
+// only where the iterations table is gone — so it asks about the window, never about the body height,
+// which is what the top row decides.
+func (m *Model) itersTableDrawn() bool {
+	// 90 cells is the width at which the two columns stop squeezing their queries; 23 rows is the
+	// height that leaves the quadrants 18 under the bar, its rule and the two footer rows.
+	return m.width >= 90 && m.height >= 23
+}
+
 // ---------------------------------------------------------------- quadrants
 
-// quadFailure is one failing row in full and what the guide says to do about that kind of failure.
+// quadFailure is the failure the next revision is written from, in three moves: the ask that failed,
+// the way it failed, and the guide's hints for that kind of failure. Nothing else.
+//
+// It used to carry the row's why, the skill that loaded instead, the verdict as a sentence and a
+// warning about pasting a query into the wording. All four are true and none of them changes the next
+// edit — this pane sits beside the description you are about to rewrite, so what it owes you is a
+// work order, not a report. The full record is still one key away (`f`), and the why and the
+// competitor belong to the set, where the row is edited.
+//
 // Which row it is follows the cursor: if the row you are standing on failed, that is the one; if it
 // passed, the first failure is, because the quadrant is about what to fix.
 func (m *Model) quadFailure(w, h int) []string {
 	f := m.flow
 	row := f.failedRow()
-	build := func(full bool) []string {
-		d := &docWriter{w: w}
-		if row == nil {
-			// A quadrant that takes no keys names itself in the quiet register, so the one
-			// that has them is the only one in the accent.
-			d.head("FAILED QUERY", false)
-			switch {
-			case f.pending() != nil:
-				d.lead(fmt.Sprintf("candidate #%d has not been run yet", f.pending().ID))
-				d.para("Run the train set: the failures are what the next revision is written from, and there is nothing to read until one exists.")
-			case f.latest() != nil:
-				it := f.latest()
-				d.lead("nothing failed")
-				d.para(fmt.Sprintf("This wording passes all %d train queries. A revision now is a hunch — the loop has nothing to tell you, and generalization is where the next real answer is.", it.Train.Train.Judged))
-			default:
-				d.lead("nothing measured yet")
-				d.para("Run the train set against the wording in the description, and its failures appear here.")
-			}
-			return d.lines
+	d := &docWriter{w: w}
+	if row == nil {
+		// A quadrant that takes no keys names itself in the quiet register, so the one that has
+		// them is the only one in the accent.
+		d.head("FAILED QUERY", false)
+		switch {
+		case f.pending() != nil:
+			d.lead(fmt.Sprintf("candidate #%d has not been run yet — run the train set", f.pending().ID))
+		case f.latest() != nil:
+			d.lead(fmt.Sprintf("nothing failed — all %d train queries pass", f.latest().Train.Train.Judged))
+		default:
+			d.lead("nothing measured yet — run the train set")
 		}
-		d.head(fmt.Sprintf("FAILED QUERY · q%d", row.ID), false)
-		d.rule()
-		d.lead(fmt.Sprintf("should %s · fired %d of %d runs", triggerWord(row.ShouldTrigger), row.Triggers, row.Runs))
-		if row.Query != "" {
-			d.fact("the ask", row.Query)
-		}
-		if full && row.Why != "" {
-			d.fact("why it is here", row.Why)
-		}
-		if full {
-			d.fact("what loaded", loadedInstead(*row))
-		}
-		d.fact("verdict", verdictOf(*row))
-		d.card("What to adapt")
-		for _, line := range adaptHints(*row) {
-			d.bullet(line)
-		}
-		d.para("Never paste a query's words into the description: that teaches the wording the test, not the job.")
-		return d.lines
+		return fitRows(d.lines, h)
 	}
-	lines := build(true)
-	// The advice is the quadrant's reason to exist: a short column loses the why and the loaded
-	// skill before it loses a line of what to do about it.
-	if len(lines) > h {
-		lines = build(false)
+	d.head(fmt.Sprintf("FAILED QUERY · q%d", row.ID), false)
+	// The ask, in the register of a heading: it is what every line under it is about, and the one
+	// line here you might recognise from the set. It comes from the set and not from the score row,
+	// because the set is what is on screen beside it and what the next run will measure.
+	ask := f.askOf(row.ID)
+	if ask == "" {
+		ask = row.Query
 	}
-	return fitRows(lines, h)
+	for _, line := range wrapPlain(ask, max(10, w-2)) {
+		d.lines = append(d.lines, "  "+titleStyle.Render(line))
+	}
+	// A row of its own, because the ask can wrap and a wrapped ask ends mid-sentence: the failure
+	// line has to start the eye at the left edge again, or the reading runs the last line of the
+	// query into the verdict.
+	d.lines = append(d.lines, "")
+	// How it failed, in the order the run is read: what it should have done, what it did, and the
+	// two words for the gap. Squeezed, it keeps the words and loses the colours rather than the
+	// other way round: a cut verdict is unreadable, a colourless one is not.
+	label := colYes
+	if !row.ShouldTrigger {
+		label = colNo
+	}
+	kind := "should " + triggerWord(row.ShouldTrigger) + fmt.Sprintf(" · fired %d of %d · ", row.Triggers, row.Runs)
+	if lipgloss.Width(kind+verdictWord(*row)) > max(10, w-2) {
+		d.lines = append(d.lines, "  "+colText.Render(ellipsis(kind+verdictWord(*row), max(10, w-2))))
+	} else {
+		d.lines = append(d.lines, "  "+label.Render("should "+triggerWord(row.ShouldTrigger))+
+			dimStyle.Render(fmt.Sprintf(" · fired %d of %d", row.Triggers, row.Runs))+
+			" · "+failMark.Render(verdictWord(*row)))
+	}
+	d.lines = append(d.lines, "")
+	// The advice, numbered so a revision can be argued with one hint at a time.
+	for i, hint := range adaptHints(*row) {
+		d.hint(i+1, hint)
+	}
+	return fitRows(d.lines, h)
 }
 
 // adaptHints is the guide's advice, narrowed to the failure in front of you. It is deterministic on
 // purpose: the same failure always earns the same advice, so it stays checkable against the page it
 // came from instead of being an opinion at 2am.
+//
+// Each hint is one clause, because the pane sits beside the field you are about to rewrite: a hint
+// that needs a second line is a paragraph about the fix instead of the fix. The order is the order to
+// try them in — the wording first, the row last.
 func adaptHints(row runner.ScoreRow) []string {
 	switch {
 	case row.ShouldTrigger && row.Triggers == 0:
 		return []string{
-			"Name this context: the ask is the skill's job and the wording never says so.",
-			"Err on the side of pushy — say it applies even when the user does not name it.",
-			"Describe the intent the user has, not the tool they happen to mention.",
+			"Name the context this ask belongs to.",
+			"Say it applies even unnamed — be pushy.",
+			"Describe the intent, not the tool.",
 		}
 	case !row.ShouldTrigger && row.Triggers > 0:
 		return []string{
-			"Something in the wording overlaps work that is not this skill's.",
-			"Narrow it: say what this skill is for, and where it hands off.",
-			"Check which skill did load — that is the wording you are competing with.",
+			"Something here overlaps a neighbouring skill.",
+			"Say what this skill is for, and where it ends.",
+			"Check which skill did load — your rival.",
 		}
 	}
 	return []string{
-		"The wording is ambiguous here: it fires on some runs and not others.",
-		"Make the line between yes and no explicit — say what makes this a yes.",
-		"If it keeps happening, the row may be the problem, not the description.",
+		"The line between yes and no is not explicit.",
+		"Say what makes this a yes, in so many words.",
+		"If it keeps happening, the row may be wrong.",
 	}
 }
 
@@ -347,6 +375,19 @@ func triggerWord(yes bool) string {
 		return "trigger"
 	}
 	return "not trigger"
+}
+
+// askOf is a row's query as the set spells it. The score row carries its own copy, but the set is
+// what is on screen beside the failure pane and what the next run measures, so a query edited since
+// the run is read here as it will be run — and an old measurement is never shown above new text
+// without the table's own verdict column saying the two disagree.
+func (f *flowState) askOf(id int) string {
+	for _, e := range f.rows {
+		if e.ID == id {
+			return e.Text
+		}
+	}
+	return ""
 }
 
 // typing reports whether the iteration screen's keystrokes belong to a text field.

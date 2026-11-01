@@ -91,7 +91,10 @@ also the resume point.
 The top row is a path, not a sentence: `trigger optimization > slide-builder > iteration > iterate`. A
 middot between three words reads as prose — so the segments are separated with `>`, the last one is
 the one you are looking at, and the numbers moved to the right end of the rail's row, where the steps
-already are.
+already are. The iteration screen leaves that row empty, because the workbench states its own totals —
+the iterations table counts the loop and rates the last run — and a second counter above the table read
+as a rival to it. Below the width where the table is stacked away, the row comes back: there it is the
+only place the loop's count is.
 
 ```
  what to optimize                                                                             evalctl v0.8.0 · 11:06
@@ -268,19 +271,19 @@ set is the thing on screen.
 ```
  trigger optimization > slide-builder > iteration                                             evalctl v0.8.0 · 11:06
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- iteration 1 of 5 · 1 of 2 pass (50%)
                                                │ 
-  FAILED QUERY · q2                            │ ▌ TRAIN SET                                              2 queries 
-  ──────────────────────────────────────────── │     ID   TRIGGER RESULT  QUERY                                   
-  should not trigger · fired 0 of 3 runs       │ ▶    1   yes     pass    build me slides from this outline       
-  verdict        unstable — failed to hold in  │      2   no      FAIL    research the operator pattern for me    
-                 3 of 3 runs                   │ 
+  FAILED QUERY · q3                            │ ▌ TRAIN SET                                              2 queries 
+  build the deck from last week's outline      │     ID   TRIGGER RESULT  QUERY                                   
+                                               │ ▶    1   yes     pass    build me slides from this outline       
+  should trigger · fired 0 of 3 · too narrow   │      2   no      FAIL    research the operator pattern for me    
                                                │ 
-  What to adapt                                │ 
-  - The wording is ambiguous here: it fires    │ 
-    on some runs and not others.               │ 
-  - Make the line between yes and no           │   2 rows · 1 should trigger · 1 should not · 50% of the set
-    explicit — say what makes this a yes.      │   (the guide asks ~60/40)
+  Hint 1  Name the context this ask            │ 
+          belongs to.                          │ 
+  Hint 2  Say it applies even unnamed —        │ 
+          be pushy.                            │   2 rows · 1 should trigger · 1 should not · 50% of the set
+  Hint 3  Describe the intent, not the         │   (the guide asks ~60/40)
+          tool.                                │ 
+                                               │ 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
                                                │ 
   THE DESCRIPTION                   52 / 1024  │   ITERATIONS                                                1 of 5 
@@ -302,7 +305,7 @@ enter run the train set · tab the description · R run again · f the failures 
 
 | quadrant | what it holds |
 |---|---|
-| **failed query** (top left) | the row under the cursor if it failed, otherwise the first failure: the ask in full, why it is in the set, what loaded instead, the verdict (too narrow, too broad, unstable) and **what to adapt** — the guide's advice for that kind of failure. It is deterministic, so the advice is checkable against the page it came from |
+| **failed query** (top left) | the row under the cursor if it failed, otherwise the first failure, in three moves and nothing else: **the ask** in full, **how it failed** (`should trigger · fired 0 of 3 · too narrow`), and the guide's numbered hints — what to change about the wording for this kind of failure. The why, the skill that loaded instead and the full verdict sentence are one key away (`f`). The hints are deterministic, so the advice is checkable against the page it came from, and each is one clause: the pane sits beside the field you are about to rewrite |
 | **train set** (top right) | the queries the wording may learn from, as the last run left them: `RESULT` is `pass`, `FAIL`, or `—` when the candidate has not been run, and the cursor walks the rows so the failure card can follow it. It is read here and written on the screen that owns the set — the pane beside the two sections |
 | **the description** (bottom left) | the wording itself, in a field with a caret, because a revision is an edit and not a screen you navigate to. The counter is the format's 1024-character ceiling |
 | **iterations** (bottom right) | every run, its train rate, its length, and the note that says why it exists — the only place you can see whether five revisions moved anything |

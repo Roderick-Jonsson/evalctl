@@ -122,13 +122,13 @@ func TestTheAdviceFollowsTheFailure(t *testing.T) {
 	broad := adaptHints(runner.ScoreRow{ShouldTrigger: false, Runs: 3, Triggers: 3})
 	unstable := adaptHints(runner.ScoreRow{ShouldTrigger: true, Runs: 3, Triggers: 1})
 
-	if !strings.Contains(strings.Join(narrow, " "), "Name this context") {
+	if !strings.Contains(strings.Join(narrow, " "), "Name the context") {
 		t.Fatalf("a missed trigger is answered by naming the context: %v", narrow)
 	}
 	if !strings.Contains(strings.Join(broad, " "), "overlaps") {
 		t.Fatalf("a wrong trigger is answered by narrowing: %v", broad)
 	}
-	if !strings.Contains(strings.Join(unstable, " "), "ambiguous") {
+	if !strings.Contains(strings.Join(unstable, " "), "not explicit") {
 		t.Fatalf("a flapping row is answered by saying what makes it a yes: %v", unstable)
 	}
 	if len(broad) != len(narrow) {
@@ -287,5 +287,35 @@ func TestTheNarrowWorkbenchStacksAndKeepsTheEditor(t *testing.T) {
 	}
 	if strings.Contains(view, "FAILED QUERY") {
 		t.Fatalf("there is no room for four quadrants at 80 columns:\n%s", view)
+	}
+}
+
+// TestTheFailurePaneIsThreeMoves pins the pane's job: the ask that failed, the way it failed, and the
+// numbered hints that say what to change. Everything the loop also knows about the row — its why, the
+// skill that loaded instead, the verdict in a sentence — is the failures screen's (`f`), because none
+// of it changes the sentence being written in the pane below.
+func TestTheFailurePaneIsThreeMoves(t *testing.T) {
+	missed := row(3, "train", true, false)
+	missed.Query = "turn today's retro notes into a deck"
+	m, _ := measured(t, []runner.ScoreRow{
+		row(1, "train", true, true), row(2, "train", false, true), missed,
+	})
+	m.width, m.height = 120, 32
+	enterSection(m, secIteration)
+	view := quadView(m)
+	for _, want := range []string{
+		"turn today's retro notes into a deck",
+		"should trigger · fired 0 of 3 · too narrow",
+		"Hint 1", "Hint 2", "Hint 3",
+		"Name the context this ask belongs to",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("the failure pane is missing %q:\n%s", want, view)
+		}
+	}
+	for _, gone := range []string{"why it is here", "what loaded", "What to adapt", "Never paste"} {
+		if strings.Contains(view, gone) {
+			t.Fatalf("the pane is still a report — %q belongs to the failures screen:\n%s", gone, view)
+		}
 	}
 }

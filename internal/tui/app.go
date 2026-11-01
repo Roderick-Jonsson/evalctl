@@ -507,8 +507,9 @@ func (m *Model) contextLine(w int) string {
 	// steps say where you are, the numbers say how far in. They are two registers of one row, and
 	// neither belongs on the path above.
 	if m.mode == screenFlow && m.flow != nil {
-		rail := m.flow.rail(w)
-		// A one-screen section has no chips to draw, so its rail row is already the numbers.
+		rail := m.flow.rail(m, w)
+		// A one-screen section has no chips to draw, so its rail row is already the numbers — or
+		// empty, where the workbench itself is drawing them.
 		if m.flow.stepCount() == 1 {
 			return rail
 		}

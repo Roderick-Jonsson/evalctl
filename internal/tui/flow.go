@@ -322,10 +322,17 @@ func (f *flowState) stepState(i int) subState {
 
 // rail is the navigation inside a section: its steps, what state each one is in, and the one gate in
 // the flow. It lists only this section's steps — the other section is one screen up.
-func (f *flowState) rail(w int) string {
+func (f *flowState) rail(m *Model, w int) string {
 	if len(f.steps()) == 1 {
-		// One screen, so there is nothing to walk: the row says where the loop is instead.
-		return " " + dimStyle.Render(f.stateLine())
+		// One screen, so there is nothing to walk: the row says where the loop is instead. But only
+		// where nothing else already says it — the iterations quadrant counts the loop in its head
+		// and rates the last run in its newest row, and a screen that states its own totals twice
+		// reads as two counters that might disagree. The row is left empty then, and the body takes
+		// the space.
+		if !m.itersTableDrawn() {
+			return " " + dimStyle.Render(f.stateLine())
+		}
+		return ""
 	}
 	var b strings.Builder
 	b.WriteString(" ")

@@ -82,6 +82,20 @@ func verdictOf(row runner.ScoreRow) string {
 	}
 }
 
+// verdictWord is the same reading cut to the two words the workbench's failure pane can carry: which
+// way the wording is wrong, with no sentence after it. The three cases are spelled out twice on
+// purpose — a shared condition would put the verdict's shape and its sentence in one place, and the
+// two are read differently enough (a heading and a paragraph) to be worth the duplication.
+func verdictWord(row runner.ScoreRow) string {
+	switch {
+	case row.ShouldTrigger && row.Triggers == 0:
+		return "too narrow"
+	case !row.ShouldTrigger && row.Triggers > 0:
+		return "too broad"
+	}
+	return "unstable"
+}
+
 // idList and idListOf print a set of failing rows as ids: the pane has room for the list, not for the
 // questions.
 func idList(rows []runner.ScoreRow) string {

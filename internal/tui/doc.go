@@ -156,6 +156,22 @@ func (d *docWriter) bullet(text string) {
 	}
 }
 
+// hint is one numbered line of advice: the number in the amber the frame keeps for what to look at
+// next, the sentence in the body colour so it reads as an instruction and not as small print. The
+// indent hangs, so a hint that wraps starts its second line under its own first word and the numbers
+// stay a column down the pane.
+func (d *docWriter) hint(n int, text string) {
+	label := fmt.Sprintf("Hint %d", n)
+	gap := "  " + hintLabel.Render(label) + "  "
+	for i, line := range wrapPlain(text, max(10, d.body()-lipgloss.Width(label)-2)) {
+		if i == 0 {
+			d.lines = append(d.lines, gap+colText.Render(line))
+			continue
+		}
+		d.lines = append(d.lines, strings.Repeat(" ", lipgloss.Width(gap))+colText.Render(line))
+	}
+}
+
 // para is the guide's own advice, where a step uses it.
 func (d *docWriter) para(text string) {
 	for _, line := range wrapPlain(text, d.body()) {

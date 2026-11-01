@@ -82,6 +82,12 @@ var (
 	// badgeWarn has no width on purpose: colDupe is a 4-cell column style, and wrapping a
 	// sentence in it folds the header one character per line.
 	badgeWarn = lipgloss.NewStyle()
+	// failMark is the verdict in the failure pane: the two words that say which way the wording is
+	// wrong, bold and red, because it is the one line on the screen that is a failure and not a
+	// reading. hintLabel is the "Hint 1" in front of a line of advice: bold and amber, the palette's
+	// "look at this next", since a hint is a direction and not an error.
+	failMark  = lipgloss.NewStyle()
+	hintLabel = lipgloss.NewStyle()
 
 	// The skill-list screen's own columns.
 	colCases = lipgloss.NewStyle()
@@ -153,6 +159,11 @@ func applyStyles(p theme.Palette) {
 	// frame's accent is pointing at, said in words.
 	regionLabel = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Text))
 	badgeWarn = lipgloss.NewStyle().Foreground(p.Color(p.Warn))
+	// The failure pane's two marks. Red is reserved for a failure and this is the failure's own
+	// line; amber means "look at this next", which is what a hint is — the dupe column and the
+	// validation warning mean the same thing in their own places.
+	failMark = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Err))
+	hintLabel = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Warn))
 
 	colCases = lipgloss.NewStyle().Foreground(p.Color(p.Text))
 	colAsr = lipgloss.NewStyle().Foreground(p.Color(p.OK))

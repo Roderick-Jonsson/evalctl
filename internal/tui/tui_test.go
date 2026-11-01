@@ -571,7 +571,11 @@ func TestAValidatedOnlyWordingIsStillPending(t *testing.T) {
 	if m.flow.pending() == nil {
 		t.Fatal("a wording with no train measurement must read as pending, not as measured")
 	}
-	if got := m.flow.stateLine(); !strings.Contains(got, "iteration 1 of 5") {
+	// The loop's counter counts the wording that is pending — and it is the top row's only where
+	// the workbench is stacked: the table counts measured runs, so the fallback keeps the row.
+	m.width, m.height = 80, 24
+	enterSection(m, secIteration)
+	if got := stripMarks(strings.Split(m.View(), "\n")[2]); !strings.Contains(got, "iteration 1 of 5") {
 		t.Fatalf("state line = %q, want the loop's own counter", got)
 	}
 }
@@ -638,9 +642,14 @@ func TestTheBarIsAPathNotASentence(t *testing.T) {
 	if strings.Contains(bar, " · ") {
 		t.Fatalf("the bar still separates its segments with dots:\n%s", bar)
 	}
-	rail := stripMarks(lines[2])
-	if !strings.Contains(rail, "iteration 1 of 5") {
-		t.Fatalf("the loop's numbers left the rail row:\n%s", rail)
+	// The loop's numbers are the iterations table's, not a second row under the bar: the head
+	// counts the loop and the newest row rates the last run, so the top row stops at the path.
+	if got := stripMarks(lines[2]); strings.Contains(got, "iteration ") {
+		t.Fatalf("the top row still repeats the loop's numbers:\n%s", got)
+	}
+	if view := stripMarks(m.View()); !strings.Contains(view, "ITERATIONS") ||
+		!strings.Contains(view, "of 5") {
+		t.Fatalf("the iterations table does not carry the loop's count:\n%s", view)
 	}
 	// The path narrows with the screen instead of running over it.
 	m.width = 60
