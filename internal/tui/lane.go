@@ -277,6 +277,11 @@ func (m *Model) loadSkills() {
 				row.applied = lab.Applied.Candidate
 			}
 			row.sec, row.step = loopOpen(lab)
+		} else if m.store.Skill(name) == nil {
+			// A name the trigger set still mentions and the tree no longer has: it stays in the
+			// list, because its rows are still editable, and the state column says why it has
+			// nothing to show.
+			row.state = "not on disk"
 		}
 		for _, e := range m.store.Rows(store.LaneTrigger, store.Filter{Skill: name, Split: store.SplitTrain}) {
 			if e.Label == "yes" {

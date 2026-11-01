@@ -611,3 +611,110 @@ func TestTheSkillTableIsATable(t *testing.T) {
 		t.Fatalf("a narrow chooser lost its block:\n%s", narrow)
 	}
 }
+
+// ---------------------------------------------------------------- the tree is live
+
+// The chooser is a list of what is on disk, so a skill added while the tool is running has to appear
+// on its own. The bug this pins: the store was read once at startup, and every screen was drawn from
+// that reading — a new skill stayed invisible until the binary was restarted, which reads as the tool
+// having lost it.
+func TestANewSkillAppearsWithoutARestart(t *testing.T) {
+	m, root, _ := fixture(t)
+	press(m, "enter") // the door, then the chooser
+	m.loadSkills()
+	if len(m.skills.rows) != 1 {
+		t.Fatalf("rows = %d, want the one skill the fixture has", len(m.skills.rows))
+	}
+	write(t, filepath.Join(root, "dummy", "evals", "evals.json"), `{"skill_name":"dummy","evals":[]}`)
+	write(t, filepath.Join(root, "dummy", "SKILL.md"), strings.Replace(skillMD, "slide-builder", "dummy", -1))
+
+	m.syncTree()
+
+	names := make([]string, 0, len(m.skills.rows))
+	for _, r := range m.skills.rows {
+		names = append(names, r.name)
+	}
+	if got := strings.Join(names, ","); got != "dummy,slide-builder" {
+		t.Fatalf("rows = %s, want the new skill listed where it sorts", got)
+	}
+	// The new row sorts above the one under the cursor, and the cursor is on a skill, not on a row.
+	if m.skills.rows[m.skills.cursor].name != "slide-builder" {
+		t.Fatalf("the cursor moved to %q when a row was inserted above it", m.skills.rows[m.skills.cursor].name)
+	}
+	if !strings.Contains(stripMarks(m.View()), "dummy") {
+		t.Fatal("the new skill is in the model but not on the screen")
+	}
+}
+
+// The loop a screen is inside can leave the tree too: the skill's dir gone means its set and its
+// ledger are gone, and a flow drawn over them would be a screen with nothing behind it.
+func TestASkillThatLeavesTheTreeGoesBackToTheChooser(t *testing.T) {
+	m, root, _ := fixture(t)
+	m.openSkill("slide-builder")
+	enterSection(m, secIteration)
+	if err := os.RemoveAll(filepath.Join(root, "slide-builder")); err != nil {
+		t.Fatal(err)
+	}
+	m.syncTree()
+	if m.skill != "" || m.flow != nil || m.mode != screenSkill {
+		t.Fatalf("skill = %q flow = %v mode = %d, want the chooser with no skill open", m.skill, m.flow, m.mode)
+	}
+	// The trigger set still mentions the skill, so its name stays in the chooser — its rows are
+	// still editable — and the state column says the tree no longer has it.
+	if len(m.skills.rows) != 1 || m.skills.rows[0].state != "not on disk" {
+		t.Fatalf("rows = %+v, want one row saying it is not on disk", m.skills.rows)
+	}
+	if !strings.Contains(m.status, "no longer in the tree") {
+		t.Fatalf("status = %q, want the disappearance said out loud", m.status)
+	}
+}
+
+// A form carries the store index of the row it will write, and a question carries the row itself:
+// swapping the store under either one would apply the edit to a row nobody is looking at. Those two
+// screens hold the re-read back instead of losing the change.
+func TestAChangeWaitsForTheForm(t *testing.T) {
+	m, root, _ := fixture(t)
+	m.openSkill("slide-builder")
+	enterSection(m, secIteration)
+	// A form open on a row: what matters here is only that the screen is a form, because that is
+	// the state that holds a store index the user is not looking at.
+	m.mode, m.form = screenForm, &formState{index: 0}
+	write(t, filepath.Join(root, "dummy", "evals", "evals.json"), `{"skill_name":"dummy","evals":[]}`)
+	held := m.store
+	m.syncTree()
+	if m.store != held {
+		t.Fatal("the store was swapped under an open form")
+	}
+	// The keys come back: the next tick is the one that re-reads.
+	m.mode, m.form = screenFlow, nil
+	m.syncTree()
+	if m.store == held {
+		t.Fatal("the change was forgotten once the form closed")
+	}
+	if m.store.Skill("dummy") == nil {
+		t.Fatal("the new skill is still missing after the form closed")
+	}
+}
+
+// A tree caught mid-write must not replace the reading that works: the store that opens cleanly is
+// the one on screen, and the half-written file is retried rather than adopted.
+func TestATreeCaughtMidWriteKeepsTheReadingAndRetries(t *testing.T) {
+	m, root, _ := fixture(t)
+	press(m, "enter")
+	m.loadSkills()
+	held := m.store
+	set := filepath.Join(root, "trigger", "trigger-evals.json")
+	write(t, set, `{"queries": [`)
+	m.syncTree()
+	if m.store != held {
+		t.Fatal("a half-written trigger set replaced the store")
+	}
+	write(t, set, strings.Replace(triggerSet, `"core ask"`, `"core ask, rewritten"`, 1))
+	m.syncTree()
+	if m.store == held {
+		t.Fatal("the tree was never re-read after it became readable")
+	}
+	if len(m.skills.rows) != 1 || m.skills.rows[0].train != 2 {
+		t.Fatalf("rows = %+v, want the rewritten set read back", m.skills.rows)
+	}
+}

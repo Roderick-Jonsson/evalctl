@@ -169,6 +169,15 @@ j k move · enter open the loop · esc lanes                                    
 iterations the guide asks for, and `STATE` is what the loop would do next with it — one phrase, read
 off the ledger and the iterations on disk rather than remembered.
 
+The list is the disk, not a copy of it taken at startup. The tool stamps the tree once a second —
+every path under the root with its size and mtime, pruned at the workspaces' iteration level and
+skipping `.git` and `.evalctl`'s backups — and re-reads when the stamp moves. Add a stage skill in
+another window and it is in the table a second later; finish a run in a second terminal and the
+counts, the ledger and the `STATE` phrase follow it. Two states are held back on purpose, because
+they are writes and not readings: a run in flight, whose runner is still writing into the store it
+started with, and an open form or question, which holds the index of the row it is about to write.
+Both re-read on the tick after they hand the keys back.
+
 The table is the shape the eval tables had: a two-cell gutter where the cursor lives, fixed columns,
 counts right-aligned so 1 and 47 end on one edge, a quiet header and no rule under it. Beside it, the
 pane says what the row under the cursor is — the activity and step its loop opens in, what both splits

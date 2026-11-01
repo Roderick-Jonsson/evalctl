@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -56,8 +57,13 @@ type Model struct {
 	statusErr     bool
 	quitArmed     bool
 
-	lanes    laneState
-	skills   skillState
+	lanes  laneState
+	skills skillState
+	// stamp is the tree as the store was last read from. Every screen here is a drawing of the
+	// disk, so the app asks once a second whether the disk is still the one it drew and re-reads
+	// when it is not — otherwise a skill added in another window stays invisible until a restart,
+	// which reads as the tool having lost it.
+	stamp    string
 	sections sectionState
 	flow     *flowState
 	form     *formState
@@ -104,10 +110,16 @@ func Run(s *store.Store, skill, lane, glyphProfile string) int {
 }
 
 func newModel(s *store.Store) *Model {
-	return &Model{store: s, ver: version.Resolve().Short(), mode: screenLane}
+	m := &Model{store: s, ver: version.Resolve().Short(), mode: screenLane}
+	// The stamp the store was opened at: a screen drawn from it is current until the tree says
+	// otherwise. A tree that cannot be stamped reads as changed, and the first tick re-reads it.
+	m.stamp, _ = store.TreeStamp(s.Root)
+	return m
 }
 
-func (m *Model) Init() tea.Cmd { return nil }
+// Init arms the tree poll. It runs for the whole session, on every screen: what the screens show is
+// the disk, and the disk changes without asking this window.
+func (m *Model) Init() tea.Cmd { return watchEvery() }
 
 // reload re-reads what the loop knows: the skill's ledger and its measurements, and the rows of the
 // split the current step is about. It is called after every write and every finished run, so no
@@ -153,8 +165,101 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tickEvery()
 		}
 		return m, nil
+	case watchMsg:
+		m.syncTree()
+		return m, watchEvery()
 	}
 	return m, m.passToForm(msg)
+}
+
+// watchMsg is the tree poll firing: one stat walk of the tree, once a second.
+type watchMsg struct{}
+
+func watchEvery() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return watchMsg{} })
+}
+
+// syncTree is the app's answer to "is what I am showing still the disk?" It costs one stat walk and
+// re-reads nothing while the stamp holds — which is almost every second.
+func (m *Model) syncTree() {
+	stamp, err := store.TreeStamp(m.store.Root)
+	if err != nil {
+		m.noteStatus("cannot read the tree: "+err.Error(), true)
+		return
+	}
+	if stamp == m.stamp {
+		return
+	}
+	// Two states are not a reading of the disk and must not be swapped under: a run in flight, whose
+	// runner is still writing into the store it started with, and a form or a question, which holds
+	// the store index of the row it is about to write. The stamp is deliberately not recorded, so
+	// the tick after the screen gives the keys back does the re-read.
+	if m.runActive() || m.mode == screenForm || m.mode == screenAsk {
+		return
+	}
+	if m.reopen() {
+		m.stamp = stamp
+	}
+}
+
+// reopen re-reads the tree and puts the current screen on the new reading. Everything a screen shows
+// is either derived from the model's store or re-read from a file by reload, so the swap is the whole
+// of it — but the cursors are the model's, and they are kept where they still mean something: the
+// skill under the cursor by name, not by row, because a skill that sorts above it moves it.
+//
+// It reports whether the tree was read: a tree caught mid-write keeps the reading that works, and
+// the stamp is left alone so the next tick tries again.
+func (m *Model) reopen() bool {
+	s, err := store.Open(m.store.Root)
+	if err != nil {
+		m.noteStatus("the tree changed and did not read back: "+err.Error(), true)
+		return false
+	}
+	m.store = s
+
+	// The skill being worked on may have left the tree. Its loop has no screens without its files,
+	// so the app goes back to the chooser rather than drawing a flow whose set is gone.
+	if m.skill != "" && m.store.Skill(m.skill) == nil {
+		gone := m.skill
+		m.skill, m.flow = "", nil
+		m.sections, m.skills = sectionState{}, skillState{}
+		if m.mode != screenLane {
+			m.mode = screenSkill
+			m.loadSkills()
+		}
+		m.noteStatus(gone+" is no longer in the tree — the chooser has been re-read", true)
+		return true
+	}
+	switch m.mode {
+	case screenSkill:
+		sel := ""
+		if m.skills.cursor >= 0 && m.skills.cursor < len(m.skills.rows) {
+			sel = m.skills.rows[m.skills.cursor].name
+		}
+		top := m.skills.top
+		m.loadSkills()
+		m.skills.top = top
+		for i, r := range m.skills.rows {
+			if r.name == sel {
+				m.skills.cursor = i
+				return true
+			}
+		}
+	default:
+		// reload re-reads the ledger and the split the screen is about, including the section
+		// screen's pane, so one call covers every screen that shows a set.
+		m.reload()
+	}
+	return true
+}
+
+// noteStatus is setStatus for a message the app may repeat: a tree caught mid-write would otherwise
+// rewrite the same line every second and overwrite whatever the person was just told.
+func (m *Model) noteStatus(msg string, isErr bool) {
+	if m.status == msg && m.statusErr == isErr {
+		return
+	}
+	m.setStatus(msg, isErr)
 }
 
 func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
