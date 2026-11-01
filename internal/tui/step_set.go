@@ -22,6 +22,7 @@ import (
 // set of nine positives and one negative is a bad set, not an invalid one.
 
 func (m *Model) setBody(h int) []string {
+	m.syncSetForm()
 	f := m.flow
 	train := f.sec == secIteration
 	title := "train set — the queries the wording may learn from"
@@ -33,32 +34,71 @@ func (m *Model) setBody(h int) []string {
 		"  " + titleStyle.Render(title),
 		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4)))),
 	}
-	// The facts block is bottom-anchored: three rows of it are the screen's standing advice, and
-	// they must not scroll away with the table.
-	const facts = 3
-	room := max(1, h-2-facts)
+	// The footer is bottom-anchored: the counts and the one warning are the screen's standing
+	// advice, and they must not scroll away with the table.
+	foot := []string{"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4))))}
+	for _, line := range wrapPlain(m.setFacts(train), max(20, m.width-6)) {
+		foot = append(foot, "  "+dimStyle.Render(line))
+	}
+	if w := m.setWarning(); w != "" {
+		foot = append(foot, "  "+badgeWarn.Render("!")+" "+dimStyle.Render(w))
+	} else {
+		foot = append(foot, "")
+	}
+
+	// The table is the upper half and the row's fields are the lower half, always: the row is edited
+	// where it is listed. The fields get what they measure, the table keeps the rest.
+	form := m.inlineForm()
+	formH := 0
+	if form != nil {
+		formH = min(form.want()+1, max(9, h-len(lines)-len(foot)-3))
+	}
+	rule := "  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4))))
+	// One of the rows below the table is that rule.
+	room := max(1, h-len(lines)-len(foot)-formH-boolInt(formH > 0))
 	if len(f.rows) == 0 {
 		lines = append(lines, "",
 			"  "+dimStyle.Render("no rows in this split yet"),
 			"", "  "+titleStyle.Render("n")+"  "+dimStyle.Render("add the first query"))
-		return fitRows(lines, h)
+		// The first row of an empty split is written in the same fields, `n` puts the caret in them.
+		if form != nil {
+			lines = append(lines, rule)
+			lines = append(lines, form.body(m.width-2, formH)...)
+		}
+		return fitRows(append(lines, foot...), h)
 	}
 	f.clampSet(room)
 	lines = append(lines, queryHeader(queryCols(m.width), true))
 	for i := f.top; i < len(f.rows) && len(lines) < 2+room; i++ {
 		lines = append(lines, queryRow(f.rows[i], queryCols(m.width), true, i == f.sel))
 	}
-	for len(lines) < 2+room {
+	// The table keeps its height so the fields do not jump when a short set is edited — but it never
+	// takes a row the fields or the footer need.
+	for len(lines) < 2+room && len(lines)+formH+boolInt(formH > 0)+len(foot) <= h {
 		lines = append(lines, "")
 	}
-	lines = append(lines, "  "+dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4)))))
-	lines = append(lines, "  "+dimStyle.Render(m.setFacts(train)))
-	if w := m.setWarning(); w != "" {
-		lines = append(lines, "  "+badgeWarn.Render("!")+" "+dimStyle.Render(w))
-	} else {
-		lines = append(lines, "")
+	if form != nil {
+		lines = append(lines, rule)
+		lines = append(lines, form.body(m.width-2, formH)...)
 	}
+	lines = append(lines, foot...)
 	return fitRows(lines, h)
+}
+
+// clipLines keeps at most n lines: a wrapped paragraph in a pane is a paragraph, not a screen.
+func clipLines(lines []string, n int) []string {
+	if len(lines) > n {
+		return lines[:n]
+	}
+	return lines
+}
+
+// labelCell is a row's label as one coloured word, for the places that print it beside an id.
+func labelCell(label string) string {
+	if label == "yes" {
+		return colYes.Render("should trigger")
+	}
+	return colNo.Render("should not")
 }
 
 // queryCols is the width each column takes in a table of w cells: the id and the label are fixed,
@@ -233,18 +273,16 @@ func (m *Model) updateSet(msg tea.KeyMsg) tea.Cmd {
 		m.reload()
 	case "g", "home":
 		f.sel = 0
+		m.syncSetForm()
 	case "G", "end":
 		f.sel = max(0, len(f.rows)-1)
+		m.syncSetForm()
 	case "enter":
 		return m.leaveSet()
 	case "n":
 		m.openForm(nil)
-	case "e":
-		if len(f.rows) == 0 {
-			return nil
-		}
-		e := f.rows[f.sel]
-		m.openForm(&e)
+	case "e", "tab":
+		return m.focusForm()
 	case " ", "space":
 		if len(f.rows) == 0 {
 			return nil
@@ -301,6 +339,9 @@ func (m *Model) toggleRow(e store.Entry) tea.Cmd {
 	if q.ShouldTrigger {
 		label = "should trigger"
 	}
+	// The fields under the table are seeded from the file: a write the file just took re-seeds them,
+	// so nothing on screen still says what the row used to be.
+	m.form = nil
 	m.reload()
 	m.setStatus(fmt.Sprintf("q%d is now %s", q.ID, label), false)
 	return nil
@@ -351,23 +392,158 @@ func (m *Model) askDeleteEntry(e store.Entry, scope string, back screen, after f
 	m.mode = screenAsk
 }
 
-// ---------------------------------------------------------------- writing a row
+// setPane is the set as one column: its title and headings, the rows, and under them the fields of the
+// row under the cursor. It is what the workbench puts in its right-hand column, and it is the same
+// arrangement the step screens draw across the whole body — table above, the row's fields below,
+// always, with no key needed to make the fields appear.
+func (m *Model) setPane(w, h int) []string {
+	m.syncSetForm()
+	f := m.flow
+	const idW, trigW, resW = 4, 7, 6
+	queryW := max(12, w-2-3-idW-2-trigW-1-resW-2)
+	head := "  " + dimStyle.Render(padCell("ID", idW, true)) + "   " +
+		dimStyle.Render(padCell("TRIGGER", trigW, false)) + " " +
+		dimStyle.Render(padCell("RESULT", resW, false)) + "  " +
+		dimStyle.Render(padCell("QUERY", queryW, false))
+	lines := []string{"", m.quadTitle(w, "TRAIN SET", pluralOf(len(f.rows), "query", "queries")), head}
 
-// openForm opens the query form on a row of the step screen's split. A new row takes the next free id
-// without asking: ids are the tool's business, not the operator's, and the guided flow has no second
-// place to fix a collision.
-func (m *Model) openForm(e *store.Entry) {
-	split := store.SplitTrain
-	if m.flow != nil && m.flow.split() == store.SplitValidation {
-		split = store.SplitValidation
+	facts := wrapPlain(m.setFacts(true), max(20, w-6))
+	form := m.inlineForm()
+	formH := 0
+	if form != nil {
+		formH = min(form.want()+1, max(9, h-len(lines)-len(facts)-3))
 	}
-	m.openFormIn(split, e, screenFlow)
+	room := max(1, h-len(lines)-len(facts)-formH-boolInt(formH > 0))
+	f.clampSet(room)
+	for i := f.top; i < len(f.rows) && i < f.top+room; i++ {
+		lines = append(lines, m.quadSetRow(i, idW, trigW, resW, queryW))
+	}
+	for len(lines) < h-len(facts)-formH-boolInt(formH > 0) {
+		lines = append(lines, "")
+	}
+	if form != nil {
+		lines = append(lines, dimStyle.Render("  "+strings.Repeat(glyphs.Rule, max(8, w-4))))
+		lines = append(lines, form.body(w, formH)...)
+	}
+	for i, line := range facts {
+		if i == 1 && len(lines) >= h {
+			break
+		}
+		lines = append(lines, "  "+dimStyle.Render(line))
+	}
+	return fitRows(lines, h)
 }
 
-// openFormIn is the same form for any split and any screen: the section screen's pane writes a row of
-// the split it is showing and hands the keys back to itself.
-func (m *Model) openFormIn(split string, e *store.Entry, back screen) {
-	f := &formState{split: split, width: m.width, height: m.bodyHeight(), back: back}
+// ---------------------------------------------------------------- writing a row
+
+// openForm opens the query editor inside the set the workbench is showing: the row stays beside its
+// neighbours and the failure card that says why it matters stays on screen, which is the difference
+// between editing a query and switching away to edit one.
+func (m *Model) openForm(e *store.Entry) {
+	f := m.flow
+	if f == nil {
+		return
+	}
+	w := m.width - 2
+	if f.sec == secIteration {
+		w = m.workbenchPaneWidth() - 2
+	}
+	m.openInlineForm(e, f.split(), w)
+}
+
+// focusForm puts the caret in the fields the pane is already drawing. The fields are always there;
+// this is only the move that says the next keystroke is a character, not a row command.
+func (m *Model) focusForm() tea.Cmd {
+	if m.inlineForm() == nil {
+		return nil
+	}
+	return m.form.focus()
+}
+
+// openPaneForm is the same editor for the set beside the two sections, which is the width of that
+// pane and not of the window.
+func (m *Model) openPaneForm(sec int, e *store.Entry) {
+	w := m.sectionPaneWidth()
+	if w == 0 {
+		return
+	}
+	m.openInlineForm(e, splitOf(sec), w-2)
+}
+
+// syncSetForm keeps the fields under the table about the row under the cursor. It is not a mode and it
+// does not wait for a key: the form is part of the pane, seeded from the selection and re-seeded when
+// the selection moves. A row being written new is left alone — it has no row to follow yet.
+func (m *Model) syncSetForm() {
+	// A screen that is not showing a set has no fields under a table to keep in step.
+	if m.mode == screenFlow && m.flow != nil && m.flow.split() == "" {
+		m.form = nil
+		return
+	}
+	rows, sel, _, w := m.setView()
+	if m.form != nil && !m.form.editing {
+		return
+	}
+	if w == 0 || len(rows) == 0 {
+		m.form = nil
+		return
+	}
+	e := rows[min(sel, len(rows)-1)]
+	// The form is kept only while it is still about that row at that index: a row deleted above it
+	// shifts every index below, and a form holding the old one would write the wrong row.
+	// A row deleted above it shifts every index below, and a narrower pane wraps the ask differently:
+	// both are reasons to seed the fields again rather than reuse what was drawn for another shape.
+	if m.form != nil && m.form.editing && m.form.id == e.ID && m.form.index == e.Index &&
+		m.form.width == max(24, w) {
+		return
+	}
+	m.seedForm(&e, e.Split, w)
+}
+
+// setView is the list the screen in front of you is showing: its rows, its cursor, its split and the
+// width its pane gives the fields.
+func (m *Model) setView() (rows []store.Entry, sel int, split string, w int) {
+	if m.mode == screenSections {
+		sec := sectionRows[m.sections.cursor].sec
+		return m.sections.rows, m.sections.sel, splitOf(sec), m.sectionPaneWidth() - 2
+	}
+	if m.flow == nil {
+		return nil, 0, "", 0
+	}
+	if m.flow.sec == secIteration {
+		return m.flow.rows, m.flow.sel, m.flow.split(), m.workbenchPaneWidth() - 2
+	}
+	return m.flow.rows, m.flow.sel, m.flow.split(), m.width - 2
+}
+
+// seedForm is the one place a form is made: from a row, or empty for a new one.
+func (m *Model) seedForm(e *store.Entry, split string, w int) {
+	if e != nil && store.KnownSplit(e.Split) {
+		split = e.Split
+	}
+	if !store.KnownSplit(split) {
+		split = store.SplitTrain
+	}
+	fs := &formState{split: split, width: max(24, w), height: m.bodyHeight()}
+	m.fillForm(fs, e)
+	fs.build()
+	m.form = fs
+}
+
+// openInlineForm is the editor drawn in the set itself. The split it opens on is the row's own when
+// there is a row, and the split on screen when there is not — a new row belongs to the set you were
+// looking at, and may be moved afterwards. The mode is the screen that called: a form is drawn inside
+// whatever was already there, and never becomes a screen of its own.
+func (m *Model) openInlineForm(e *store.Entry, split string, w int) {
+	m.seedForm(e, split, w)
+	if m.form != nil {
+		m.form.focus()
+	}
+}
+
+// fillForm seeds the fields from the row being edited, or from the next free id for a new one. The
+// id is the tool's: ids index the result directories, and the guided flow has no second place to fix
+// a collision.
+func (m *Model) fillForm(f *formState, e *store.Entry) {
 	if e != nil {
 		f.editing = true
 		f.index = e.Index
@@ -379,23 +555,49 @@ func (m *Model) openFormIn(split string, e *store.Entry, back screen) {
 		f.id = m.store.NextTriggerID()
 		f.label = true
 	}
-	f.hint = "a query is a prompt a real user would type — the wording is what the router matches on"
-	if f.editing {
-		f.hint = "the why is read back to you when this row fails"
+}
+
+// inlineForm is the fields a set screen is drawing, or nil. It is not a screen: the screen that owns
+// the set keeps its other panes and its own title, and only the set's table makes room.
+func (m *Model) inlineForm() *formState {
+	if m.form != nil && (m.mode == screenFlow || m.mode == screenSections) {
+		return m.form
 	}
-	f.build()
-	m.form = f
-	m.mode = screenForm
+	return nil
+}
+
+// formActive is whether the caret is in those fields, which is the only thing the keys care about.
+func (m *Model) formActive() bool {
+	f := m.inlineForm()
+	return f != nil && f.active
 }
 
 // apply writes the draft through the store and re-reads the set, so the table behind the form is the
 // file and not the draft.
 func (f *formState) apply(m *Model) tea.Cmd {
+	split := strings.TrimSpace(f.splitSel)
+	if split == "" {
+		split = f.split
+	}
+	if !store.KnownSplit(split) {
+		f.errMsg = "split must be " + strings.Join(splitOptions, ", ")
+		return nil
+	}
+	moved := f.editing && split != f.split
+	// The select is the field, and the boolean behind it is the draft: a form whose label is changed
+	// and then saved must write the label the form showed.
+	should := f.label
+	switch strings.TrimSpace(f.labelSel) {
+	case labelWord(true):
+		should = true
+	case labelWord(false):
+		should = false
+	}
 	q := model.TriggerQuery{
 		ID:            f.id,
 		Skill:         m.skill,
-		ShouldTrigger: f.label,
-		Split:         f.split,
+		ShouldTrigger: should,
+		Split:         split,
 		Query:         strings.TrimSpace(f.query),
 		Why:           strings.TrimSpace(f.why),
 	}
@@ -421,14 +623,54 @@ func (f *formState) apply(m *Model) tea.Cmd {
 		f.errMsg = err.Error()
 		return nil
 	}
-	m.form, m.mode = nil, f.target()
+	m.form = nil
 	m.reload()
+	m.selectRow(f.id)
 	verb := "added"
 	if f.editing {
 		verb = "saved"
 	}
-	m.setStatus(fmt.Sprintf("q%d %s — %s/%s", f.id, verb, f.split, labelWord(f.label)), false)
+	msg := fmt.Sprintf("q%d %s — %s, %s", f.id, verb, split, labelWord(should))
+	if moved {
+		// Moving a row between splits is the one edit that changes what the other screen measures,
+		// so it says so instead of looking like an ordinary save.
+		msg = fmt.Sprintf("q%d moved %s → %s — it has left the split this screen shows", f.id, f.split, split)
+	}
+	m.setStatus(msg, false)
 	return nil
+}
+
+// selectRow puts a set's cursor back on a row after a write: the row may have moved down the file
+// order, and a cursor that jumped to the top would hide the row just saved. Both sets a form can be
+// opened from keep their own cursor, so both are put back.
+func (m *Model) selectRow(id int) {
+	s := &m.sections
+	for i, e := range s.rows {
+		if e.ID == id {
+			s.sel = i
+			break
+		}
+	}
+	s.sel = min(s.sel, max(0, len(s.rows)-1))
+	if f := m.flow; f != nil {
+		if i := rowIndex(f.rows, id); i >= 0 {
+			f.sel = i
+		} else {
+			f.sel = min(f.sel, max(0, len(f.rows)-1))
+		}
+	}
+	// The fields follow the cursor, and the cursor just moved: seed them again for the row it landed on.
+	m.syncSetForm()
+}
+
+// rowIndex is the position of a row in a list, or -1.
+func rowIndex(rows []store.Entry, id int) int {
+	for i, e := range rows {
+		if e.ID == id {
+			return i
+		}
+	}
+	return -1
 }
 
 func labelWord(yes bool) string {

@@ -40,7 +40,6 @@ const (
 	screenSkill                  // which skill, with where each one is in the loop
 	screenSections               // iteration or generalization
 	screenFlow                   // the section's steps, one filling the body
-	screenForm                   // a query's own fields
 	screenDraft                  // the description being revised
 	screenAsk                    // a yes/no question
 	screenDoc                    // a scrollable document (failures, a report, a log)
@@ -147,6 +146,9 @@ func (m *Model) reload() {
 	if m.mode == screenSections {
 		m.loadSectionRows()
 	}
+	// The fields under a set's table follow its cursor. Every write and every re-read comes through
+	// here, so they are seeded once, here, rather than on the frame that happens to draw them.
+	m.syncSetForm()
 }
 
 func (m *Model) setStatus(msg string, isErr bool) {
@@ -160,8 +162,10 @@ func (m *Model) bodyHeight() int { return max(1, m.height-len(m.headLines())-2) 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		// Every screen measures itself against the window on the way out, and a form measures itself
+		// against its pane on every draw — so a resize is one assignment and nothing else.
 		m.width, m.height = msg.Width, msg.Height
-		return m, m.resize()
+		return m, nil
 	case tea.KeyMsg:
 		return m.key(msg)
 	case runEventMsg:
@@ -203,7 +207,9 @@ func (m *Model) syncTree() {
 	// runner is still writing into the store it started with, and a form or a question, which holds
 	// the store index of the row it is about to write. The stamp is deliberately not recorded, so
 	// the tick after the screen gives the keys back does the re-read.
-	if m.runActive() || m.mode == screenForm || m.mode == screenAsk {
+	// Only a field with the caret holds the re-read back: its draft is the one thing on screen the
+	// store cannot replace. Fields without it are seeded from the file and can be seeded again.
+	if m.runActive() || m.mode == screenAsk || m.formActive() {
 		return
 	}
 	if m.reopen() {
@@ -275,8 +281,9 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	m.status = ""
 	// A form owns its keystrokes: every character is a character, and the frame keys would eat the
-	// ones the field needs.
-	if m.mode == screenForm && m.form != nil {
+	// ones the field needs. It is not a screen — the set it belongs to stays drawn around it, always —
+	// so this is only about the caret: with the keys in the table, j and k still move.
+	if m.formActive() {
 		return m, m.form.update(m, msg)
 	}
 	// The description field owns its keystrokes: q, ? and the digits are characters first, and a
@@ -331,11 +338,15 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// passToForm hands a non-key message to the form that asked for it. huh moves its caret by returning
+// a command — `tab` in a text field comes back as a nextFieldMsg — so an editor that never receives
+// these messages is an editor where tab does nothing. The full-body form and the one drawn in a set
+// both need this; only the inline one is not a screen of its own.
 func (m *Model) passToForm(msg tea.Msg) tea.Cmd {
-	if m.mode == screenForm && m.form != nil {
-		return m.form.updateMsg(msg)
+	if !m.formActive() {
+		return nil
 	}
-	return nil
+	return m.form.updateMsg(msg)
 }
 
 // escUp is one level up, and it does exactly one thing per screen: the footer names the level so
@@ -350,8 +361,6 @@ func (m *Model) escUp() tea.Cmd {
 	case screenSections:
 		m.skill, m.flow = "", nil
 		m.mode = screenSkill
-	case screenForm:
-		m.form, m.mode = nil, screenFlow
 	case screenAsk:
 		m.ask, m.mode = nil, screenFlow
 	case screenDoc:
@@ -382,13 +391,6 @@ func (m *Model) quit() tea.Cmd {
 
 func (m *Model) runActive() bool {
 	return m.run != nil && m.run.live != nil && !m.run.live.done
-}
-
-func (m *Model) resize() tea.Cmd {
-	if m.form != nil {
-		return m.form.resize(m.width, m.bodyHeight())
-	}
-	return nil
 }
 
 // ---------------------------------------------------------------- view
@@ -449,8 +451,6 @@ func (m *Model) pathSegments() []string {
 				segs = append(segs, m.flow.stepName())
 			}
 		}
-	case screenForm:
-		segs = append(segs, "query")
 	case screenDraft:
 		segs = append(segs, "revise")
 	case screenDoc:
@@ -517,10 +517,6 @@ func (m *Model) contextLine(w int) string {
 		return ""
 	case screenSkill:
 		return ""
-	case screenForm:
-		if m.form != nil {
-			return dimStyle.Render("  " + m.form.hint)
-		}
 	case screenRunAsk, screenRunLive:
 		if m.run != nil {
 			return dimStyle.Render("  " + m.run.hint)
@@ -542,10 +538,6 @@ func (m *Model) bodyLines(h int) []string {
 	case screenFlow:
 		if m.flow != nil {
 			return m.flow.body(m, h)
-		}
-	case screenForm:
-		if m.form != nil {
-			return m.form.body(h)
 		}
 	case screenAsk:
 		if m.ask != nil {
@@ -601,6 +593,9 @@ func (m *Model) hints() []hint {
 	case screenSkill:
 		return []hint{{"j k", "move"}, {"enter", "open the loop"}, {"esc", "lanes"}}
 	case screenSections:
+		if m.formActive() {
+			return m.form.hints()
+		}
 		if m.sections.focus == sectionFocusSet && m.sectionPaneWidth() > 0 {
 			// The pane has the keys: the set's own vocabulary, one line short of the step screen's.
 			return []hint{{"j k", "rows"}, {"n e d", "new · edit · delete"}, {"space", "trigger"},
@@ -613,10 +608,6 @@ func (m *Model) hints() []hint {
 	case screenFlow:
 		if m.flow != nil {
 			return m.flow.hints(m)
-		}
-	case screenForm:
-		if m.form != nil {
-			return m.form.hints()
 		}
 	case screenAsk:
 		if m.ask != nil {
@@ -663,6 +654,9 @@ func (m *Model) stateText() string {
 	case screenSkill:
 		return plural(len(m.skillNames()), "skill") + " with a description to tune"
 	case screenSections:
+		if m.formActive() {
+			return m.form.facts()
+		}
 		// The rule the section works under, where the pane used to spend a paragraph on it. What is
 		// on screen is the set; what belongs on the status row is what that set is for.
 		if sectionRows[m.sections.cursor].sec == secGeneralization {
@@ -670,6 +664,9 @@ func (m *Model) stateText() string {
 		}
 		return "the wording may learn from these rows — nothing else shapes a revision"
 	case screenFlow:
+		if m.formActive() {
+			return m.form.facts()
+		}
 		if m.flow != nil {
 			return m.flow.stateText()
 		}
@@ -679,10 +676,6 @@ func (m *Model) stateText() string {
 		}
 	case screenRunAsk:
 		return "nothing has been run yet"
-	case screenForm:
-		if m.form != nil {
-			return m.form.facts()
-		}
 	}
 	return ""
 }
@@ -690,6 +683,9 @@ func (m *Model) stateText() string {
 func (m *Model) position() string {
 	switch m.mode {
 	case screenFlow:
+		if m.formActive() {
+			return fmt.Sprintf("editing q%d", m.form.id)
+		}
 		if m.flow != nil && m.flow.stepCount() > 1 {
 			return fmt.Sprintf("step %d of %d", m.flow.step, m.flow.stepCount())
 		}
@@ -701,6 +697,9 @@ func (m *Model) position() string {
 			return pos
 		}
 	case screenSections:
+		if m.formActive() {
+			return fmt.Sprintf("editing q%d", m.form.id)
+		}
 		if m.sections.focus == sectionFocusSet && len(m.sections.rows) > 0 {
 			return fmt.Sprintf("row %d of %d", m.sections.sel+1, len(m.sections.rows))
 		}
@@ -760,10 +759,17 @@ func (m *Model) helpLines() []string {
 		head("steps 1 and 2 — the query set"),
 		[]string{
 			"  n          new query in this split",
-			"  e          edit the row under the cursor",
+			"  e          edit the row under the cursor, in the set",
 			"  d          delete the row under the cursor (asks first)",
 			"  space      flip should-trigger: the row asks the router yes or no",
 			"  j k g G    move; first and last row",
+		},
+		head("the editor, under a set's table"),
+		[]string{
+			"  query      the ask, as a user would type it — the field the router matches on",
+			"  why        the reason the row is in the set; read back when it fails",
+			"  split      train guides a revision, validation judges it, holdout is measured once",
+			"  tab        the next field · ctrl+s saves · esc discards",
 		},
 		head("the two sections"),
 		[]string{

@@ -99,6 +99,10 @@ func press(m *Model, key string) tea.Cmd {
 		msg = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")}
 	case "ctrl+g":
 		msg = tea.KeyMsg{Type: tea.KeyCtrlG}
+	case "ctrl+s":
+		msg = tea.KeyMsg{Type: tea.KeyCtrlS}
+	case "tab":
+		msg = tea.KeyMsg{Type: tea.KeyTab}
 	case "down":
 		msg = tea.KeyMsg{Type: tea.KeyDown}
 	case "up":
@@ -266,22 +270,26 @@ func TestThePaneDeletesAndComesBackToItself(t *testing.T) {
 	}
 }
 
-// TestAQueryAddedFromThePaneLandsInTheSplitOnScreen: the form writes the split the pane is showing and
-// hands the keys back to the pane.
+// TestAQueryAddedFromThePaneLandsInTheSplitOnScreen: the form writes the split the pane is showing, in
+// the pane, and the section screen never goes away.
 func TestAQueryAddedFromThePaneLandsInTheSplitOnScreen(t *testing.T) {
 	m, _, s := fixture(t)
 	m.openSkill("slide-builder")
 	press(m, "j") // generalization
 	press(m, "tab")
 	press(m, "n")
-	if m.mode != screenForm || m.form == nil || m.form.split != store.SplitValidation {
-		t.Fatalf("mode = %v split = %q, want the validation split", m.mode, m.form.split)
+	if m.mode != screenSections || m.inlineForm() == nil || m.form.split != store.SplitValidation {
+		t.Fatalf("mode = %v split = %q, want the validation split in the pane", m.mode, m.form.split)
 	}
 	m.form.query = "make a deck from these notes"
 	m.form.why = "held back"
 	m.form.apply(m)
-	if m.mode != screenSections {
-		t.Fatalf("mode = %v, want the pane back", m.mode)
+	// The pane keeps its fields — they are part of it — but they are the file's again, not a draft.
+	if m.mode != screenSections || m.form == nil || m.form.active {
+		t.Fatalf("mode = %v form = %+v, want the pane's fields, quiet", m.mode, m.form)
+	}
+	if m.form.query != "make a deck from these notes" {
+		t.Fatalf("the fields must be re-seeded from the write: %q", m.form.query)
 	}
 	rows := s.Rows(store.LaneTrigger, store.Filter{Skill: "slide-builder", Split: store.SplitValidation})
 	if len(rows) != 3 || rows[2].Text != "make a deck from these notes" {
@@ -788,9 +796,9 @@ func TestAChangeWaitsForTheForm(t *testing.T) {
 	m, root, _ := fixture(t)
 	m.openSkill("slide-builder")
 	enterSection(m, secIteration)
-	// A form open on a row: what matters here is only that the screen is a form, because that is
-	// the state that holds a store index the user is not looking at.
-	m.mode, m.form = screenForm, &formState{index: 0}
+	// A field with the caret holds a store index and a draft the user is looking at; that is the state
+	// the re-read waits for.
+	m.form = &formState{index: 0, active: true}
 	write(t, filepath.Join(root, "dummy", "evals", "evals.json"), `{"skill_name":"dummy","evals":[]}`)
 	held := m.store
 	m.syncTree()
@@ -798,7 +806,7 @@ func TestAChangeWaitsForTheForm(t *testing.T) {
 		t.Fatal("the store was swapped under an open form")
 	}
 	// The keys come back: the next tick is the one that re-reads.
-	m.mode, m.form = screenFlow, nil
+	m.form = nil
 	m.syncTree()
 	if m.store == held {
 		t.Fatal("the change was forgotten once the form closed")

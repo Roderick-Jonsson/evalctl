@@ -293,13 +293,24 @@ enter run the train set · tab the description · R run again · n new · e edit
 | quadrant | what it holds |
 |---|---|
 | **failed query** (top left) | the row under the cursor if it failed, otherwise the first failure: the ask in full, why it is in the set, what loaded instead, the verdict (too narrow, too broad, unstable) and **what to adapt** — the guide's advice for that kind of failure. It is deterministic, so the advice is checkable against the page it came from |
-| **train set** (top right) | the queries the wording may learn from, edited in place: `n` new, `e` edit, `d` delete (confirmed), `space` flips `TRIGGER`. `RESULT` is the last run's verdict per row — `pass`, `FAIL`, or `—` when the candidate has not been run |
+| **train set** (top right) | the queries the wording may learn from, edited in place: `n` new, `e` edit, `d` delete (confirmed), `space` flips `TRIGGER`. `RESULT` is the last run's verdict per row — `pass`, `FAIL`, or `—` when the candidate has not been run. Under the table, the row under the cursor in full: a table row is one line, and the `why` never appears in it at all |
 | **the description** (bottom left) | the wording itself, in a field with a caret, because a revision is an edit and not a screen you navigate to. The counter is the format's 1024-character ceiling |
 | **iterations** (bottom right) | every run, its train rate, its length, and the note that says why it exists — the only place you can see whether five revisions moved anything |
 
 **Typing.** `tab` walks the three panes: the set, the description, the note. A pane that has the
 caret says so — the footer changes, and a `q` types a `q` instead of quitting. `esc` gives the keys
 back to the set; a second `esc` leaves the section.
+
+**The set is one pane: table above, the row's fields below.** Every set draws the row under the
+cursor in its fields as part of itself — `query`, `why`, `should the skill load?`, `split` — so there is
+nothing between looking at a row and changing it, and no key that has to reveal the fields first. `e`
+(or, on the section screen, `e` in the pane) puts the caret in them: `tab` moves between them, `ctrl+s`
+saves through the store and re-seeds the pane from the file, `esc` gives the keys back to the table and
+throws the draft away. With the caret in the table, `j k` move and `q` quits — the fields are drawn
+quietly until they are asked for. The `split` field is how a row moves between the train set, the
+validation set and the holdout: the save says so out loud (**moved train → validation**), because that
+row stops being part of what this screen measures. The id is left to the tool: it indexes the result
+directories.
 
 **The loop in one key.** `enter` on the set does the next thing and the footer names it: it saves the
 wording you typed as the next candidate (if it changed) and measures it. `ctrl+s` saves without
@@ -321,7 +332,8 @@ verdicts, then the description. The failures keep their full cards behind `f`.
 ```
 
 **Step 1 — the validation set.** The same table with the other job: these rows judge the wording and
-are never used to write one.
+are never used to write one. `e` and `n` open the same editor under the table, and its `split` field is
+the way a row that turned out not to be held-back becomes a train row instead.
 
 **Step 2 — validate.** One run per measured wording, in the order the loop wrote them:
 

@@ -437,6 +437,9 @@ func (f *flowState) body(m *Model, h int) []string {
 }
 
 func (f *flowState) hints(m *Model) []hint {
+	if m.formActive() {
+		return m.form.hints()
+	}
 	if f.sec == secIteration {
 		switch f.focus {
 		case focusWording:

@@ -133,8 +133,10 @@ func (m *Model) sectionLead(sec int) string {
 
 // sectionSet is the pane: the cursored section's split as a table, with the step screen's columns and
 // its keys. It is the mini workbench — enough to manage the set before going in, and not the place
-// the run happens.
+// the run happens. `e` and `n` open the same editor as the step screens, under this table, so a label
+// or a why is fixed without leaving the two halves of the loop.
 func (m *Model) sectionSet(w, h int) []string {
+	m.syncSetForm()
 	s := &m.sections
 	sec := sectionRows[s.cursor].sec
 	train := sec == secIteration
@@ -172,19 +174,40 @@ func (m *Model) sectionSet(w, h int) []string {
 		foot = append(foot, "")
 	}
 
+	// The row under the cursor is drawn in full under the table whether or not the editor is open: the
+	// fields are part of the set's pane, and `e` only puts the caret in them.
+	formH := 0
+	if form := m.inlineForm(); form != nil {
+		formH = min(form.want()+1, max(9, h-len(lines)-len(foot)-3))
+	}
+	// One of the rows below the table is the rule that separates it from the fields.
+	room := max(1, h-len(lines)-len(foot)-formH-boolInt(formH > 0))
+
 	if len(s.rows) == 0 {
 		lines = append(lines, "", "  "+dimStyle.Render("no rows in this split yet"),
 			"", "  "+titleStyle.Render("n")+"  "+dimStyle.Render("add the first query"))
+		if form := m.inlineForm(); form != nil {
+			lines = append(lines, "  "+dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, w-4))))
+			lines = append(lines, form.body(w-2, formH)...)
+		}
 		return fitRows(append(lines, foot...), h)
 	}
 
 	cols := queryCols(w)
 	lines = append(lines, queryHeader(cols, focused))
-	room := max(1, h-len(lines)-len(foot))
 	clampWindow(&s.sel, &s.rtop, len(s.rows), room)
 	for i := s.rtop; i < len(s.rows) && i < s.rtop+room; i++ {
 		on := focused && i == s.sel
 		lines = append(lines, queryRow(s.rows[i], cols, on, on))
+	}
+	// The table keeps its height so the fields do not jump when a short set is edited — but it never
+	// takes a row the block or the footer needs.
+	for len(lines) < 3+room && len(lines)+formH+boolInt(formH > 0)+len(foot) <= h {
+		lines = append(lines, "")
+	}
+	if form := m.inlineForm(); form != nil {
+		lines = append(lines, "  "+dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, w-4))))
+		lines = append(lines, form.body(w-2, formH)...)
 	}
 	for len(lines) < h-len(foot) {
 		lines = append(lines, "")
@@ -229,6 +252,8 @@ func (m *Model) updateSections(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		m.sections.focus = 1 - m.sections.focus
+		// The pane's fields are seeded when it takes the keys, so the caret-less view is the file's.
+		m.syncSetForm()
 		return nil
 	}
 	if m.sections.focus == sectionFocusSet && m.sectionPaneWidth() > 0 {
@@ -267,19 +292,22 @@ func (m *Model) updateSectionSet(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "j", "down":
 		s.sel = min(s.sel+1, max(0, len(s.rows)-1))
+		m.syncSetForm()
 	case "k", "up":
 		s.sel = max(0, s.sel-1)
+		m.syncSetForm()
 	case "g", "home":
 		s.sel = 0
+		m.syncSetForm()
 	case "G", "end":
 		s.sel = max(0, len(s.rows)-1)
+		m.syncSetForm()
 	case "n":
-		m.openFormIn(splitOf(sec), nil, screenSections)
-	case "e":
-		if len(s.rows) > 0 {
-			row := s.rows[s.sel]
-			m.openFormIn(splitOf(sec), &row, screenSections)
-		}
+		m.openPaneForm(sec, nil)
+	case "e", "tab":
+		return m.focusForm()
+	case "shift+tab":
+		m.sections.focus = sectionFocusList
 	case " ", "space":
 		if len(s.rows) > 0 {
 			return m.toggleRow(s.rows[s.sel])
@@ -304,6 +332,7 @@ func (m *Model) loadSectionRows() {
 		return
 	}
 	s.rows = m.store.Rows(store.LaneTrigger, store.Filter{Skill: m.skill, Split: splitOf(sectionRows[s.cursor].sec)})
+	m.syncSetForm()
 	if s.sel >= len(s.rows) {
 		s.sel = max(0, len(s.rows)-1)
 	}

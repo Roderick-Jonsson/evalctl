@@ -12,17 +12,20 @@ import (
 	"evalctl/internal/store"
 )
 
-// The iteration workbench: four things at once, because the loop is a comparison.
+// The iteration workbench: three things on the left and the set on the right.
 //
-//	tl  THE FAILED QUERY   one failing row in full, and what the guide says to do about it
-//	tr  TRAIN SET          the queries with their verdict, edited in place
-//	bl  THE DESCRIPTION    SKILL.md's wording, editable — the thing you actually change
-//	br  ITERATIONS         every run so far, with the rate it scored
+//	left   THE FAILED QUERY   one failing row in full, and what the guide says to do about it
+//	       THE DESCRIPTION    SKILL.md's wording, editable — the thing you actually change
+//	       ITERATIONS         every run so far, with the rate it scored
+//	right  TRAIN SET         the queries, and under them the selected row's fields, editable
 //
 // The four are one decision seen from four sides: the failure says what is wrong, the set says how
 // wrong (one row, or half of them), the iteration list says whether the last five changes bought
 // anything, and the description is where the answer is written. A rung-by-rung screen hid three of
 // those while you worked on the fourth.
+//
+// The set's column is table over fields, always: the row is edited where it is listed, not in a
+// screen of its own, and not after a key that has to be found first.
 
 const (
 	focusSet = iota
@@ -48,14 +51,25 @@ func (m *Model) iterBody(h int) []string {
 		return m.iterStacked(h)
 	}
 	leftW := min(96, max(44, m.width*40/100))
-	rightW := m.width - leftW - 3
-	topH := max(8, h/2-1)
-	botH := max(6, h-topH-1)
+	rightW := m.workbenchPaneWidth()
 
-	top := m.splitBody(topH, leftW, rightW, m.quadFailure(leftW, topH), m.quadSet(rightW, topH))
-	bot := m.splitBody(botH, leftW, rightW, m.quadWording(leftW, botH), m.quadIterations(rightW, botH))
-	rule := dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, m.width)))
-	return fitRows(append(append(top, rule), bot...), h)
+	// The left column is what the loop knows: what failed, where the answer is written, how far it
+	// has got. The right column is the set and the fields of the row under the cursor.
+	iterH := max(7, (h-2)*34/100)
+	descH := max(7, (h-2)*30/100)
+	failH := max(6, h-iterH-descH-2)
+	leftRule := dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, leftW)))
+	left := append(m.quadFailure(leftW, failH), append([]string{leftRule}, m.quadWording(leftW, descH)...)...)
+	left = append(left, leftRule)
+	left = append(left, m.quadIterations(leftW, iterH)...)
+	return m.splitBody(h, leftW, rightW, left, m.setPane(rightW, h))
+}
+
+// workbenchPaneWidth is the width of the workbench's right column, where the set lives. The form
+// opened from that table is drawn to this width, so it is asked here rather than guessed there.
+func (m *Model) workbenchPaneWidth() int {
+	leftW := min(96, max(44, m.width*40/100))
+	return m.width - leftW - 3
 }
 
 // ---------------------------------------------------------------- quadrants
@@ -136,33 +150,6 @@ func adaptHints(row runner.ScoreRow) []string {
 		"Make the line between yes and no explicit — say what makes this a yes.",
 		"If it keeps happening, the row may be the problem, not the description.",
 	}
-}
-
-// quadSet is the train set with the verdict of the last run beside each row.
-func (m *Model) quadSet(w, h int) []string {
-	f := m.flow
-	const idW, trigW, resW = 4, 7, 6
-	queryW := max(12, w-2-3-idW-2-trigW-1-resW-2)
-	head := "  " + dimStyle.Render(padCell("ID", idW, true)) + "   " +
-		dimStyle.Render(padCell("TRIGGER", trigW, false)) + " " +
-		dimStyle.Render(padCell("RESULT", resW, false)) + "  " +
-		dimStyle.Render(padCell("QUERY", queryW, false))
-	lines := []string{"", m.quadTitle(w, "TRAIN SET", pluralOf(len(f.rows), "query", "queries")), head}
-
-	// The balance line is the one fact about the set as a whole; it goes under the table.
-	facts := wrapPlain(m.setFacts(true), max(20, w-6))
-	room := max(1, h-len(lines)-len(facts))
-	f.clampSet(room)
-	for i := f.top; i < len(f.rows) && i < f.top+room; i++ {
-		lines = append(lines, m.quadSetRow(i, idW, trigW, resW, queryW))
-	}
-	for len(lines) < h-len(facts) {
-		lines = append(lines, "")
-	}
-	for _, line := range facts {
-		lines = append(lines, "  "+dimStyle.Render(line))
-	}
-	return fitRows(lines, h)
 }
 
 func (m *Model) quadSetRow(i, idW, trigW, resW, queryW int) string {
@@ -264,10 +251,11 @@ func (m *Model) quadTitle(w int, name, right string) string {
 
 // ---------------------------------------------------------------- the narrow fallback
 
-// iterStacked is the workbench without columns: the set with its verdicts, then the description.
+// iterStacked is the workbench without columns: the set with its verdicts and its fields, then the
+// description. A window too narrow for two columns still edits where the row is listed.
 func (m *Model) iterStacked(h int) []string {
-	setH := max(6, h*55/100)
-	lines := m.quadSet(m.width, setH)
+	setH := max(6, h*60/100)
+	lines := m.setPane(m.width, setH)
 	lines = append(lines, dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, m.width))))
 	lines = append(lines, m.quadWording(m.width, h-setH-1)...)
 	return fitRows(lines, h)
@@ -379,18 +367,21 @@ func (m *Model) updateIter(msg tea.KeyMsg) tea.Cmd {
 		return m.cycleFocus(-1)
 	case "j", "down":
 		f.sel = min(f.sel+1, max(0, len(f.rows)-1))
+		m.syncSetForm()
 	case "k", "up":
 		f.sel = max(0, f.sel-1)
+		m.syncSetForm()
 	case "g", "home":
 		f.sel = 0
+		m.syncSetForm()
 	case "G", "end":
 		f.sel = max(0, len(f.rows)-1)
+		m.syncSetForm()
 	case "n":
 		m.openForm(nil)
 	case "e":
 		if len(f.rows) > 0 {
-			row := f.rows[f.sel]
-			m.openForm(&row)
+			return m.focusForm()
 		}
 	case " ", "space":
 		if len(f.rows) > 0 {
