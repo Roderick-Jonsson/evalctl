@@ -59,6 +59,9 @@ per the guide they are added after the first graded iteration, so a case without
 whose shape is not known yet, not a case with an empty list. `evalctl` treats them as part of the
 format rather than a stray key: `evalctl skills` counts them per skill (`ASR 2/3`), the case view
 lists them, `evalctl edit … --assertions` replaces them (one per line), and a search reads them.
+The output workbench shows the whole list with both arms' verdicts and writes it in place: `e`
+opens it as one field under the case table, `ctrl+s` saves, `esc` discards — the same splitter as
+the CLI, so a list typed in the TUI and one typed in a shell land in the file identically.
 `evalctl grade` has the judge grade them and writes one verdict per assertion into each arm's
 `grading.json` (see *Grading and iterating*). A run alone leaves `assertion_results` empty and says
 in its note that the arm is ungraded.

@@ -483,23 +483,56 @@ last iteration scored on each arm, and how many iterations it has measured.
   learning-path            2        —        —       2
 ```
 
-`enter` opens the loop at the newest iteration: the cases with both rates, the failed count, and — in
-the pane — the ask, the expected output, every failed assertion with the judge's evidence, and the
-human note. That pane is the work order a revision is written from.
+`enter` opens the loop at the newest iteration. The left column is the cases and nothing else — their
+slugs, the cursor, and the iteration they belong to in the region head's corner; the rates and the
+failed count lived there as a second table and were two places to read one figure. Everything about a
+case is in the pane beside it, which shows **the case as its own record writes it**: `prompt`,
+`expected_output`, `files` (the fixtures the run root is given, or `none — the run root starts
+empty`), `assertions`, and then your `feedback`. The fields keep the file's names and the file's
+order, because the pane is meant to be read as the case, not as a summary of it; the only thing on it
+that is not in `evals.json` is the pair of rates above the record, which says how the two arms scored
+against it.
+
+The assertion rows carry both arms' verdicts (`✓ with · ✗ without`) and the judge's evidence under
+the ones that failed. The passing assertions are listed too because a pass in both arms is a reading:
+it measures the model, not the procedure, and an assertion like that is one to rewrite or drop. A
+window too short for the whole record truncates it at the bottom — never with a field missing out of
+the middle — and the list says how many rows it could not show.
 
 ```
  output optimization > dummy > iteration                                                      evalctl v0.9.0 · 11:06
-▌ CASES                                         │   dummy-2-three-dice
-  iteration 2 · 2 cases · 2026-11-01 12:22      │   with 3/3 · without 3/3 · 3 assertions
-  CASE                      WITH WITHOUT FAILED │
-  dummy-1-one-die           100%    100%      — │   The ask
-▶ dummy-2-three-dice        100%    100%      — │   Throw three twenty-sided dice and give me the faces and the total.
-                                                │
-                                                │   Verdict
-                                                │   Every assertion passes in both arms. That is not a win for the
-                                                │   skill: an assertion both arms pass measures the model, not the
-                                                │   procedure.
+▌ CASES  iteration 3  │   dummy-2-three-dice
+  ─────────────────   │   ────────────────────────────────────────────────
+▶ dummy-1-one-die     │   with 3/3 · without 2/3
+  dummy-2-three-dice  │
+                      │   prompt
+                      │   Throw three twenty-sided dice and give me the faces and the total.
+                      │
+                      │   expected_output
+                      │   Three faces, each an integer from 1 to 20, and their sum as the total.
+                      │
+                      │   files
+                      │   none — the run root starts empty
+                      │
+                      │   assertions — 3 · ✓ with · ✗ without
+                      │   ✓ ✓  The reply reports exactly three faces, each an integer from 1 to 20
+                      │   ✓ ✗  The run created no file and no folder
+                      │        without · the arm wrote out.txt
+                      │   ✓ ✓  The total given is the sum of the faces
 ```
+
+`e` writes that list. It opens the declared assertions as one field **under both columns** — one
+assertion per line, the way `evalctl edit --assertions` takes them — with the case table and the pane
+still on screen above it, because the evidence a revision is written from should stay visible while
+the revision is typed. `ctrl+s` writes `<skill>/evals/evals.json` (backed up first) and `esc`
+discards; enter is a line in that field, not a submit, since the list is lines. The save says what it
+did and one more thing: the verdicts on screen were read against the *old* list, so `g` re-grades.
+An assertion added after grading shows a dash for both arms until it is judged; clearing the field
+leaves the case with no `assertions` key at all, the shape a case is in before its list is known.
+
+The strip is paid for before the columns, so a short window shrinks the workbench rather than cutting
+the field off. A window too narrow for a pane drops to the stacked reading — the list, then the same
+record as labelled lines under it — where `e` opens the same field.
 
 `g` grades the iteration on screen — one judge call per arm, verdicts into each arm's `grading.json`,
 then the benchmark and the report re-aggregated; an already-fully-graded iteration says so instead of
@@ -531,7 +564,8 @@ exactly one of them has the keystrokes. It says so in two places and no more: th
 is drawn in the accent with a block in front of its name, every other region's name is quiet, and the
 cursor mark and the selected row exist only inside that region. A second bright thing is a second
 answer to the only question the frame has to answer. The same fact is spelled out at the right edge of
-the status row — `sections · 1 / 2`, `train set · failure 2 of 3`, `editor · q3`, `note` — which is the form
+the status row — `sections · 1 / 2`, `train set · failure 2 of 3`, `editor · q3`, `note`,
+`assertions · case 2 of 2` — which is the form
 of it that survives a screenshot, a colour-blind reader, and a terminal drawing neither the accent nor
 the block. The rail's `●` is a different mark on purpose: it says which step of the flow you are in,
 which stays true whichever region has the keys, and it is never the arrow the cursor uses. The key band and the status row are the last two rows of the window,

@@ -342,19 +342,42 @@ func plural(n int, noun string) string {
 }
 
 // QualityCase is one case of one iteration, as the workbench reads it: both arms' verdicts, the
-// failed assertions, and the human note. The lab ranks iterations; this is the evidence behind a
-// row, which is what the operator actually edits a skill from.
+// declared assertions with what each arm said about them, and the human note. The lab ranks
+// iterations; this is the evidence behind a row, which is what the operator actually edits a skill
+// from — and, since the workbench is where a revision is written, the list it edits.
 type QualityCase struct {
-	Skill          string           `json:"skill"`
-	ID             int              `json:"id"`
-	Slug           string           `json:"slug"`
-	Prompt         string           `json:"prompt"`
-	ExpectedOutput string           `json:"expected_output"`
-	Assertions     int              `json:"assertions"`
-	With           QualityArm       `json:"with_skill"`
-	Without        QualityArm       `json:"without_skill"`
-	Failed         []QualityFailure `json:"failed,omitempty"`
-	Feedback       string           `json:"feedback,omitempty"`
+	Skill          string             `json:"skill"`
+	ID             int                `json:"id"`
+	Slug           string             `json:"slug"`
+	Prompt         string             `json:"prompt"`
+	ExpectedOutput string             `json:"expected_output"`
+	Files          []string           `json:"files"`
+	Assertions     int                `json:"assertions"`
+	With           QualityArm         `json:"with_skill"`
+	Without        QualityArm         `json:"without_skill"`
+	Rows           []QualityAssertion `json:"rows,omitempty"`
+	Failed         []QualityFailure   `json:"failed,omitempty"`
+	Feedback       string             `json:"feedback,omitempty"`
+}
+
+// QualityAssertion is one declared assertion with each arm's verdict. A nil verdict is "no verdict",
+// not a pass: an assertion written after the arm was graded has never been judged, and the screen
+// says so instead of borrowing the neighbour's mark.
+type QualityAssertion struct {
+	Text    string `json:"text"`
+	With    *bool  `json:"with_skill,omitempty"`
+	Without *bool  `json:"without_skill,omitempty"`
+	// Evidence is the judge's words for the arms that failed it: "with_skill" / "without_skill".
+	Evidence map[string]string `json:"evidence,omitempty"`
+}
+
+// verdictMark is one arm's verdict as the screens print it: ✓, ✗, or a dash for a verdict nobody
+// has given.
+func (a QualityAssertion) Verdict(arm string) *bool {
+	if arm == ArmWith {
+		return a.With
+	}
+	return a.Without
 }
 
 // QualityCases reads one iteration's cases in the skill's own case order.
@@ -373,8 +396,11 @@ func (r *Runner) QualityCases(skill string, iteration int) ([]QualityCase, error
 			continue
 		}
 		row := QualityCase{Skill: skill, ID: c.ID, Slug: c.Slug, Prompt: c.Prompt,
-			ExpectedOutput: c.ExpectedOutput, Assertions: len(c.Assertions),
-			Feedback: strings.TrimSpace(feedback[c.Slug])}
+			ExpectedOutput: c.ExpectedOutput, Files: append([]string(nil), c.Files...),
+			Assertions: len(c.Assertions), Feedback: strings.TrimSpace(feedback[c.Slug])}
+		// The judge's answers per arm, kept whole: the pane shows every assertion with both marks,
+		// not just the failures, because "passes in both arms" is the pattern a revision starts from.
+		verdicts := map[string][]AssertionResult{}
 		for _, arm := range AllArms {
 			armDir := filepath.Join(caseDir, arm)
 			if info, err := os.Stat(armDir); err != nil || !info.IsDir() {
@@ -397,6 +423,7 @@ func (r *Runner) QualityCases(skill string, iteration int) ([]QualityCase, error
 			}
 			target.Judged, target.Passed, target.Rate, target.Cases =
 				grading.Summary.Total, grading.Summary.Passed, grading.Summary.PassRate, 1
+			verdicts[arm] = grading.AssertionResults
 			for _, res := range grading.AssertionResults {
 				if !res.Passed {
 					row.Failed = append(row.Failed, QualityFailure{Case: c.Slug, Arm: arm,
@@ -404,9 +431,58 @@ func (r *Runner) QualityCases(skill string, iteration int) ([]QualityCase, error
 				}
 			}
 		}
+		row.Rows = assertionRows(c.Assertions, verdicts)
 		out = append(out, row)
 	}
 	return out, nil
+}
+
+// assertionRows joins the declared list to each arm's verdicts. The join is by position while the
+// judge answered the whole list in order — that is how grading writes it, one result per declared
+// assertion — and by text once the list has changed under the verdicts: an assertion written after
+// the arm was graded has no verdict, and text is the only key the two readings still share.
+func assertionRows(declared []string, verdicts map[string][]AssertionResult) []QualityAssertion {
+	if len(declared) == 0 {
+		return nil
+	}
+	out := make([]QualityAssertion, 0, len(declared))
+	for i, text := range declared {
+		qa := QualityAssertion{Text: text}
+		for _, arm := range AllArms {
+			res, ok := verdictFor(verdicts[arm], i, text)
+			if !ok {
+				continue
+			}
+			passed := res.Passed
+			if arm == ArmWith {
+				qa.With = &passed
+			} else {
+				qa.Without = &passed
+			}
+			if !res.Passed {
+				if qa.Evidence == nil {
+					qa.Evidence = map[string]string{}
+				}
+				qa.Evidence[arm] = res.Evidence
+			}
+		}
+		out = append(out, qa)
+	}
+	return out
+}
+
+// verdictFor finds one assertion's result in one arm: the same slot first, the same words second,
+// and nothing at all when the arm never saw this assertion.
+func verdictFor(results []AssertionResult, i int, text string) (AssertionResult, bool) {
+	if i < len(results) && results[i].Text == text {
+		return results[i], true
+	}
+	for _, r := range results {
+		if r.Text == text {
+			return r, true
+		}
+	}
+	return AssertionResult{}, false
 }
 
 func tokensOrZero(v *int) int64 {

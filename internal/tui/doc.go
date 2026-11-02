@@ -215,6 +215,22 @@ func (d *docWriter) para(text string) {
 	}
 }
 
+// source is a field's text as the file holds it: the line breaks are the author's, each line wraps
+// to the column, and a blank line stays a blank line. para is for prose the screen wrote — a rule,
+// an aside — and this is for prose the case wrote, so it is said in the body colour and not in the
+// dim one.
+func (d *docWriter) source(text string) {
+	for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		if strings.TrimSpace(line) == "" {
+			d.lines = append(d.lines, "")
+			continue
+		}
+		for _, wrapped := range wrapPlain(line, d.body()) {
+			d.lines = append(d.lines, "  "+colText.Render(wrapped))
+		}
+	}
+}
+
 // action is the last line before the key bar and the only line that says what to press. Every step
 // has exactly one. A long action wraps under its own indent, because a line the frame trims would
 // lose the end of the sentence that says what happens next.

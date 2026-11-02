@@ -78,10 +78,13 @@ type Model struct {
 	flow     *flowState
 	quality  *qualityState
 	form     *formState
-	ask      *askState
-	doc      *docState
-	run      *runState
-	help     int
+	// assertEdit is the output lane's assertion strip: the case's grading list, open under the
+	// workbench's two columns. Nil when the list is not being written.
+	assertEdit *assertState
+	ask        *askState
+	doc        *docState
+	run        *runState
+	help       int
 
 	// backTo is where a screen opened off a step returns to, so a form or a document always hands
 	// the flow back the way it left it.
@@ -234,7 +237,7 @@ func (m *Model) syncTree() {
 	// the tick after the screen gives the keys back does the re-read.
 	// Only a field with the caret holds the re-read back: its draft is the one thing on screen the
 	// store cannot replace. Fields without it are seeded from the file and can be seeded again.
-	if m.runActive() || m.mode == screenAsk || m.formActive() {
+	if m.runActive() || m.mode == screenAsk || m.formActive() || m.assertEditActive() {
 		return
 	}
 	if m.reopen() {
@@ -308,6 +311,9 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// A form owns its keystrokes: every character is a character, and the frame keys would eat the
 	// ones the field needs. It is not a screen — the set it belongs to stays drawn around it, always —
 	// so this is only about the caret: with the keys in the table, j and k still move.
+	if m.assertEditActive() {
+		return m, m.assertEdit.update(m, msg)
+	}
 	if m.formActive() {
 		return m, m.form.update(m, msg)
 	}
@@ -370,6 +376,9 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // these messages is an editor where tab does nothing. The full-body form and the one drawn in a set
 // both need this; only the inline one is not a screen of its own.
 func (m *Model) passToForm(msg tea.Msg) tea.Cmd {
+	if m.assertEditActive() {
+		return m.assertEdit.updateMsg(msg)
+	}
 	if !m.formActive() {
 		return nil
 	}
@@ -763,6 +772,10 @@ func (m *Model) region() string {
 		if m.flow.step == 1 {
 			return setRegionWord(false)
 		}
+	case screenQuality:
+		if m.assertEditActive() {
+			return "assertions"
+		}
 	}
 	return ""
 }
@@ -988,6 +1001,7 @@ func (m *Model) helpLines() []string {
 			"  R          run the next iteration: every case, both arms, in a fresh temp root",
 			"  g          grade the iteration on screen: one judge call per arm, PASS/FAIL with evidence",
 			"  j k        walk the cases; the pane is the evidence behind the row",
+			"  e          write the case's assertions under the pane: one per line, ctrl+s writes, esc discards",
 			"  tab        the ranking: every iteration's two rates, and the best complete one",
 			"  enter      the iteration's report.md · f its failed assertions as one list",
 			"  esc        back to the skills (from the ranking, first back to the loop)",

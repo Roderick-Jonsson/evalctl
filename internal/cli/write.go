@@ -50,16 +50,9 @@ func splitList(raw string) []string {
 
 // splitAssertions reads a grading list: one assertion per line, or ';' when it came in on one
 // line. Commas are never a separator — an assertion that reads "March, July and November" is one
-// statement, and splitting it would silently grade half of it.
-func splitAssertions(raw string) []string {
-	var out []string
-	for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == '\n' || r == ';' }) {
-		if p := strings.TrimSpace(part); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
+// statement, and splitting it would silently grade half of it. The splitter itself lives in model,
+// because the workbench writes the same list and two of them would eventually disagree.
+func splitAssertions(raw string) []string { return model.SplitAssertions(raw) }
 
 // ---------------------------------------------------------------- add
 
