@@ -522,7 +522,8 @@ because the pane is meant to be read as the case and not as a summary of it.
 assertion per line, the way `evalctl edit --assertions` takes them, so the record above it stays on
 screen while the sentence it is about is typed. `ctrl+s` writes `<skill>/evals/evals.json` (backed up
 first), `esc` discards, and enter is a line in the field rather than a submit. The save says one more
-thing: the verdicts on screen were read against the *old* list, so `g` re-grades. An assertion added
+thing: the verdicts on screen were read against the *old* list, so `g` re-grades (it asks first —
+the run already judged this iteration once). An assertion added
 after grading shows a dash for both arms until it is judged; clearing the field leaves the case with no
 `assertions` key at all, the shape a case is in before its list is known. `S` hands the case file whole
 to `$EDITOR` — a prompt and a fixture list are prose and paths, not a text area — and the pane re-reads
@@ -596,11 +597,19 @@ with-skill rate among **complete** iterations — ties go to the later one.
 The guide's stop condition is a fact here too: when the last two complete iterations tie, the table
 says so, and the lab's `next:` line says "stop, or sharpen the assertions".
 
-`g` grades the iteration on screen — one judge call per arm, verdicts into each arm's `grading.json`, then
-the benchmark and the report re-aggregated; an already-fully-graded iteration says so instead of spending
-again. `R` runs the next iteration; the live run is the trigger lane's screen with case rows and arm
-marks. A finished run or grade lands on the dojo, because the next move after a spend is to read what
-failed.
+**The run grades itself.** `R` runs every case on both arms and then hands the arms to the judge —
+one spend, two passes — so there is no step between the outputs and the verdicts to wait for. The live
+screen says which pass it is in (`OUTPUT RUN · ITERATION 4`, then `GRADING · ITERATION 4`, then
+`RUN + GRADED · ITERATION 4`), and the arm cells keep what the agent did while a `judging` state beside
+them names the judge's pass: the same arm is not run twice. Verdicts go into each arm's `grading.json`,
+then the benchmark and the report are re-aggregated.
+
+`g` is what is left of the separate step, and it is two recoveries in one key: an iteration whose arms
+carry no verdicts — a run made with `--no-grade`, by a build older than the fold, or one whose grade
+failed — is graded by it, and an iteration that already has verdicts is re-graded by it **after asking**,
+because that is the one thing an assertion edit leaves behind: the verdicts on screen describe the old
+list. `evalctl run --no-grade` is the same trade from the shell. A finished run or grade lands on the
+dojo, because the next move after a spend is to read what failed.
 
 ### The frame
 
@@ -683,9 +692,9 @@ evalctl run --skill source-research         # one stage, next free iteration-N
 evalctl run --skill learning-path --case 1,3
 evalctl run --skill slide-builder --iteration 2 --resume   # add cases to an iteration
 evalctl run --arms without_skill            # one side of the comparison only
-evalctl run --skill dummy --grade           # run, then judge every arm in one command
+evalctl run --no-grade                      # arms only: no verdicts, so nothing enters the loop
 
-evalctl grade --skill dummy                 # judge the newest iteration: one call per arm
+evalctl grade --skill dummy                 # finish an iteration whose arms carry no verdicts
 evalctl grade --skill dummy --iteration 2 --force   # re-grade after editing an assertion
 evalctl grade --skill dummy --dry-run       # the judge commands, nothing written
 evalctl lab --skill dummy --lane output     # the output loop: rates, delta, the next move

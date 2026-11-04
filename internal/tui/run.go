@@ -30,6 +30,7 @@ const (
 	runHoldout
 	runQuality // the output lane's iteration: every case, both arms
 	runGrade   // the output lane's judge, over one finished iteration
+	runRevise  // the agent's proposal for the next SKILL.md
 )
 
 func (k runKind) String() string {
@@ -42,6 +43,8 @@ func (k runKind) String() string {
 		return "output run"
 	case runGrade:
 		return "grading run"
+	case runRevise:
+		return "revision"
 	}
 	return "training run"
 }
@@ -77,6 +80,9 @@ type liveRun struct {
 	iter     int
 	path     string
 	finished time.Time
+	// judging is the second pass of a run that grades: the arms are written and the judge reads
+	// them. It is a phase and not a run kind, because it is one spend launched by one key.
+	judging bool
 	// cancelled is the operator's x, as opposed to an error: a batch stops at the candidate it was
 	// on, and the queue behind it is dropped rather than walked through.
 	cancelled bool
@@ -91,7 +97,10 @@ type liveCase struct {
 
 type liveArm struct {
 	name   string
-	status string // running, done, failed
+	status string // running, done, failed — the agent's own pass
+	// judged is the judge's pass over the same arm: a run that grades has two passes per arm, and
+	// folding them into status would show the arm running twice.
+	judged string // "", running, done, failed
 	detail string
 }
 
@@ -260,7 +269,26 @@ func (m *Model) applyEvent(e runner.Event) {
 		pc := p.caseAt(e.Case)
 		p.log = append(p.log, e.Message)
 		_ = pc
+	case runner.EventPhase:
+		// The run has moved to its second pass. The title says so, and the arm events below are routed
+		// to the judge's own column instead of overwriting the arm's outcome.
+		switch e.Phase {
+		case "grade":
+			p.judging = true
+		case "grade-off":
+			// The pass ended without leaving verdicts (a cancel): the row goes back to what the disk
+			// says, which is an iteration with outputs and nothing to open the loop with.
+			p.judging = false
+		}
+		if text := strings.TrimSpace(e.Message); text != "" {
+			p.title = text
+			p.log = append(p.log, text)
+		}
 	case runner.EventTriggerRun, runner.EventArmStart:
+		if p.judging {
+			setJudged(p.caseAt(e.Case), e.Arm, "running", "")
+			break
+		}
 		// setArm, not append: an output run seeds every case with both arms before the first call, so
 		// the first event for a case has to move that arm from pending to running, not add a second.
 		setArm(p.caseAt(e.Case), e.Arm, "running", "")
@@ -273,6 +301,10 @@ func (m *Model) applyEvent(e runner.Event) {
 			} else if e.Result.Timing.ExitCode != nil && *e.Result.Timing.ExitCode != 0 {
 				status = "failed"
 			}
+		}
+		if p.judging {
+			setJudged(pc, e.Arm, status, e.Message)
+			break
 		}
 		setArm(pc, e.Arm, status, e.Message)
 	case runner.EventActivity:
@@ -324,6 +356,21 @@ func (m *Model) applyEvent(e runner.Event) {
 	}
 }
 
+// setJudged records the judge's pass over one arm. It is a separate column from setArm because the
+// two passes are two facts: the arm produced outputs, and the judge read them.
+func setJudged(pc *liveCase, name, status, detail string) {
+	for i := range pc.runs {
+		if pc.runs[i].name == name {
+			pc.runs[i].judged = status
+			if detail != "" {
+				pc.runs[i].detail = detail
+			}
+			return
+		}
+	}
+	pc.runs = append(pc.runs, liveArm{name: name, judged: status, detail: detail})
+}
+
 func setArm(pc *liveCase, name, status, detail string) {
 	for i := range pc.runs {
 		if pc.runs[i].name == name {
@@ -350,6 +397,31 @@ func (m *Model) finishRun() tea.Cmd {
 	m.run.live.cancel = nil
 	m.run.live.finished = time.Now()
 	m.reload()
+	if m.run.kind == runRevise {
+		if m.run.live.err != nil {
+			m.setStatus(m.run.live.err.Error(), true)
+			return nil
+		}
+		if m.run.live.cancelled {
+			m.setStatus("the revision was cancelled — SKILL.md is untouched", false)
+			return nil
+		}
+		// The proposal is on disk: the screen reads it back rather than carrying it through the
+		// event channel, so a proposal survives the call, the screen and the process.
+		skill, iter := m.skill, m.quality.iter
+		rev, err := runner.New(m.store).RevisionAt(skill, iter)
+		if err != nil || rev == nil {
+			m.setStatus("the call finished but no proposal is on disk", true)
+			return nil
+		}
+		_, inputs, err := runner.New(m.store).BuildRevisionPrompt(skill, iter)
+		if err != nil {
+			inputs = runner.RevisionInputs{}
+		}
+		m.run = nil
+		m.openProposal(*rev, inputs)
+		return nil
+	}
 	if m.run.kind == runQuality || m.run.kind == runGrade {
 		if m.run.live.err != nil {
 			m.setStatus(m.run.live.err.Error(), true)
@@ -461,10 +533,21 @@ func (m *Model) leaveRun() tea.Cmd {
 }
 
 func (r *runState) liveHints() []hint {
+	if r.kind == runRevise {
+		if r.live.done {
+			return []hint{{"enter", "the proposal"}, {"x", "cancel"}}
+		}
+		return []hint{{"x", "cancel"}, {"q", "quit"}}
+	}
 	if r.live.done {
 		// A finished run offers the move it exists for, not only the way out.
 		switch r.kind {
 		case runQuality:
+			// A run that graded its own iteration has nothing left to press g for: the next move is
+			// the failures. An iteration with no verdicts (--no-grade, an older build) still offers it.
+			if r.live.judging {
+				return []hint{{"enter", "the dojo"}, {"v", "activity log"}}
+			}
 			return []hint{{"g", "grade it"}, {"enter", "back to the loop"}, {"v", "activity log"}}
 		case runGrade:
 			return []hint{{"enter", "the dojo"}, {"v", "activity log"}}
@@ -560,24 +643,33 @@ func (m *Model) outputRunBody(h int) []string {
 		return nil
 	}
 	grade := m.run.kind == runGrade
-	done, total := 0, 0
+	// graded says the verdicts are part of this spend: a pure grading run, or the judge pass that
+	// follows the arms of a run. One key, one spend, two passes.
+	graded := grade || p.judging
+	done, total, judged := 0, 0, 0
 	for _, c := range p.cases {
 		for _, a := range c.runs {
 			total++
 			if a.status == "done" || a.status == "failed" {
 				done++
 			}
+			if a.judged == "done" || a.judged == "failed" {
+				judged++
+			}
 		}
 	}
 	ok := p.done && p.err == nil && !p.cancelled
 	name := fmt.Sprintf("OUTPUT RUN · ITERATION %d", p.iter)
-	if grade {
+	if (grade || p.judging) && !p.done {
 		name = fmt.Sprintf("GRADING · ITERATION %d", p.iter)
 	}
 	if ok {
 		name = fmt.Sprintf("RUN FINISHED · ITERATION %d", p.iter)
-		if grade {
+		switch {
+		case grade:
 			name = fmt.Sprintf("GRADED · ITERATION %d", p.iter)
+		case p.judging:
+			name = fmt.Sprintf("RUN + GRADED · ITERATION %d", p.iter)
 		}
 	}
 	if p.cancelled {
@@ -585,9 +677,13 @@ func (m *Model) outputRunBody(h int) []string {
 	}
 	w := m.width
 	note := fmt.Sprintf("%d of %d arms", done, total)
-	if p.done && done == 0 {
+	if p.judging && !p.done {
+		note = fmt.Sprintf("judging · %d of %d arms", judged, total)
+	}
+	if p.done && done == 0 && !p.cancelled {
 		// The judge skipped every arm because each one already carried a summary: the run changed
-		// nothing, and saying "0 of 4 arms" would blame it for that.
+		// nothing, and saying "0 of 4 arms" would blame it for that. A cancelled pass is not that:
+		// it names what it did, which is nothing.
 		note = "already graded"
 	}
 	var head string
@@ -607,7 +703,7 @@ func (m *Model) outputRunBody(h int) []string {
 	// screen, and a short window must cut rows off the set before it cuts "grade it".
 	act := &docWriter{w: w}
 	if ok {
-		if grade {
+		if graded {
 			act.action("enter", "the dojo — the failed assertions with the judge's evidence")
 		} else {
 			act.action("g", "grade it — a run is outputs; the loop opens on the verdicts")
@@ -633,7 +729,7 @@ func (m *Model) outputRunBody(h int) []string {
 			out = append(out, "    "+dimStyle.Render(fmt.Sprintf("… %d more cases", len(p.cases)-i)))
 			break
 		}
-		with, without, state, running := m.runCaseCells(c, grade, ok)
+		with, without, state, running := m.runCaseCells(c, graded, ok)
 		mark := "  "
 		if running {
 			mark = cursorMark.Render(glyphs.Cursor)
@@ -674,7 +770,7 @@ func (m *Model) outputRunFacts() string {
 			elapsed))
 	case p.err != nil:
 		return pad + statusBad.Render("the run failed: "+p.err.Error())
-	case p.done && m.run.kind == runGrade:
+	case p.done && (m.run.kind == runGrade || p.judging):
 		lab := (*runner.QualityLab)(nil)
 		if m.quality != nil {
 			lab = m.quality.lab
@@ -714,6 +810,26 @@ func (m *Model) runCaseCells(c liveCase, grade, finished bool) (with, without, s
 		return dimStyle.Render(padCell(glyphs.Pending, armW, true))
 	}
 	with, without = cell(runner.ArmWith), cell(runner.ArmWithout)
+	// The judge's pass, while it is one: the arm cells keep what the arms did, and the state says
+	// which pass the row is in. The judge re-running an arm is not the arm running twice.
+	if m.run.live.judging && !finished {
+		judged, judging := 0, false
+		for _, a := range c.runs {
+			switch a.judged {
+			case "running":
+				judging = true
+			case "done", "failed":
+				judged++
+			}
+		}
+		switch {
+		case judging:
+			return with, without, cursorMark.Render("judging"), true
+		case len(c.runs) > 0 && judged == len(c.runs):
+			return with, without, styleOn.Render("judged"), false
+		}
+		return with, without, dimStyle.Render("to judge"), false
+	}
 	if finished && grade {
 		if m.quality != nil {
 			for i := range m.quality.cases {

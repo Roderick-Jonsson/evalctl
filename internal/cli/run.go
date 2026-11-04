@@ -84,7 +84,8 @@ func runRun(args []string) int {
 	cases := fs.String("case", "", "comma-separated case ids, default all")
 	arms := fs.String("arms", strings.Join(runner.AllArms, ","), "with_skill,without_skill")
 	noVerify := fs.Bool("no-verify", false, "skip the skill's scripts/ verify checks")
-	grade := fs.Bool("grade", false, "output lane: grade the new iteration with the judge after running")
+	grade := fs.Bool("grade", true, "output lane: grade the new iteration with the judge after running")
+	noGrade := fs.Bool("no-grade", false, "output lane: run the arms and stop — no verdicts, no iteration in the loop")
 	isolate := fs.Bool("isolate", true, "run in a temp root and copy the result back (default); "+
 		"--isolate=false runs inside the results dir, for debugging only")
 	queries := fs.String("query", "", "trigger lane: comma-separated query ids, default all")
@@ -100,7 +101,7 @@ func runRun(args []string) int {
 		Split: *split, Arms: strings.Split(*arms, ","), Model: rc.model, Resume: rc.resume,
 		Force: rc.force, NoVerify: *noVerify, Isolate: *isolate, DryRun: rc.dryRun, List: rc.list,
 		Iteration: rc.iteration, Runs: *runs, Threshold: *threshold, MaxTurns: *maxTurns,
-		Grade: *grade,
+		Grade: *grade && !*noGrade,
 	}
 	if rc.budget > 0 {
 		opts.Budget = time.Duration(rc.budget) * time.Second

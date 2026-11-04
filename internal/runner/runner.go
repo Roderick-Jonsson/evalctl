@@ -84,8 +84,10 @@ type Options struct {
 	Runs      int
 	Threshold float64
 	MaxTurns  int
-	// Grade runs the judge after an output iteration is written. It is the guide's fourth move in
-	// one command; the TUI offers it as g instead, because a judgment is a spend of its own.
+	// Grade runs the judge after an output iteration is written: the guide's fourth move in the same
+	// command, because a run of outputs nobody reads is not an iteration. Default on — `--no-grade`
+	// is for the one case that wants the outputs without the verdicts (debugging a prompt), and `g`
+	// re-grades an iteration whose assertions were edited after it was judged.
 	Grade bool
 	// Log is how much of the agent's own stream reaches activity.log and the progress view.
 	Log ActivityLevel
@@ -144,7 +146,11 @@ type Event struct {
 	Message string
 	Result  *ArmResult
 	Path    string // activity.log behind an EventActivity line
-	Err     error
+	// Phase names the pass a run has entered — "grade" once the arms are written and the judge
+	// begins. A run that runs and grades is one spend and two passes, and a screen that cannot tell
+	// them apart shows the same arm running twice.
+	Phase string
+	Err   error
 }
 
 // Event kinds.
@@ -158,6 +164,7 @@ const (
 	EventTriggerRun = "trigger-run"
 	EventMessage    = "message"
 	EventScored     = "scored"
+	EventPhase      = "phase"
 	EventDone       = "done"
 )
 

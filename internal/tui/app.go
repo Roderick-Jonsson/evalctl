@@ -45,6 +45,7 @@ const (
 	screenDoc                    // a scrollable document (failures, a report, a log)
 	screenRunLive                // the run, while it runs
 	screenQuality                // output lane: setup, dojo and quality, as three sections on one rail
+	screenRevision               // the agent's proposal for SKILL.md, as a diff against the file
 	screenHelp
 )
 
@@ -77,6 +78,9 @@ type Model struct {
 	flow     *flowState
 	quality  *qualityState
 	form     *formState
+	// revision is the proposal `p` asks for: the agent's whole SKILL.md, the text it was written
+	// against, and the diff between them.
+	revision *revisionState
 	// assertEdit is the output lane's assertion strip: the case's grading list, open under the
 	// workbench's two columns. Nil when the list is not being written.
 	assertEdit *assertState
@@ -215,6 +219,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stamp = ""
 		m.syncTree()
 		m.reload()
+		if msg.scope == "revision" {
+			m.reloadProposal()
+		}
 		if msg.err != nil {
 			m.setStatus(msg.scope+" editor exited with "+msg.err.Error(), true)
 			return m, nil
@@ -372,6 +379,8 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.updateFlow(msg)
 	case screenQuality:
 		return m, m.updateQuality(msg)
+	case screenRevision:
+		return m, m.updateRevision(msg)
 	case screenAsk:
 		return m, m.ask.update(m, msg)
 	case screenDoc:
@@ -433,6 +442,11 @@ func (m *Model) escUp() tea.Cmd {
 		m.mode = screenSkill
 	case screenAsk:
 		m.ask, m.mode = nil, screenFlow
+	case screenRevision:
+		m.revision = nil
+		m.setQualitySection(qDojo)
+		m.mode = screenQuality
+		m.setStatus("the proposal is still on disk — p opens it again, and SKILL.md is untouched", false)
 	case screenDoc:
 		m.doc, m.mode = nil, m.backTo
 	case screenHelp:
@@ -533,6 +547,8 @@ func (m *Model) pathSegments() []string {
 		segs = append(segs, m.quality.sectionName())
 	case screenDraft:
 		segs = append(segs, "revise")
+	case screenRevision:
+		segs = append(segs, "revision")
 	case screenDoc:
 		if m.doc != nil {
 			segs = append(segs, m.doc.scope)
@@ -649,11 +665,16 @@ func (m *Model) bodyLines(h int) []string {
 		}
 	case screenRunLive:
 		if m.run != nil {
-			if m.run.kind == runQuality || m.run.kind == runGrade {
+			switch m.run.kind {
+			case runQuality, runGrade:
 				return m.outputRunBody(h)
+			case runRevise:
+				return m.revisionRunBody(h)
 			}
 			return m.run.liveBody(m, h)
 		}
+	case screenRevision:
+		return m.revisionBody(h)
 	case screenHelp:
 		return m.helpBody(h)
 	}
@@ -718,6 +739,9 @@ func (m *Model) hints() []hint {
 		}
 	case screenQuality:
 		return qualityHints(m)
+	case screenRevision:
+		return []hint{{"j k space", "walk · tick a hunk"}, {"n N", "next change"}, {"a", "apply"},
+			{"e", "edit"}, {"esc", "discard"}}
 	case screenAsk:
 		if m.ask != nil {
 			return m.ask.hints()
@@ -1045,15 +1069,18 @@ func (m *Model) helpLines() []string {
 		},
 		head("output optimization — the entry, then the loop"),
 		[]string{
-			"  —          with no graded run the lane opens on the checklist: cases, assertions, run, grade",
+			"  —          with no graded run the lane opens on the checklist: cases, assertions, run",
 			"  S e        the cases in evals.json · a case's assertions, in the pane it is drawn in",
-			"  R          run iteration 1: every case, both arms, in a fresh temp root",
-			"  g          grade it: one judge call per arm, PASS/FAIL with the evidence it saw",
+			"  R          run the next iteration: every case, both arms, then the judge — one spend",
+			"  g          grade an iteration with no verdicts (--no-grade, an older build); on a graded one",
+			"             it re-grades after an assertion edit, and asks first",
 			"  f          the feedback: what the output got wrong, in your words — empty means it looked fine",
-			"  —          a run is outputs; the loop opens on the verdicts, never on the run",
+			"  —          a run grades itself; the loop still opens on the verdicts, never on the outputs",
 			"  1 2 3      setup, dojo, quality — the rail, once there is a graded run to read",
 			"  j k        walk the cases or the failures; the pane is the record behind the row",
 			"  f E        the feedback for the case · SKILL.md, which is what a revision changes",
+			"  p          ask the revising agent for a new SKILL.md — the diff lands on its own screen,",
+			"             one hunk per change: space ticks a hunk off, n jumps to the next, a writes",
 			"  [ ]        the iteration the dojo is reading",
 			"  enter      the dojo on this case · the iteration's report from the ranking",
 			"  esc        one section back, then the skills",

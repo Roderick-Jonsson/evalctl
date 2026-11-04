@@ -80,8 +80,9 @@ type QualityLab struct {
 	// verdict, so "9 assertions" is not a set the loop can measure.
 	Unasserted int `json:"unasserted"`
 	// InitPending is whether the loop is still closed: no set, a case with no assertion, nothing
-	// run, or a newest run with no verdict at all. A run is outputs; the grade is the only thing a
-	// revision can be written from, so the loop opens on the first verdict and not on the first run.
+	// run, or a newest run with no verdict at all. A run grades itself, so the last two are one move
+	// — but they are not one state: an iteration written by `--no-grade` or by a build older than the
+	// fold carries outputs and no verdicts, and that one is `g`'s to finish.
 	InitPending bool               `json:"init_pending"`
 	Iterations  []QualityIteration `json:"iterations"`
 	Best        int                `json:"best"` // iteration number, 0 = no complete one
@@ -309,13 +310,18 @@ func qualityChecks(lab *QualityLab) []LabCheck {
 		run.Detail = fmt.Sprintf("iteration %d · %s", last.N, plural(last.Cases, "case"))
 	}
 	checks = append(checks, run)
-	grade := LabCheck{Key: "grade", OK: has && gradedArms(last) > 0,
-		Blocking: !has || gradedArms(last) == 0, Fix: "g", Detail: "the run has to exist first"}
-	switch {
-	case has && gradedArms(last) == 0:
-		grade.Detail = fmt.Sprintf("iteration %d carries no verdicts", last.N)
-	case has:
-		grade.Detail = fmt.Sprintf("iteration %d · %d of 2 arms graded", last.N, gradedArms(last))
+	// The judge is part of the run, so there is no grade step until there is a run to grade: with no
+	// iteration on disk the loop needs three moves, not four. Once one exists, this row is the
+	// recovery — a run made with --no-grade, by a build older than the fold, or one whose grade was
+	// cancelled or failed — and it names `g` only in that case.
+	if !has {
+		return checks
+	}
+	grade := LabCheck{Key: "grade", OK: gradedArms(last) > 0,
+		Blocking: gradedArms(last) == 0, Fix: "g",
+		Detail: fmt.Sprintf("iteration %d · %d of 2 arms graded", last.N, gradedArms(last))}
+	if gradedArms(last) == 0 {
+		grade.Detail = fmt.Sprintf("iteration %d carries no verdicts — g grades it", last.N)
 	}
 	checks = append(checks, grade)
 	return checks
@@ -380,12 +386,13 @@ func qualityNext(lab *QualityLab) LabNext {
 				lab.Unasserted, plural(lab.Cases, "case")),
 			Detail: "a grade is made of assertions; a case without one has no verdict to give"}
 	case !has:
-		return LabNext{Key: "run", Line: fmt.Sprintf("run iteration 1 — %s × 2 arms", plural(lab.Cases, "case")),
-			Detail: "the first run is what the first assertions are written against"}
+		return LabNext{Key: "run", Line: fmt.Sprintf("run iteration 1 — %s × 2 arms, then the judge",
+			plural(lab.Cases, "case")),
+			Detail: "the run grades itself; the verdicts are what a revision is written from"}
 	case gradedArms(last) == 0:
 		return LabNext{Key: "grade",
-			Line:   fmt.Sprintf("grade iteration %d — the loop opens on a verdict, not on an output", last.N),
-			Detail: "one judge call per arm, against the assertions the case declares"}
+			Line:   fmt.Sprintf("iteration %d carries no verdicts — g grades it", last.N),
+			Detail: "that is what --no-grade and an interrupted grade leave behind; one judge call per arm"}
 	}
 	if !last.SetComplete {
 		return LabNext{Key: "set", Line: fmt.Sprintf("iteration %d ran %d of %d cases — rerun the whole set",

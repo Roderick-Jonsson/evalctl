@@ -60,7 +60,7 @@ const usage = `evalctl — manage and run the eval sets: trigger queries and out
   evalctl profiles [cmd]             status/check/ensure/render/sync/scrub the eval profiles
   evalctl theme [name]               the colour schemes, with each role's contrast on its background
 
-Run flags: --skill, --case, --iteration, --arms, --model, --budget, --resume, --force, --grade,
+Run flags: --skill, --case, --iteration, --arms, --model, --budget, --resume, --force, --no-grade,
            --no-verify, --isolate=false, --dry-run, --list, --log full|tools|off
 Trigger:   --query, --split, --runs, --threshold, --max-turns (same shared flags)
 
@@ -132,6 +132,8 @@ func Run(args []string) int {
 		return runLab(rest)
 	case "grade":
 		return runGrade(rest)
+	case "revise":
+		return runRevise(rest)
 	case "runs", "results":
 		return runRuns(rest)
 	case "report":

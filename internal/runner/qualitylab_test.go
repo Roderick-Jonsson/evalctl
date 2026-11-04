@@ -66,7 +66,8 @@ func TestQualityLabGateIsClosedWithoutAnAssertion(t *testing.T) {
 	if lab.Unasserted != 1 || lab.Cases != 2 {
 		t.Fatalf("unasserted = %d of %d cases, want 1 of 2", lab.Unasserted, lab.Cases)
 	}
-	// Four steps, in the order they have to be done, and only the first is satisfied.
+	// Three steps, in the order they have to be done, and only the first is satisfied. The grade is not
+	// one of them: the run grades itself, so there is no step to take before there is a run.
 	want := []struct {
 		key    string
 		ok     bool
@@ -75,10 +76,9 @@ func TestQualityLabGateIsClosedWithoutAnAssertion(t *testing.T) {
 		{"cases", true, ""},
 		{"assertions", false, "1 of 2 cases carry none"},
 		{"run", false, "nothing run yet"},
-		{"grade", false, ""},
 	}
 	if len(lab.Checks) != len(want) {
-		t.Fatalf("checks = %+v, want four steps", lab.Checks)
+		t.Fatalf("checks = %+v, want three steps", lab.Checks)
 	}
 	for i, w := range want {
 		c := lab.Checks[i]

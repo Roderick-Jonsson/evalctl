@@ -179,7 +179,8 @@ func TestOutputLaneSaysWhatIsMissing(t *testing.T) {
 		t.Fatalf("the lane opened on section %d, want the initialization checklist", m.quality.sec)
 	}
 	body := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
-	for _, want := range []string{"INITIALIZATION", "none declared", "cases", "assertions", "grade"} {
+	// Three moves, not four: the grade is part of the run, so it is not a step before the first run.
+	for _, want := range []string{"INITIALIZATION", "none declared", "cases", "assertions", "run", "0 of 3"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the checklist is missing %q:\n%s", want, body)
 		}

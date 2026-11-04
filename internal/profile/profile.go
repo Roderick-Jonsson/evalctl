@@ -30,11 +30,16 @@ const (
 	With    = "eval-vcc-with"
 	Without = "eval-vcc-without"
 	Trigger = "eval-vcc-trigger"
+	// Revise writes the proposal the loop's step 1 asks for: an agent that reads an iteration's
+	// failures and feedback and answers with a new SKILL.md. It is a sandbox of its own because the
+	// arms' skills would let it read the evals it is being measured against, and the judge's framing
+	// would have it grading instead of writing.
+	Revise = "eval-vcc-revise"
 )
 
 // EvalProfiles are the throwaway sandboxes: memories are wiped between iterations, and none of
 // them may pin a working directory.
-var EvalProfiles = []string{With, Without, Trigger}
+var EvalProfiles = []string{With, Without, Trigger, Revise}
 
 // SkillParts are the parts of a stage skill that get installed. evals/, .git and .DS_Store stay
 // behind — the installed skill must run, not test.
@@ -158,6 +163,7 @@ func Descriptions() map[string]string {
 		With:    "Eval sandbox — with-skill arm. Not for real work; provisioned by evalctl.",
 		Without: "Eval sandbox — baseline arm, no skills. Not for real work; provisioned by evalctl.",
 		Trigger: "Eval sandbox — trigger arm, all four stage skills. Not for real work.",
+		Revise:  "Eval sandbox — writes a skill revision from one iteration's failures. Not for real work.",
 	}
 }
 
@@ -542,7 +548,7 @@ func orDash(names []string) string {
 
 // Scrub clears agent-written state in a sandbox. SOUL.md is never touched.
 func (m *Manager) Scrub(name string, dry bool) (string, error) {
-	if name != With && name != Without && name != Trigger {
+	if name != With && name != Without && name != Trigger && name != Revise {
 		return fmt.Sprintf("scrub %s: refused — only eval sandboxes are wiped", name), nil
 	}
 	mem := filepath.Join(m.Home(name), "memories")
@@ -859,12 +865,12 @@ func sameSHA(a, b *string) bool {
 // Named resolves a list of profile names, defaulting to all four.
 func (m *Manager) Named(args []string) ([]string, error) {
 	if len(args) == 0 {
-		return []string{Real, With, Without, Trigger}, nil
+		return []string{Real, With, Without, Trigger, Revise}, nil
 	}
 	for _, a := range args {
-		if a != Real && a != With && a != Without && a != Trigger {
-			return nil, fmt.Errorf("unknown profile(s): %s (known: %s, %s, %s, %s)",
-				a, Real, With, Without, Trigger)
+		if a != Real && a != With && a != Without && a != Trigger && a != Revise {
+			return nil, fmt.Errorf("unknown profile(s): %s (known: %s, %s, %s, %s, %s)",
+				a, Real, With, Without, Trigger, Revise)
 		}
 	}
 	return args, nil

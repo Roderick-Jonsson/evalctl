@@ -64,9 +64,10 @@ place: `e` opens it as one field in the pane, where the list is drawn, `ctrl+s` 
 discards — the same splitter as the CLI, so a list typed in the TUI and one typed in a shell land
 in the file identically. Facts an assertion is checked against ride in its own sentence
 (`… — facts: …`), because the format's list is strings and the judge reads it in order.
-`evalctl grade` has the judge grade them and writes one verdict per assertion into each arm's
-`grading.json` (see *Grading and iterating*). A run alone leaves `assertion_results` empty and says
-in its note that the arm is ungraded.
+`evalctl run` grades them as part of the run: the judge writes one verdict per assertion into each
+arm's `grading.json` (see *Grading and iterating*), so an iteration is outputs and verdicts in one
+command. `--no-grade` stops after the arms and leaves `assertion_results` empty, and that arm is
+ungraded until `evalctl grade` (or `g`) finishes it.
 
 > The four stage skills are still drafts. The runner, the profiles and the cases are ready; the
 > first real iteration should wait until a skill is out of draft, otherwise the delta measures a
@@ -270,11 +271,13 @@ case's assertions does not make the runner grade them, so grading stays manual.
 Per arm: `grading.json` (mechanical checks, the loaded skills, the final response, and — after
 grading — one verdict per assertion with its evidence plus a `summary`), then `benchmark.json` with
 per-configuration pass rate / time / tokens and the delta, then `feedback.json` with your own review
-notes per case. The loop: run → grade → read the failures, the delta and the transcripts → change
-the skill → rerun into `iteration-<N+1>/` → grade → compare; stop when it is satisfactory or flat.
+notes per case. The loop: run (which grades) → read the failures, the delta and the transcripts →
+change the skill → rerun into `iteration-<N+1>/` → compare; stop when it is satisfactory or flat.
 
-**Grading.** `evalctl grade --skill S [--iteration N]` runs one judge call per arm of the iteration
-(`--iteration` defaults to the newest; `--force` re-grades arms that already have verdicts). The
+**Grading.** It runs as the second pass of every run, and `evalctl grade --skill S [--iteration N]`
+is the same judge on its own — for an iteration made with `--no-grade`, and to re-grade one whose
+assertions changed (`--iteration` defaults to the newest; `--force` re-grades arms that already
+carry verdicts). The
 judge is a Hermes call in `eval-vcc-without` — no skill installed, no pinned cwd, memories wiped —
 launched with `--in <arm dir>`, so it can read `outputs/`. Its prompt carries the case's prompt, the
 expected output, the declared assertions and the arm's final reply, and it never says which arm it

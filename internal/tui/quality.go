@@ -490,8 +490,12 @@ func (m *Model) gateSet(room int) []string {
 	out := []string{"", regionHead(w, "THE SET", plural(len(q.cases), "case"), false), gateRule(w), head}
 	// The case rows are spent first and the assertion band gets what is left: the list is the set, and
 	// a band that would push the last case off the screen is the wrong band to keep.
+	// The band is four lines (a blank, its head, its rule and its column names), and it is only worth
+	// reserving when at least one case row survives the reservation. Measuring that against the rows
+	// already drawn — and not against a constant — is what keeps a window one line taller from turning
+	// the case table into "… 2 more cases".
 	limit := room - 4
-	if limit < 3 {
+	if limit < len(out)+1 {
 		limit = room
 	}
 	shown := 0
@@ -587,7 +591,10 @@ func gateNext(lab *runner.QualityLab) (key, text string) {
 		case "run":
 			return c.Fix, fmt.Sprintf("run iteration 1 — %s, both arms", plural(lab.Cases, "case"))
 		case "grade":
-			return c.Fix, "grade the run — the loop opens on its verdicts, not on its outputs"
+			if c.Fix == "R" {
+				return c.Fix, "run iteration 1 — it grades itself, and the loop opens on the verdicts"
+			}
+			return c.Fix, "grade the run — its arms carry no verdicts, so the loop has nothing to open on"
 		}
 	}
 	return "", ""
@@ -1034,7 +1041,7 @@ func (m *Model) dojoPane(w, h int) []string {
 	if it := q.iteration(); it != nil && !it.Complete {
 		next = "g grades this iteration"
 	}
-	act.action("f", "the feedback · v the transcript · E SKILL.md · "+next)
+	act.action("f", "the feedback · p a revision · v transcript · E SKILL.md · "+next)
 	room := max(1, h-len(act.lines))
 
 	d := &docWriter{w: w, label: 11}
@@ -1389,6 +1396,10 @@ func (m *Model) updateDojo(msg tea.KeyMsg) tea.Cmd {
 		m.stepIteration(1)
 	case "f":
 		return m.openFeedbackEditor()
+	case "p":
+		// The guide's step 1, asked of the agent that is allowed to write: the failures, the feedback
+		// and the skill, in one call, landing as a proposal on its own screen.
+		return m.startRevision()
 	case "v", "enter":
 		m.openTranscript()
 	case "E":
@@ -1462,19 +1473,60 @@ func (m *Model) startGrading() tea.Cmd {
 		return nil
 	}
 	it := q.iteration()
-	if it != nil && it.Complete {
-		m.setStatus(fmt.Sprintf("iteration %d is already graded — R runs the next one", q.iter), false)
+	// Any verdict at all means a judge pass has been here, and a second one replaces what it bought:
+	// the reason is that the list those verdicts were read against has changed, and that is worth a
+	// question. An iteration with no verdicts — the whole run made with --no-grade, an older build, or
+	// the grade cancelled — has nothing to replace, so `g` finishes it without asking.
+	if it != nil && (it.With.Graded() || it.Without.Graded()) {
+		return m.askRegrade(it)
+	}
+	return m.startGradeRun(false)
+}
+
+// startGradeRun is one judge pass over the iteration on screen. force re-grades arms that already
+// carry verdicts; without it the judge skips them and says so, which is what `g` on an ungraded
+// iteration does.
+func (m *Model) startGradeRun(force bool) tea.Cmd {
+	q := m.quality
+	if q == nil {
 		return nil
 	}
-	m.run = &runState{kind: runGrade, scope: fmt.Sprintf("grading run · iteration %d", q.iter),
+	scope := fmt.Sprintf("grading run · iteration %d", q.iter)
+	if force {
+		scope = fmt.Sprintf("re-grading · iteration %d", q.iter)
+	}
+	m.run = &runState{kind: runGrade, scope: scope,
 		hint: "the judge reads each arm's outputs against the declared assertions"}
 	m.run.live = newLiveRun(m.run.scope, false)
 	m.seedOutputRun(q.cases, q.iter)
 	m.mode = screenRunLive
-	return m.startJudgeRun()
+	return m.startJudgeRun(force)
 }
 
-func (m *Model) startJudgeRun() tea.Cmd {
+// askRegrade is the one question `g` asks on a complete iteration. Re-grading spends one judge call
+// per arm over verdicts that exist because the list moved under them — worth asking, and worth
+// saying what it costs.
+func (m *Model) askRegrade(it *runner.QualityIteration) tea.Cmd {
+	arms := 2 * it.Cases
+	m.mode = screenAsk
+	m.ask = &askState{
+		scope: fmt.Sprintf("re-grade iteration %d", it.N),
+		title: fmt.Sprintf("GRADE ITERATION %d AGAIN?", it.N),
+		lines: []string{
+			"      Every arm in this iteration already carries verdicts.",
+			fmt.Sprintf("      That is %d judge call(s), and the rates it produces replace the ones on screen.", arms),
+			"",
+			"      Do it when an assertion changed after the grade: the verdicts describe the old list,",
+			"      and the dojo draws a verdict nobody gave as a dash.",
+		},
+		yes:  "re-grade it",
+		back: screenQuality,
+		then: func(m *Model) tea.Cmd { return m.startGradeRun(true) },
+	}
+	return nil
+}
+
+func (m *Model) startJudgeRun(force bool) tea.Cmd {
 	if m.quality == nil {
 		return nil
 	}
@@ -1492,7 +1544,7 @@ func (m *Model) startJudgeRun() tea.Cmd {
 	}
 	go func() {
 		defer close(ch)
-		if _, err := r.GradeIteration(ctx, skill, iteration, runner.GradeOptions{}); err != nil {
+		if _, err := r.GradeIteration(ctx, skill, iteration, runner.GradeOptions{Force: force}); err != nil {
 			ch <- runner.Event{Kind: "error", Lane: store.LaneOutput, Err: err, Message: err.Error()}
 		}
 	}()
@@ -1522,7 +1574,7 @@ func (m *Model) startQualityRun() tea.Cmd {
 		next = q.lab.Iterations[len(q.lab.Iterations)-1].N + 1
 	}
 	m.run = &runState{kind: runQuality, scope: fmt.Sprintf("output run · iteration %d", next),
-		hint: "both arms, every case: the with-skill arm against the baseline"}
+		hint: "both arms, every case, then the judge — one spend, two passes"}
 	m.run.live = newLiveRun(m.run.scope, false)
 	m.seedOutputRun(q.cases, next)
 	m.mode = screenRunLive
@@ -1556,8 +1608,10 @@ func (m *Model) startQualityRunCmd() tea.Cmd {
 		case <-ctx.Done():
 		}
 	}
+	// Grade is part of the run: a set of outputs nobody judged is not an iteration, and the second
+	// key that used to judge it was a step with nothing to wait for in between.
 	opts := runner.Options{Lane: store.LaneOutput, Skills: []string{m.skill},
-		Arms: runner.AllArms, Isolate: true, Log: runner.ActivityFull}
+		Arms: runner.AllArms, Isolate: true, Log: runner.ActivityFull, Grade: true}
 	go func() {
 		defer close(ch)
 		if err := r.RunQuality(ctx, opts); err != nil {
@@ -1637,10 +1691,14 @@ func qualityHints(m *Model) []hint {
 		}
 		hints = append(hints, hint{"enter", "the declaration"}, hint{"S", "evals.json"})
 		if q.lab.Cases > 0 && q.lab.Unasserted == 0 {
-			hints = append(hints, hint{"R", "run iteration 1"})
+			next := "run iteration 1"
+			if n := len(q.lab.Iterations); n > 0 {
+				next = fmt.Sprintf("run iteration %d", q.lab.Iterations[n-1].N+1)
+			}
+			hints = append(hints, hint{"R", next})
 		}
 		if len(q.lab.Iterations) > 0 {
-			hints = append(hints, hint{"g", "grade"})
+			hints = append(hints, hint{"g", "grade · re-grade"})
 		}
 		return append(hints, hint{"esc", "skills"})
 	}
@@ -1648,7 +1706,7 @@ func qualityHints(m *Model) []hint {
 	switch q.sec {
 	case qDojo:
 		hints := []hint{{"j k", "cases"}, {"[ ]", "iteration"}, {"v", "transcript"},
-			{"f", "feedback"}, {"E", "SKILL.md"}}
+			{"f", "feedback"}, {"p", "a revision"}, {"E", "SKILL.md"}}
 		if it := q.iteration(); it != nil && !it.Complete {
 			hints = append(hints, hint{"g", "grade"})
 		}

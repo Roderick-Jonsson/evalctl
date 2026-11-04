@@ -161,6 +161,11 @@ func (r *Runner) runSkillIteration(ctx context.Context, cases []Case, o Options)
 	}
 
 	if o.DryRun {
+		// The plan says what the run would also spend: the judge is part of it, and a dry run that
+		// stopped at the arms would price the iteration wrong.
+		if o.Grade {
+			r.message("%s: then the judge — one call per arm of iteration %d, against the declared assertions", skill, iteration)
+		}
 		r.emit(Event{Kind: EventDone, Lane: LaneOutput, Message: "Dry run: nothing was written. Drop --dry-run to execute."})
 		return nil
 	}
@@ -228,8 +233,20 @@ func (r *Runner) runSkillIteration(ctx context.Context, cases []Case, o Options)
 // just written. A grading failure does not throw the run away — the runs are on disk and the note
 // in grading.json says they are ungraded.
 func (r *Runner) gradeAfterRun(ctx context.Context, skill string, iteration int, o Options) error {
+	// The judge pass is announced before it starts: a run that grades is one spend and two passes, and
+	// the screen has to be able to say which one it is waiting on — otherwise the same arm appears to
+	// run twice and the second pass reads as a hang.
+	r.emit(Event{Kind: EventPhase, Lane: LaneOutput, Phase: "grade",
+		Message: fmt.Sprintf("judging iteration %d — one judge call per arm", iteration)})
 	out, err := r.GradeIteration(ctx, skill, iteration, GradeOptions{Model: o.Model, Budget: DefaultGradeBudget})
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			// The operator's x during the judge pass stops the pass and keeps the arms: the iteration is
+			// on disk with outputs and no verdicts, and `g` finishes it without re-running a case.
+			r.emit(Event{Kind: EventPhase, Lane: LaneOutput, Phase: "grade-off",
+				Message: fmt.Sprintf("grading cancelled — iteration %d is on disk without verdicts; g grades it", iteration)})
+			return nil
+		}
 		r.message("%s: run kept, grading failed: %v", skill, err)
 		return nil
 	}
