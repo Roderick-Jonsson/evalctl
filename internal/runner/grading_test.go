@@ -43,6 +43,21 @@ func TestParseJudgeReplyWithoutJSONIsAnError(t *testing.T) {
 	}
 }
 
+// A judge that answers its object and then appends a stray fragment — the shape that aborted a whole
+// iteration on 2026-11-04 — is one object followed by junk. The first complete object is the answer;
+// slicing to the last brace glues the two together and nothing parses.
+func TestParseJudgeReplyTakesTheFirstCompleteObject(t *testing.T) {
+	reply := `{"assertion_results":[{"text":"three faces","passed":true,"evidence":"3, 17, 9"}]}` +
+		"\n" + `,"summary":{"passed":1,"failed":0,"total":1,"pass_rate":1}}`
+	got, err := parseJudgeReply(reply, []string{"three faces"})
+	if err != nil {
+		t.Fatalf("a trailing fragment must not fail the parse: %v", err)
+	}
+	if len(got) != 1 || !got[0].Passed {
+		t.Fatalf("verdicts = %+v, want the one the object carries", got)
+	}
+}
+
 func TestAPassWithoutEvidenceIsNotAPass(t *testing.T) {
 	got := finishResult("a", AssertionResult{Text: "a", Passed: true, Evidence: "  "})
 	if got.Passed {

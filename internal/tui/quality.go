@@ -15,8 +15,14 @@ import (
 	"evalctl/internal/store"
 )
 
-// The output lane has three jobs, and they are three sections on one rail.
+// The output lane has three jobs, and they are three sections on one rail — after an entry that is
+// not one of them.
 //
+//   - the ENTRY is not a section because it is not part of the loop: it is what has to be true
+//     before a loop exists. A set of cases, an assertion on every one of them, a run, and a grade of
+//     that run. The lane opens on it whenever the disk says the loop is still closed, and the rail,
+//     the dojo and the ranking are unreachable from it — a section offered before there is anything
+//     in it is a screen that answers "nothing measured yet" three times.
 //   - SETUP declares the case: the skill it belongs to, the prompt, the expected output, the fixtures
 //     it stages and the assertions it will be judged on. This is the only place the declaration is
 //     edited, because a case is written before anything can be measured against it.
@@ -54,15 +60,14 @@ type qualityState struct {
 	iter  int // the iteration every section reads; 0 = none on disk
 	sec   int // qSetup, qDojo or qQuality
 
-	// The setup section's list.
+	// The case cursor, shared by the declaration and the dojo: one set, one walk.
 	sel int
 	top int
 
-	// The dojo's failures rail: the iteration's failures in the skill's case order, and the tail of
-	// the selected arm's activity log, cached under the path it came from.
+	// The dojo's failures, flattened for its counts, and the tail of the selected case's arm, cached
+	// under the path it came from. The rail itself is the case list: sel and top are shared with the
+	// declaration, so walking the set in one section keeps the cursor in the other.
 	fails   []runner.QualityFailure
-	fsel    int
-	ftop    int
 	logPath string
 	logTail []string
 
@@ -70,8 +75,19 @@ type qualityState struct {
 	rsel, rtop int
 
 	// note is the human's note being typed, open as a strip under the dojo's two columns.
-	note  *noteState
-	first bool
+	feedback *feedbackState
+	first    bool
+
+	// gate is the initialization checklist, and the lane opens on it while the loop is closed: no
+	// set, a case with nothing to judge, nothing run, or a run with no verdict. The sections below
+	// it are the loop, and a loop with no graded run has nothing to show but three ways of saying
+	// "nothing measured yet".
+	//
+	// gateOff records that the operator asked for the declaration anyway. The gate is where the
+	// disk says you are, not a lock on the files: the first run's assertions are written before the
+	// first run, and that is the declaration's job.
+	gate    bool
+	gateOff bool
 }
 
 func (q *qualityState) iteration() *runner.QualityIteration {
@@ -93,6 +109,25 @@ func (q *qualityState) caseAt() *runner.QualityCase {
 	return &q.cases[q.sel]
 }
 
+// selectFirstFailed puts the case cursor on the first case that failed, if any: a dojo that opens on
+// a case that passed is a screen answering "what went wrong" with "nothing here".
+func (q *qualityState) selectFirstFailed() {
+	if q == nil {
+		return
+	}
+	for i, c := range q.cases {
+		if len(c.Failed) > 0 {
+			q.sel, q.top = i, 0
+			q.syncLog()
+			return
+		}
+	}
+	if q.sel >= len(q.cases) {
+		q.sel, q.top = 0, 0
+	}
+	q.syncLog()
+}
+
 func (q *qualityState) caseOf(slug string) *runner.QualityCase {
 	if q == nil {
 		return nil
@@ -105,17 +140,15 @@ func (q *qualityState) caseOf(slug string) *runner.QualityCase {
 	return nil
 }
 
-func (q *qualityState) failAt() *runner.QualityFailure {
-	if q == nil || q.fsel < 0 || q.fsel >= len(q.fails) {
-		return nil
-	}
-	return &q.fails[q.fsel]
-}
-
 // sectionName is where the path bar says you are inside the lane.
 func (q *qualityState) sectionName() string {
 	if q == nil {
 		return "setup"
+	}
+	if q.gate {
+		// The bar names the job, not a section: there is no section yet, and saying "setup" over a
+		// checklist would put the declaration's name on the entry's work.
+		return "init"
 	}
 	for _, s := range qualitySections {
 		if s.sec == q.sec {
@@ -141,11 +174,20 @@ func (m *Model) openQualitySkill(name string) {
 	if m.quality.lab == nil {
 		return
 	}
+	if m.quality.gate {
+		// The loop does not exist yet, so the lane opens on the checklist that builds it rather
+		// than on a section of a loop with nothing in it.
+		if _, text := gateNext(m.quality.lab); text != "" {
+			m.setStatus(name+" · initialization — "+text, false)
+		}
+		return
+	}
 	if n := len(m.quality.lab.Iterations); n > 0 {
 		last := m.quality.lab.Iterations[n-1]
 		switch {
 		case len(last.Failed) > 0:
 			m.setQualitySection(qDojo)
+			m.quality.selectFirstFailed()
 			m.setStatus(fmt.Sprintf("%s · iteration %d failed %s — read them, revise, R runs iteration %d",
 				name, last.N, plural(len(last.Failed), "assertion"), last.N+1), false)
 		case !last.Complete:
@@ -173,7 +215,7 @@ func (m *Model) setQualitySection(sec int) {
 		return
 	}
 	q.sec = sec
-	q.note, m.assertEdit = nil, nil
+	q.feedback, m.assertEdit = nil, nil
 }
 
 // reloadQuality re-reads the lab, the iteration's cases and its failures. It runs after every write
@@ -190,37 +232,50 @@ func (m *Model) reloadQuality() {
 	if m.quality == nil {
 		m.quality = &qualityState{}
 	}
-	m.quality.lab = lab
-	if len(lab.Iterations) == 0 {
-		m.quality.cases, m.quality.fails, m.quality.iter = nil, nil, 0
-		return
-	}
+	q := m.quality
+	q.lab = lab
+	// The gate is the disk's verdict on whether a loop exists yet, not the session's memory of a
+	// screen: it closes the moment the first verdict lands. gateOff only remembers that the
+	// operator stepped past it into the declaration.
+	wasGate := q.gate
+	q.gate = lab.InitPending && !q.gateOff
 	// Keep the iteration the operator is looking at while it still exists; otherwise open the
 	// newest, which is the one the loop is waiting on.
-	found := false
-	for _, it := range lab.Iterations {
-		if it.N == m.quality.iter {
-			found = true
+	if len(lab.Iterations) > 0 {
+		found := false
+		for _, it := range lab.Iterations {
+			if it.N == q.iter {
+				found = true
+			}
 		}
+		if !found {
+			q.iter = lab.Iterations[len(lab.Iterations)-1].N
+		}
+	} else {
+		q.iter = 0
 	}
-	if !found {
-		m.quality.iter = lab.Iterations[len(lab.Iterations)-1].N
-		m.quality.fsel = 0
-	}
-	cases, err := runner.New(m.store).QualityCases(m.skill, m.quality.iter)
+	// The declaration is read whether or not anything has run: evals.json is a file, and the screen
+	// that writes the first assertions has to list the cases before iteration 1 exists.
+	cases, err := runner.New(m.store).QualityCases(m.skill, q.iter)
 	if err != nil {
 		m.setStatus(err.Error(), true)
 		return
 	}
-	m.quality.cases = cases
-	m.quality.fails = failuresOf(cases)
-	m.quality.sel = min(m.quality.sel, max(0, len(cases)-1))
-	m.quality.fsel = min(m.quality.fsel, max(0, len(m.quality.fails)-1))
-	if m.quality.lab.Best != 0 && m.quality.rsel == 0 && m.quality.first {
-		m.quality.rsel = bestRow(m.quality.lab)
+	q.cases = cases
+	q.fails = failuresOf(cases)
+	q.sel = min(q.sel, max(0, len(cases)-1))
+	if q.lab.Best != 0 && q.rsel == 0 && q.first {
+		q.rsel = bestRow(q.lab)
 	}
-	m.quality.first = false
-	m.quality.syncLog()
+	q.first = false
+	if wasGate && !q.gate {
+		// The entry's last errand was just done, so the loop is open: it opens on the failures of
+		// the run that opened it, which is what there now is to read.
+		q.sec = qDojo
+		q.feedback, m.assertEdit = nil, nil
+		q.selectFirstFailed()
+	}
+	q.syncLog()
 }
 
 // failuresOf is the iteration's failures in the skill's case order — the order the case list uses,
@@ -233,16 +288,16 @@ func failuresOf(cases []runner.QualityCase) []runner.QualityFailure {
 	return out
 }
 
-// syncLog keeps the dojo's transcript cache on the failure under the cursor: a file read only when
-// the selection moves, never on every frame.
+// syncLog keeps the dojo's transcript cache on the case under the cursor: a file read only when the
+// selection moves, never on every frame.
 func (q *qualityState) syncLog() {
 	if q == nil {
 		return
 	}
 	path := ""
-	if f := q.failAt(); f != nil {
+	if c := q.caseAt(); c != nil {
 		if it := q.iteration(); it != nil {
-			path = filepath.Join(it.Path, f.Case, f.Arm, "activity.log")
+			path = filepath.Join(it.Path, c.Slug, dojoArm(*c), "activity.log")
 		}
 	}
 	if path == q.logPath {
@@ -305,6 +360,9 @@ func (m *Model) qualityBody(h int) []string {
 	if q == nil || q.lab == nil {
 		return fitRows([]string{"", "  " + dimStyle.Render("reading the workspace…")}, h)
 	}
+	if q.gate {
+		return m.gateBody(h)
+	}
 	switch q.sec {
 	case qDojo:
 		return m.dojoBody(h)
@@ -312,6 +370,227 @@ func (m *Model) qualityBody(h int) []string {
 		return m.qualityTableBody(h)
 	}
 	return m.setupBody(h)
+}
+
+// ---------------------------------------------------------------- the entry: is there a loop yet
+
+// gateBody is the entry, as two tables and one action line: the four steps the loop needs before it
+// exists — numbered, in the order they have to be done, with the state each is in and the key that
+// moves it — and the set those steps are about.
+//
+// It used to be a checklist of sentences. A screen whose lines are prose has no columns to scan and
+// no bands to orient by, and this one is read by someone who has never seen the lane: a header row,
+// a rule and a fixed label column are what make "which step, and what is it waiting for" one glance.
+//
+// It draws no rail. The sections are the loop, and offering three of them before the loop exists is
+// three screens answering "nothing measured yet".
+func (m *Model) gateBody(h int) []string {
+	lab := m.quality.lab
+	done := 0
+	for _, c := range lab.Checks {
+		if c.OK {
+			done++
+		}
+	}
+	// The action is reserved before either table is drawn: the one line that says what to press must
+	// not be the line a short window cuts, and the set is the band that can afford to lose its tail.
+	key, text := gateNext(lab)
+	if key == "" {
+		key, text = "enter", "the loop is open — the declaration is behind this screen"
+	}
+	act := &docWriter{w: m.width}
+	act.action(key, text)
+
+	out := m.gateSteps(done)
+	if room := h - len(out) - len(act.lines); room > 0 {
+		out = append(out, m.gateSet(room)...)
+	}
+	out = append(out, act.lines...)
+	return fitRows(out, h)
+}
+
+// The two tables share one grid: a two-cell cursor column, a fixed label column, then the detail.
+const (
+	gateStepW = 4  // the step number
+	gateWhatW = 12 // the step's name
+	gateKeyW  = 3  // the key that does it, at the right edge
+	gateCaseW = 22 // the longest slug the case table holds before it is cut
+)
+
+func gateRule(w int) string {
+	return "  " + dimStyle.Render(strings.Repeat(glyphs.Rule, min(64, max(10, w-4))))
+}
+
+// gateSteps is the four steps as a table. The step the entry is asking for carries the here-mark and
+// the bright register; the ones after it are quiet, and the ones before it are done — so the row the
+// screen is about is the only row that reads as an instruction.
+func (m *Model) gateSteps(done int) []string {
+	lab := m.quality.lab
+	w := m.width
+	current := -1
+	for i, c := range lab.Checks {
+		if !c.OK {
+			current = i
+			break
+		}
+	}
+	// The detail column is measured, not guessed: the four keys line up in one column just past the
+	// longest detail, which keeps them near the sentence they act on instead of floating at the far
+	// edge of a wide window.
+	nowW := lipgloss.Width("NOW")
+	for _, c := range lab.Checks {
+		nowW = max(nowW, lipgloss.Width(c.Detail))
+	}
+	nowW = min(nowW, max(24, w-gateStepW-gateWhatW-gateKeyW-14))
+	head := "    " + dimStyle.Render(padCell("STEP", gateStepW, true)) + "  " +
+		dimStyle.Render(padCell("WHAT", gateWhatW, false)) + "  " +
+		dimStyle.Render(padCell("NOW", nowW, false)) + "  " + dimStyle.Render("KEY")
+	out := []string{"", regionHead(w, "INITIALIZATION", fmt.Sprintf("%d of %d", done, len(lab.Checks)), true),
+		gateRule(w), head}
+	for i, c := range lab.Checks {
+		mark, name, detail, fix := "  ", dimStyle.Render(padCell(c.Key, gateWhatW, false)),
+			dimStyle.Render(padCell(ellipsis(c.Detail, nowW), nowW, false)), dimStyle.Render(c.Fix)
+		if c.OK {
+			// A done step keeps its tick: "2 of 4" in the corner is a number, two ticks are a record.
+			mark = styleOn.Render(glyphs.Done) + " "
+		}
+		if i == current {
+			mark = stepHere.Render(glyphs.Here) + " "
+			name = titleStyle.Render(padCell(c.Key, gateWhatW, false))
+			detail = colText.Render(padCell(ellipsis(c.Detail, nowW), nowW, false))
+			fix = titleStyle.Render(c.Fix)
+		}
+		if c.OK {
+			fix = ""
+		} else {
+			fix = padCell(fix, gateKeyW, true)
+		}
+		out = append(out, mark+dimStyle.Render(padCell(fmt.Sprintf("%d", i+1), gateStepW, true))+
+			"  "+name+"  "+detail+"  "+fix)
+	}
+	return out
+}
+
+// gateSet is the declaration the entry is about: the cases as a table, then the selected case's
+// assertions as their own numbered band. "5 assertions" is a number nobody can check from this
+// screen, and the entry is the last place to change the set before it costs a run.
+//
+// The list is walked with j and k, so the assertions under it are the ones of the case the cursor is
+// on — a case at a time, because a set of six cases with three assertions each is not a block that
+// fits, and a list cut mid-assertion reads as a declaration that ends there.
+func (m *Model) gateSet(room int) []string {
+	q := m.quality
+	if len(q.cases) == 0 || room < 6 {
+		return nil
+	}
+	w := m.width
+	const assertW = 10
+	head := "    " + dimStyle.Render(padCell("CASE", gateCaseW, false)) + "  " +
+		dimStyle.Render(padCell("ASSERTIONS", assertW, true)) + "  " + dimStyle.Render("STATE")
+	out := []string{"", regionHead(w, "THE SET", plural(len(q.cases), "case"), false), gateRule(w), head}
+	// The case rows are spent first and the assertion band gets what is left: the list is the set, and
+	// a band that would push the last case off the screen is the wrong band to keep.
+	limit := room - 4
+	if limit < 3 {
+		limit = room
+	}
+	shown := 0
+	for i, c := range q.cases {
+		if len(out) >= limit {
+			break
+		}
+		mark := "  "
+		if i == q.sel {
+			mark = cursorMark.Render(glyphs.Cursor)
+		}
+		line := mark + colText.Render(padCell(c.Slug, gateCaseW, false)) + "  " +
+			colText.Render(padCell(fmt.Sprintf("%d", len(c.Rows)), assertW, true)) + "  " +
+			caseState(c)
+		if i == q.sel {
+			line = selected(line)
+		}
+		out = append(out, line)
+		shown++
+	}
+	if shown < len(q.cases) {
+		out = append(out, "    "+dimStyle.Render(fmt.Sprintf("… %d more cases", len(q.cases)-shown)))
+	}
+	if c := q.caseAt(); c != nil {
+		out = append(out, assertionLines(*c, w, room-len(out))...)
+	}
+	return out
+}
+
+// caseState is the case table's last column in words: a newcomer should not have to learn a glyph to
+// find out that a case is still a stub.
+func caseState(c runner.QualityCase) string {
+	switch {
+	case strings.TrimSpace(c.Prompt) == "":
+		return statusBad.Render("empty")
+	case len(c.Rows) == 0:
+		return dimStyle.Render("prompt only")
+	}
+	return dimStyle.Render("declared")
+}
+
+// assertionLines is the selected case's list, in its own band under the set: numbered, because
+// "assertion 2 failed" is a sentence the dojo will use, and the numbers are what it counts by. One
+// line stays reserved for the count of what did not fit — a list that just stops reads as complete.
+func assertionLines(c runner.QualityCase, w, room int) []string {
+	const indent = "   "
+	if room < 2 {
+		return nil
+	}
+	out := []string{"", regionHead(w, "ASSERTIONS · "+strings.ToUpper(c.Slug),
+		plural(len(c.Rows), "row"), false), gateRule(w)}
+	if len(out)+1 > room {
+		return out[:room]
+	}
+	if len(c.Rows) == 0 {
+		return append(out, indent+dimStyle.Render("none declared — e writes the first one"))
+	}
+	hidden := 0
+	for i, a := range c.Rows {
+		block := wrapPlain(a.Text, max(10, w-10))
+		if len(out)+len(block) > room-1 {
+			hidden = len(c.Rows) - i
+			break
+		}
+		for j, line := range block {
+			if j == 0 {
+				out = append(out, indent+dimStyle.Render(padCell(fmt.Sprintf("%d", i+1), 2, true))+
+					"   "+colText.Render(line))
+				continue
+			}
+			out = append(out, indent+"     "+colText.Render(line))
+		}
+	}
+	if hidden > 0 {
+		out = append(out, indent+dimStyle.Render(fmt.Sprintf("… %s more — enter for the record",
+			plural(hidden, "assertion"))))
+	}
+	return out
+}
+
+// gateNext is the one errand the entry is asking for: the first step that is not done, with the key
+// that does it and the sentence that says what doing it means.
+func gateNext(lab *runner.QualityLab) (key, text string) {
+	for _, c := range lab.Checks {
+		if c.OK {
+			continue
+		}
+		switch c.Key {
+		case "cases":
+			return c.Fix, "write the cases — evals.json, two or three to start, S opens it"
+		case "assertions":
+			return c.Fix, "an assertion for every case: a grade is made of them, e writes them"
+		case "run":
+			return c.Fix, fmt.Sprintf("run iteration 1 — %s, both arms", plural(lab.Cases, "case"))
+		case "grade":
+			return c.Fix, "grade the run — the loop opens on its verdicts, not on its outputs"
+		}
+	}
+	return "", ""
 }
 
 // ---------------------------------------------------------------- setup: the declaration
@@ -356,13 +635,11 @@ func (m *Model) setupBody(h int) []string {
 
 func (m *Model) caseList(h int) []string {
 	q := m.quality
-	it := q.iteration()
 	w := m.caseListW()
 	lines := []string{"", regionHead(w, "CASES", "", true),
 		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, w-4)))}
-	if it == nil {
-		return lines
-	}
+	// The list is the declared set, with or without a run behind it: an iteration that has not
+	// happened is not a reason to hide the cases iteration 1 is written from.
 	room := max(1, h-len(lines))
 	q.top = windowStart(q.sel, q.top, room, len(q.cases))
 	for i := q.top; i < len(q.cases) && i < q.top+room; i++ {
@@ -451,7 +728,7 @@ func (m *Model) casePane(w, h int) []string {
 		d := &docWriter{w: w}
 		d.head("NO CASE", false)
 		d.rule()
-		d.para("Nothing has run yet. R runs iteration 1; the guide starts with two or three cases and writes the assertions after seeing what the first run produces.")
+		d.para("The set is empty. S opens evals.json: two or three cases are enough to start, and e writes the assertions a grade is made of.")
 		return fitRows(d.lines, h)
 	}
 	// The action line is reserved before anything is measured against the window: the one line that
@@ -650,16 +927,14 @@ func dimWord(s string) string {
 
 // ---------------------------------------------------------------- dojo: one iteration, worked
 
-const failArmW = 7 // "without" and the space after "with"
-
-// failureListW is the failures rail's column: the mark, the arm and the case, and no wider — the
-// pane beside it carries the assertion, the evidence and the transcript, and it needs the room.
-func (m *Model) failureListW() int {
-	w := lipgloss.Width("FAILED")
-	for _, f := range m.quality.fails {
-		w = max(w, lipgloss.Width(f.Case))
+// dojoListW is the case rail's column: the mark, the slug and the count, and no wider — the pane
+// beside it carries the assertions, the evidence and the note, and it needs the room.
+func (m *Model) dojoListW() int {
+	w := lipgloss.Width("CASE")
+	for _, c := range m.quality.cases {
+		w = max(w, lipgloss.Width(c.Slug))
 	}
-	return 2 + failArmW + 1 + min(26, max(12, w))
+	return min(44, max(28, 2+2+w+2+9))
 }
 
 func (m *Model) dojoBody(h int) []string {
@@ -667,8 +942,8 @@ func (m *Model) dojoBody(h int) []string {
 	// The strip is paid for before the columns: a field the bottom of the window cuts off is a field
 	// the editor cannot reach, while the columns have scroll and trim to lose instead.
 	stripH := 0
-	if q.note != nil {
-		stripH = min(max(8, h/2), 4+q.note.want)
+	if q.feedback != nil {
+		stripH = min(max(8, h/2), 4+q.feedback.want)
 	}
 	bodyH := max(8, h-stripH)
 	var body []string
@@ -676,108 +951,82 @@ func (m *Model) dojoBody(h int) []string {
 		d := &docWriter{w: min(100, m.width), label: 10}
 		d.head("NOTHING TO WORK ON", false)
 		d.rule()
-		d.para("No iteration has run yet. R runs iteration 1 with both arms over every case; the failures, the transcripts and the note all arrive with that run.")
+		d.para("No iteration has run yet. R runs iteration 1 with both arms over every case; the outputs, the failures and the feedback all arrive with that run.")
 		body = fitRows(d.lines, bodyH)
-	} else if paneW := min(100, m.width-m.failureListW()-3); paneW >= 40 {
-		body = m.splitBody(bodyH, m.failureListW(), paneW, m.failureList(it, bodyH), m.failurePane(paneW, bodyH))
+	} else if paneW := min(100, m.width-m.dojoListW()-3); paneW >= 40 {
+		body = m.splitBody(bodyH, m.dojoListW(), paneW, m.dojoList(it, bodyH), m.dojoPane(paneW, bodyH))
 	} else {
 		body = m.dojoStacked(bodyH)
 	}
-	if q.note != nil {
-		body = append(body, q.note.body(m.width, stripH)...)
+	if q.feedback != nil {
+		body = append(body, q.feedback.body(m.width, stripH)...)
 	}
 	return fitRows(body, h)
 }
 
-// failureList is the iteration's failed assertions, one row each, with the arm that failed it. The
-// passing rows are not drawn: the guide's patterns are read off the pane, and a rail that lists the
-// whole grading list twice is a rail nobody scans. The count of what passed in both arms sits under
-// it, because "this assertion measures the model, not the procedure" is the other half of the read.
-func (m *Model) failureList(it *runner.QualityIteration, h int) []string {
+// dojoList is the iteration's CASES, one row each, with how much failed in each. It used to list the
+// failed assertions instead, which had two costs: a case with three failures appeared three times,
+// and a case that passed every assertion did not appear at all — so the human note, which is written
+// against a case and not against a verdict, had nowhere to be written. The assertion that passed can
+// still be the assertion that is wrong.
+func (m *Model) dojoList(it *runner.QualityIteration, h int) []string {
 	q := m.quality
-	w := m.failureListW()
-	// The corner is the count and nothing else: "FAILED 3" is the rail's own size, and a second
-	// "iteration 4" would crowd the column the slugs need.
-	right := ""
+	w := m.dojoListW()
+	right := "passes"
 	if n := len(q.fails); n > 0 {
-		right = fmt.Sprint(n)
+		right = fmt.Sprintf("%d failed", n)
 	}
-	lines := []string{"", regionHead(w, "FAILED", right, true),
-		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, w-4)))}
-	room := max(1, h-len(lines)-1)
-	q.ftop = windowStart(q.fsel, q.ftop, room, len(q.fails))
-	if len(q.fails) == 0 {
-		lines = append(lines, "  "+dimStyle.Render("none"))
-	} else {
-		for i := q.ftop; i < len(q.fails) && i < q.ftop+room; i++ {
-			f := q.fails[i]
-			mark := "  "
-			if i == q.fsel {
-				mark = cursorMark.Render(glyphs.Cursor)
-			}
-			line := mark + dimStyle.Render(padCell(armWord(f.Arm), failArmW, false)) + " " +
-				colText.Render(ellipsis(f.Case, w-2-failArmW-1))
-			if i == q.fsel {
-				line = selected(line)
-			}
-			lines = append(lines, line)
+	const countW = 9
+	slugW := max(8, w-2-1-1-2-countW)
+	lines := []string{"", regionHead(w, "CASES", right, true),
+		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, w-4))),
+		"    " + dimStyle.Render(padCell("CASE", slugW, false)) + "  " +
+			dimStyle.Render(padCell("FAILED", countW, true))}
+	room := max(1, h-len(lines))
+	q.top = windowStart(q.sel, q.top, room, len(q.cases))
+	for i := q.top; i < len(q.cases) && i < q.top+room; i++ {
+		c := q.cases[i]
+		mark := "  "
+		if i == q.sel {
+			mark = cursorMark.Render(glyphs.Cursor)
 		}
-	}
-	if n := passedBoth(q.cases); n > 0 {
-		// Short on purpose: the rail is a column, and the clause that explains it is the pane's.
-		lines = append(lines, "", "  "+dimStyle.Render(fmt.Sprintf("+ %d passed", n)))
+		glyph, count := styleOn.Render(glyphs.Done), styleOn.Render(padCell("passes", countW, true))
+		if n := len(c.Failed); n > 0 {
+			glyph = statusBad.Render(glyphs.Failed)
+			count = statusBad.Render(padCell(fmt.Sprintf("%d failed", n), countW, true))
+		}
+		line := mark + glyph + " " + colText.Render(padCell(ellipsis(c.Slug, slugW), slugW, false)) +
+			"  " + count
+		if i == q.sel {
+			line = selected(line)
+		}
+		lines = append(lines, line)
 	}
 	return fitRows(lines, h)
 }
 
-// passedBoth counts the assertions every arm passed: they measure the model, not the procedure, and
-// they are the rows a sharper set would replace.
-func passedBoth(cases []runner.QualityCase) int {
-	n := 0
-	for _, c := range cases {
-		for _, a := range c.Rows {
-			if a.With != nil && a.Without != nil && *a.With && *a.Without {
-				n++
-			}
-		}
-	}
-	return n
-}
-
+// dojoStacked is the dojo without its second column: the cases, then the one under the cursor.
 func (m *Model) dojoStacked(h int) []string {
-	lines := m.failureList(m.quality.iteration(), max(6, h/2))
-	if f := m.quality.failAt(); f != nil {
+	lines := m.dojoList(m.quality.iteration(), max(6, h/2))
+	if c := m.quality.caseAt(); c != nil {
 		lines = append(lines, "")
-		lines = append(lines, m.failureBlock(*f)...)
+		lines = append(lines, m.dojoPane(m.width, max(4, h-len(lines)))...)
 	}
 	return fitRows(lines, h)
 }
 
-// failureBlock is the narrow window's version of the dojo's pane: the assertion, the evidence and
-// the note, without the transcript preview (v still opens it).
-func (m *Model) failureBlock(f runner.QualityFailure) []string {
-	d := &docWriter{w: m.width, label: 12}
-	d.lines = append(d.lines, "  "+titleStyle.Render(f.Case)+"  "+
-		dimStyle.Render(armWord(f.Arm)+" "+glyphs.Failed), "")
-	d.fact("assertion", f.Text)
-	d.fact("evidence", oneLine(f.Evidence))
-	if c := m.quality.caseOf(f.Case); c != nil && c.Feedback != "" {
-		d.fact("note", oneLine(c.Feedback))
-	}
-	return d.lines
-}
-
-// failurePane is one failed assertion worked: the sentence the judge graded, the judge's words for
-// it, the end of that arm's execution transcript, and the human's note — the four things a revision is
-// written from, in the order a person reads them.
-func (m *Model) failurePane(w, h int) []string {
+// dojoPane is one case worked: what failed in it, the judge's evidence for each, its transcript, and
+// the note. The note is reserved before the failures are laid out — this pane exists so a person can
+// say "the assertions passed and the work is still wrong", and a window that cut the note to show one
+// more failure would be the screen refusing the one thing it is for.
+func (m *Model) dojoPane(w, h int) []string {
 	q := m.quality
-	f := q.failAt()
-	if f == nil {
+	c := q.caseAt()
+	if c == nil {
 		d := &docWriter{w: w, label: 10}
-		d.head("NOTHING FAILED", false)
+		d.head("NO CASE", false)
 		d.rule()
-		d.para("Every assertion this iteration ran passed in both arms. That is the guide's other stop signal: a set that only passes measures nothing.")
+		d.para("This iteration has no cases on disk.")
 		return fitRows(d.lines, h)
 	}
 	act := &docWriter{w: w}
@@ -785,67 +1034,130 @@ func (m *Model) failurePane(w, h int) []string {
 	if it := q.iteration(); it != nil && !it.Complete {
 		next = "g grades this iteration"
 	}
-	act.action("n", "the note · v the transcript · E SKILL.md · "+next)
+	act.action("f", "the feedback · v the transcript · E SKILL.md · "+next)
 	room := max(1, h-len(act.lines))
 
 	d := &docWriter{w: w, label: 11}
 	d.blank()
-	right := fmt.Sprintf("#%d · %s %s", caseID(q, f.Case), armWord(f.Arm), glyphs.Failed)
-	d.lines = append(d.lines, regionHead(w, ellipsis(f.Case, max(4, d.body()-lipgloss.Width(right)-2)),
+	right := fmt.Sprintf("#%d · %s", c.ID, plural(len(c.Rows), "assertion"))
+	if n := len(c.Failed); n > 0 {
+		right = fmt.Sprintf("#%d · %d failed", c.ID, n)
+	}
+	d.lines = append(d.lines, regionHead(w, ellipsis(c.Slug, max(4, d.body()-lipgloss.Width(right)-2)),
 		right, false))
 	d.rule()
 	out := d.lines
 	if len(out) >= room {
-		return fitRows(out, h)
+		return fitRows(append(out, act.lines...), h)
 	}
-	block := func(build func(*docWriter)) bool {
-		if len(out) >= room {
-			return false
-		}
+
+	// The feedback block is built before the rest and given its room first: this pane exists so a
+	// person can say what is wrong with an output the assertions could not see, and every other block
+	// on it is the evidence that sentence is written from.
+	fbBlock := &docWriter{w: w, label: 11}
+	fbBlock.card("feedback · this case's review")
+	if strings.TrimSpace(c.Feedback) != "" {
+		fbBlock.source(c.Feedback)
+	} else {
+		fbBlock.para("none — an output you were happy with leaves this empty. That is a case that passed your review, not one you forgot.")
+		fbBlock.para(`f writes it: name what is wrong with the output, not that it looks bad — "the total is right but the faces are out of order" is actionable, "bad" is not.`)
+	}
+
+	// What the feedback is about: the arm's own reply. The guide's first instruction is to review the
+	// actual outputs beside the grades, and a pane that shows verdicts but not the output is asking
+	// for a review of something nobody can see.
+	out = append(out, m.outputBlock(w, *c, room-len(out)-len(fbBlock.lines))...)
+
+	budget := room - len(out) - len(fbBlock.lines)
+	failureBlock := func(f runner.QualityFailure) []string {
 		r := &docWriter{w: w, label: 11}
-		build(r)
-		if len(r.lines) == 0 {
-			return true
-		}
-		if len(out)+len(r.lines) > room {
-			return false
-		}
-		out = append(out, r.lines...)
-		return true
-	}
-	block(func(r *docWriter) {
-		r.card("assertion")
+		r.card("assertion · " + armWord(f.Arm))
 		r.source(f.Text)
-	})
-	block(func(r *docWriter) {
 		r.card("evidence")
 		if strings.TrimSpace(f.Evidence) == "" {
 			r.para("the judge gave no evidence — a PASS without one is a FAIL, and this is a FAIL with nothing written down")
-			return
+			return r.lines
 		}
 		r.source(f.Evidence)
-	})
-	block(func(r *docWriter) {
-		r.card("transcript")
-		tail := q.logTail
-		if len(tail) == 0 {
-			r.para("no activity log for this arm — the run was cancelled before it wrote one, or logging was off")
-			return
+		return r.lines
+	}
+	if len(c.Failed) == 0 {
+		block := &docWriter{w: w, label: 11}
+		block.card("every assertion passed")
+		for _, a := range c.Rows {
+			block.lines = append(block.lines, fmt.Sprintf("  %s %s  %s", verdictCell(a.With), verdictCell(a.Without),
+				colText.Render(ellipsis(a.Text, max(10, w-12)))))
 		}
+		if len(block.lines) <= budget {
+			out = append(out, block.lines...)
+			budget -= len(block.lines)
+		}
+	}
+	for i, f := range c.Failed {
+		block := failureBlock(f)
+		if len(block) > budget {
+			out = append(out, "  "+dimStyle.Render(fmt.Sprintf("… %d more failed — the report has the rest",
+				len(c.Failed)-i)))
+			break
+		}
+		out = append(out, block...)
+		budget -= len(block)
+	}
+
+	out = append(out, fbBlock.lines...)
+
+	// The transcript of the arm this case is read through, with what is left of the window.
+	if tail := q.logTail; len(tail) > 0 && len(out)+3 <= room {
+		tr := &docWriter{w: w, label: 11}
+		tr.card("transcript · " + armWord(dojoArm(*c)))
 		for _, line := range tail {
-			r.lines = append(r.lines, "  "+dimStyle.Render(ellipsis(line, max(10, r.body()))))
+			if len(out)+len(tr.lines)+1 >= room {
+				break
+			}
+			tr.lines = append(tr.lines, "  "+dimStyle.Render(ellipsis(line, max(10, tr.body()))))
 		}
-		r.lines = append(r.lines, "  "+dimStyle.Render("… v reads the whole log"))
-	})
-	block(func(r *docWriter) {
-		r.card("note")
-		if c := q.caseOf(f.Case); c != nil && strings.TrimSpace(c.Feedback) != "" {
-			r.source(c.Feedback)
-			return
+		if len(tr.lines) > 2 {
+			out = append(out, tr.lines...)
 		}
-		r.para("none yet — n writes one for this case, into the iteration's feedback.json")
-	})
+	}
 	return fitRows(append(out, act.lines...), h)
+}
+
+// outputBlock is the arm's reply, capped: the artifact a feedback sentence is about. Five lines is
+// enough to see what was produced; what is longer is in the transcript (`v`) and the report.
+func (m *Model) outputBlock(w int, c runner.QualityCase, room int) []string {
+	if room < 3 {
+		return nil
+	}
+	resp := ""
+	if dojoArm(c) == runner.ArmWithout {
+		resp = c.Without.Response
+	} else {
+		resp = c.With.Response
+	}
+	if strings.TrimSpace(resp) == "" {
+		return nil
+	}
+	b := &docWriter{w: w, label: 11}
+	b.card("output · " + armWord(dojoArm(c)))
+	lines := wrapPlain(strings.Join(strings.Fields(resp), " "), max(10, b.body()*1))
+	cap := min(len(lines), min(5, room-len(b.lines)))
+	for _, line := range lines[:cap] {
+		b.lines = append(b.lines, "  "+colText.Render(line))
+	}
+	if cap < len(lines) {
+		b.lines = append(b.lines, "  "+dimStyle.Render(fmt.Sprintf("… %d more lines — v reads the whole log", len(lines)-cap)))
+	}
+	return b.lines
+}
+
+// dojoArm is the arm a case is read through: the one that failed, or the with-skill arm when nothing
+// did — the transcript of the arm that carries the skill is the one a revision is written from.
+func dojoArm(c runner.QualityCase) string {
+	if len(c.Failed) > 0 {
+		return c.Failed[0].Arm
+	}
+	return runner.ArmWith
 }
 
 // caseID is the case's declared id, or its slug's stand-in when the case has left the set.
@@ -967,6 +1279,9 @@ func (m *Model) updateQuality(msg tea.KeyMsg) tea.Cmd {
 	if q == nil {
 		return nil
 	}
+	if q.gate {
+		return m.updateGate(msg)
+	}
 	// The rail is the lane's first key of every section, so it is read before the section's own.
 	switch msg.String() {
 	case "1", "2", "3":
@@ -992,6 +1307,45 @@ func (m *Model) updateQuality(msg tea.KeyMsg) tea.Cmd {
 	return m.updateSetup(msg)
 }
 
+// updateGate is the entry's keys: the one errand it is asking for, the declaration behind it, and
+// the set itself — which is walkable, because the assertions are what the run will be judged on and
+// this is the last screen before it costs one. `2` and `3` are answered with what the loop is still
+// waiting on instead of a section, because there is no section yet to go to.
+func (m *Model) updateGate(msg tea.KeyMsg) tea.Cmd {
+	q := m.quality
+	switch msg.String() {
+	case "j", "down":
+		q.sel = min(q.sel+1, max(0, len(q.cases)-1))
+	case "k", "up":
+		q.sel = max(0, q.sel-1)
+	case "home":
+		q.sel = 0
+	case "G", "end":
+		q.sel = max(0, len(q.cases)-1)
+	case "R":
+		return m.startQualityRun()
+	case "g":
+		return m.startGrading()
+	case "S":
+		return m.editCaseFile()
+	case "e":
+		if q.caseAt() == nil {
+			m.setStatus("no case to judge yet — S opens evals.json", true)
+			return nil
+		}
+		q.gate, q.gateOff = false, true
+		return m.openAssertEditor()
+	case "enter", "1", "tab":
+		q.gate, q.gateOff = false, true
+		m.setStatus("the declaration — e writes a case's assertions, S opens evals.json", false)
+	case "2", "3":
+		if _, text := gateNext(q.lab); text != "" {
+			m.setStatus("the loop is not open yet — "+text, true)
+		}
+	}
+	return nil
+}
+
 func (m *Model) updateSetup(msg tea.KeyMsg) tea.Cmd {
 	q := m.quality
 	switch msg.String() {
@@ -1008,51 +1362,33 @@ func (m *Model) updateSetup(msg tea.KeyMsg) tea.Cmd {
 	case "S":
 		return m.editCaseFile()
 	case "enter":
+		// The dojo reads the same cursor the declaration does: enter on a case means "work this one".
 		m.setQualitySection(qDojo)
-		m.selectFailuresOfSelectedCase()
 	}
 	return nil
-}
-
-// selectFailuresOfSelectedCase puts the dojo's cursor on the first failure of the case setup was
-// showing: enter from a case means "work this one", and a rail that opened on somebody else's
-// failure would be the screen answering a question nobody asked.
-func (m *Model) selectFailuresOfSelectedCase() {
-	q := m.quality
-	c := q.caseAt()
-	if c == nil {
-		return
-	}
-	for i, f := range q.fails {
-		if f.Case == c.Slug {
-			q.fsel = i
-			break
-		}
-	}
-	q.syncLog()
 }
 
 func (m *Model) updateDojo(msg tea.KeyMsg) tea.Cmd {
 	q := m.quality
 	switch msg.String() {
 	case "j", "down":
-		q.fsel = min(q.fsel+1, max(0, len(q.fails)-1))
+		q.sel = min(q.sel+1, max(0, len(q.cases)-1))
 		q.syncLog()
 	case "k", "up":
-		q.fsel = max(0, q.fsel-1)
+		q.sel = max(0, q.sel-1)
 		q.syncLog()
 	case "home":
-		q.fsel = 0
+		q.sel = 0
 		q.syncLog()
 	case "G", "end":
-		q.fsel = max(0, len(q.fails)-1)
+		q.sel = max(0, len(q.cases)-1)
 		q.syncLog()
 	case "[", "left":
 		m.stepIteration(-1)
 	case "]", "right":
 		m.stepIteration(1)
-	case "n":
-		return m.openNoteEditor()
+	case "f":
+		return m.openFeedbackEditor()
 	case "v", "enter":
 		m.openTranscript()
 	case "E":
@@ -1081,7 +1417,7 @@ func (m *Model) stepIteration(delta int) {
 			map[bool]string{true: "newest", false: "oldest"}[delta > 0]), false)
 		return
 	}
-	m.quality.iter, m.quality.fsel, m.quality.ftop = l.Iterations[next].N, 0, 0
+	m.quality.iter, m.quality.sel, m.quality.top = l.Iterations[next].N, 0, 0
 	m.reloadQuality()
 	m.setStatus(fmt.Sprintf("iteration %d of %d on the dojo", m.quality.iter, len(l.Iterations)), false)
 }
@@ -1101,7 +1437,7 @@ func (m *Model) updateQualityTable(msg tea.KeyMsg) tea.Cmd {
 		// The table's question is "what happened in that iteration", and the answer is its evidence,
 		// not its own report: enter opens the dojo on it.
 		if q.rsel >= 0 && q.rsel < len(q.lab.Iterations) {
-			q.iter, q.fsel, q.ftop = q.lab.Iterations[q.rsel].N, 0, 0
+			q.iter, q.sel, q.top = q.lab.Iterations[q.rsel].N, 0, 0
 			m.reloadQuality()
 			m.setQualitySection(qDojo)
 			m.setStatus(fmt.Sprintf("iteration %d is on the dojo", q.iter), false)
@@ -1133,6 +1469,7 @@ func (m *Model) startGrading() tea.Cmd {
 	m.run = &runState{kind: runGrade, scope: fmt.Sprintf("grading run · iteration %d", q.iter),
 		hint: "the judge reads each arm's outputs against the declared assertions"}
 	m.run.live = newLiveRun(m.run.scope, false)
+	m.seedOutputRun(q.cases, q.iter)
 	m.mode = screenRunLive
 	return m.startJudgeRun()
 }
@@ -1172,6 +1509,14 @@ func (m *Model) startQualityRun() tea.Cmd {
 		m.setStatus("no cases — write evals.json first", true)
 		return nil
 	}
+	// A case with nothing to judge cannot enter a set: its grading carries no verdict, so the run
+	// would spend both arms on an output nobody can score. The entry's first two steps are the
+	// declaration, and this is the second of them.
+	if q.lab.Unasserted > 0 {
+		m.setStatus(fmt.Sprintf("%d of %s carry no assertion — e writes them; a run nothing can judge is not an iteration",
+			q.lab.Unasserted, plural(q.lab.Cases, "case")), true)
+		return nil
+	}
 	next := 1
 	if len(q.lab.Iterations) > 0 {
 		next = q.lab.Iterations[len(q.lab.Iterations)-1].N + 1
@@ -1179,8 +1524,24 @@ func (m *Model) startQualityRun() tea.Cmd {
 	m.run = &runState{kind: runQuality, scope: fmt.Sprintf("output run · iteration %d", next),
 		hint: "both arms, every case: the with-skill arm against the baseline"}
 	m.run.live = newLiveRun(m.run.scope, false)
+	m.seedOutputRun(q.cases, next)
 	m.mode = screenRunLive
 	return m.startQualityRunCmd()
+}
+
+// seedOutputRun puts the whole set on the live screen before the first agent call: every case, both
+// arms, waiting. A run whose table grows as it goes shows one row at the start and reads as a run of
+// one case, which is exactly the question the operator is asking while it spends his money.
+func (m *Model) seedOutputRun(cases []runner.QualityCase, iter int) {
+	p := m.run.live
+	p.iter = iter
+	p.path = fmt.Sprintf("%s-workspace/iteration-%d/", m.skill, iter)
+	for _, c := range cases {
+		lc := p.caseAt(c.Slug)
+		for _, arm := range runner.AllArms {
+			lc.runs = append(lc.runs, liveArm{name: arm, status: "pending"})
+		}
+	}
 }
 
 func (m *Model) startQualityRunCmd() tea.Cmd {
@@ -1211,16 +1572,16 @@ func (m *Model) startQualityRunCmd() tea.Cmd {
 // report cannot answer and a transcript can.
 func (m *Model) openTranscript() {
 	q := m.quality
-	f := q.failAt()
-	if f == nil {
-		m.setStatus("no failure under the cursor — nothing to transcribe", true)
+	c := q.caseAt()
+	if c == nil {
+		m.setStatus("no case under the cursor — nothing to transcribe", true)
 		return
 	}
 	if q.logPath == "" {
 		m.setStatus("that arm has no activity log on disk", true)
 		return
 	}
-	m.openLogDoc(q.logPath, f.Case+" · "+armWord(f.Arm), screenQuality)
+	m.openLogDoc(q.logPath, c.Slug+" · "+armWord(dojoArm(*c)), screenQuality)
 }
 
 // openQualityReport opens the iteration's own report.md — the artifact the run wrote. It is markdown,
@@ -1263,14 +1624,31 @@ func qualityHints(m *Model) []hint {
 	if m.assertEditActive() {
 		return m.assertEdit.hints()
 	}
-	if q.note != nil {
-		return q.note.hints()
+	if q.feedback != nil {
+		return q.feedback.hints()
+	}
+	if q.gate {
+		// The entry's keys: the set it is about, the errand it is asking for, the file it is asked
+		// of, and the way back. A key is offered only where it can do its job — R over a set with
+		// nothing to judge is the spend this screen exists to prevent.
+		hints := []hint{}
+		if len(q.cases) > 0 {
+			hints = append(hints, hint{"j k", "the set"}, hint{"e", "assertions"})
+		}
+		hints = append(hints, hint{"enter", "the declaration"}, hint{"S", "evals.json"})
+		if q.lab.Cases > 0 && q.lab.Unasserted == 0 {
+			hints = append(hints, hint{"R", "run iteration 1"})
+		}
+		if len(q.lab.Iterations) > 0 {
+			hints = append(hints, hint{"g", "grade"})
+		}
+		return append(hints, hint{"esc", "skills"})
 	}
 	rail := []hint{{"1 2 3", "setup dojo quality"}}
 	switch q.sec {
 	case qDojo:
-		hints := []hint{{"j k", "failures"}, {"[ ]", "iteration"}, {"v", "transcript"},
-			{"n", "note"}, {"E", "SKILL.md"}}
+		hints := []hint{{"j k", "cases"}, {"[ ]", "iteration"}, {"v", "transcript"},
+			{"f", "feedback"}, {"E", "SKILL.md"}}
 		if it := q.iteration(); it != nil && !it.Complete {
 			hints = append(hints, hint{"g", "grade"})
 		}

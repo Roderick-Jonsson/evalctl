@@ -332,14 +332,43 @@ func summarize(results []AssertionResult) GradeSummary {
 	return s
 }
 
-// extractJSONObject is the judge's answer without its prose: the first { to the last }.
+// extractJSONObject returns the first COMPLETE JSON object inside s, with any prose before it and
+// anything after it removed. It scans for the matching brace rather than slicing from the first '{'
+// to the last '}': a judge that answers its object and then appends a stray `,"summary":{…}` is one
+// object followed by junk, and slicing to the last brace glues the two into text that cannot parse —
+// which aborts the whole iteration, since one unparsable arm fails the batch.
 func extractJSONObject(s string) string {
 	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
-	if start == -1 || end <= start {
+	if start == -1 {
 		return ""
 	}
-	return s[start : end+1]
+	depth, inString, escaped := 0, false, false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	return ""
 }
 
 func oneLineBytes(b []byte) string {

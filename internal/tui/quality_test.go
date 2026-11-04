@@ -173,9 +173,16 @@ func TestOutputLaneSaysWhatIsMissing(t *testing.T) {
 	m := newModel(s)
 	m.width, m.height = 120, 34
 	m.openQualitySkill("bare")
+	// Nothing declared means no loop, so the lane opens on the entry rather than on a section of a
+	// loop that does not exist.
+	if !m.quality.gate {
+		t.Fatalf("the lane opened on section %d, want the initialization checklist", m.quality.sec)
+	}
 	body := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
-	if !strings.Contains(body, "Nothing has run yet") {
-		t.Fatalf("an empty loop should say it has nothing yet:\n%s", body)
+	for _, want := range []string{"INITIALIZATION", "none declared", "cases", "assertions", "grade"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the checklist is missing %q:\n%s", want, body)
+		}
 	}
 	if m.quality.lab == nil || m.quality.lab.Next.Key != "set" {
 		t.Fatalf("next = %+v, want the set", m.quality.lab)
@@ -287,6 +294,47 @@ func readEvals(t *testing.T, root string) string {
 	return string(b)
 }
 
+// TestFeedbackIsPossibleOnACaseThatPassed: a note is written against the case, not against a verdict.
+// An assertion can pass and the work still be wrong, and that judgement is the one thing the judge
+// cannot make — so the case that passed has to be selectable and its note has to open.
+func TestFeedbackIsPossibleOnACaseThatPassed(t *testing.T) {
+	m, root := qualityFixture(t)
+	m.openQualitySkill("dummy")
+	press(m, "home") // dummy-1-one-die passes every assertion in both arms
+	if c := m.quality.caseAt(); c == nil || len(c.Failed) != 0 {
+		t.Fatalf("the case under the cursor failed: %+v", c)
+	}
+	body := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
+	for _, want := range []string{"every assertion passed", "assertions", "feedback"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("a passing case has no feedback block: missing %q\n%s", want, body)
+		}
+	}
+	press(m, "f")
+	if m.quality.feedback == nil {
+		t.Fatal("f must open feedback on a case whose assertions all passed")
+	}
+	if m.quality.feedback.slug != "dummy-1-one-die" {
+		t.Fatalf("the note is on %q, want the case under the cursor", m.quality.feedback.slug)
+	}
+	m.quality.feedback.text = "the face is right, the tone is wrong"
+	press(m, "ctrl+s")
+	if m.quality.feedback != nil {
+		t.Fatal("the strip must close after the write")
+	}
+	var notes map[string]string
+	b, err := os.ReadFile(filepath.Join(root, "dummy-workspace", "iteration-1", "feedback.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &notes); err != nil {
+		t.Fatal(err)
+	}
+	if notes["dummy-1-one-die"] != "the face is right, the tone is wrong" {
+		t.Fatalf("the note on disk = %q (all: %s)", notes["dummy-1-one-die"], string(b))
+	}
+}
+
 // The pane is the case's whole grading list, not a list of failures: both arms' marks on every
 // assertion, and the judge's words only under the one that failed. The guide's patterns are read off
 // this — an assertion both arms pass measures the model, not the procedure — so the passing
@@ -294,7 +342,8 @@ func readEvals(t *testing.T, root string) string {
 func TestThePaneListsEveryAssertionWithBothVerdicts(t *testing.T) {
 	m, _ := qualityFixture(t)
 	m.openQualitySkill("dummy")
-	press(m, "1") // the record pane is setup's; the lane opens on the dojo
+	press(m, "1")    // the record pane is setup's; the lane opens on the dojo
+	press(m, "home") // the dojo opens on the case that failed, the declaration on the first
 	first := stripMarks(strings.Join(m.casePane(60, 34), "\n"))
 	for _, want := range []string{"assertions — 2", "✓ with", "✗ without",
 		"The reply reports one face", "Nothing was written", "✓ ✓",
@@ -582,8 +631,8 @@ func TestTheDojoReadsTheFailuresWithTheEvidence(t *testing.T) {
 		t.Fatalf("the lane opened on section %d, want the dojo", m.quality.sec)
 	}
 	body := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
-	for _, want := range []string{"FAILED", "without", "dummy-2-three-dice", "The total adds up",
-		"the reply said so", "the total was one off", "+ 3 passed", "wrote nothing"} {
+	for _, want := range []string{"CASES", "1 failed", "dummy-2-three-dice", "assertion · without",
+		"The total adds up", "the reply said so", "the total was one off", "wrote nothing", "feedback"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the dojo is missing %q:\n%s", want, body)
 		}
@@ -652,15 +701,15 @@ func TestTheDojoStepsThroughIterations(t *testing.T) {
 // n opens the note of the case under the failure cursor and ctrl+s writes it into the iteration's
 // feedback.json — the file the pane has always read and nothing has ever written. The write keeps the
 // other case's note, backs the old file up, and the pane re-reads it.
-func TestTheNoteIsWrittenIntoTheIteration(t *testing.T) {
+func TestFeedbackIsWrittenIntoTheIteration(t *testing.T) {
 	m, root := qualityFixture(t)
 	m.openQualitySkill("dummy")
-	press(m, "n")
-	if m.quality.note == nil {
-		t.Fatal("n must open the note of the case under the cursor")
+	press(m, "f")
+	if m.quality.feedback == nil {
+		t.Fatal("f must open the feedback of the case under the cursor")
 	}
 	view := stripMarks(m.View())
-	for _, want := range []string{"NOTE · dummy-2-three-dice", "feedback.json"} {
+	for _, want := range []string{"FEEDBACK · dummy-2-three-dice", "feedback.json"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("the note strip is missing %q:\n%s", want, view)
 		}
@@ -668,12 +717,12 @@ func TestTheNoteIsWrittenIntoTheIteration(t *testing.T) {
 	// The field owns the keystrokes: q and j are characters here, not commands.
 	press(m, "q")
 	press(m, "j")
-	if !strings.Contains(m.quality.note.text, "qj") && !strings.Contains(m.quality.note.text, "the total was one off") {
-		t.Fatalf("the field did not take the keystrokes: %+v", m.quality.note)
+	if !strings.Contains(m.quality.feedback.text, "qj") && !strings.Contains(m.quality.feedback.text, "the total was one off") {
+		t.Fatalf("the field did not take the keystrokes: %+v", m.quality.feedback)
 	}
-	m.quality.note.text = "the total drifts when the faces repeat\ncheck the second roll"
+	m.quality.feedback.text = "the total drifts when the faces repeat\ncheck the second roll"
 	press(m, "ctrl+s")
-	if m.quality.note != nil {
+	if m.quality.feedback != nil {
 		t.Fatal("the strip must close after the write")
 	}
 	var notes map[string]string
@@ -702,14 +751,14 @@ func TestTheNoteIsWrittenIntoTheIteration(t *testing.T) {
 }
 
 // esc in the note writes nothing: leaving the field is not a way to save.
-func TestEscLeavesTheNoteAlone(t *testing.T) {
+func TestEscLeavesTheFeedbackAlone(t *testing.T) {
 	m, root := qualityFixture(t)
 	was, _ := os.ReadFile(filepath.Join(root, "dummy-workspace", "iteration-1", "feedback.json"))
 	m.openQualitySkill("dummy")
-	press(m, "n")
-	m.quality.note.text = "something the file must not keep"
+	press(m, "f")
+	m.quality.feedback.text = "something the file must not keep"
 	press(m, "esc")
-	if m.quality.note != nil {
+	if m.quality.feedback != nil {
 		t.Fatal("esc must close the note strip")
 	}
 	now, _ := os.ReadFile(filepath.Join(root, "dummy-workspace", "iteration-1", "feedback.json"))
@@ -819,7 +868,7 @@ func TestEverySectionFitsTheWindow(t *testing.T) {
 			}
 		}
 	}
-	// And the two fields: the list is reachable in the pane, the note under the columns.
+	// And the two fields: the list is reachable in the pane, the feedback under the columns.
 	m.width, m.height = 90, 22
 	m.setQualitySection(qSetup)
 	press(m, "e")
@@ -828,8 +877,8 @@ func TestEverySectionFitsTheWindow(t *testing.T) {
 	}
 	press(m, "esc")
 	m.setQualitySection(qDojo)
-	press(m, "n")
-	if !strings.Contains(stripMarks(m.View()), "NOTE ·") {
-		t.Fatalf("the note field is not under the dojo at 90x22:\n%s", stripMarks(m.View()))
+	press(m, "f")
+	if !strings.Contains(stripMarks(m.View()), "FEEDBACK ·") {
+		t.Fatalf("the feedback field is not under the dojo at 90x22:\n%s", stripMarks(m.View()))
 	}
 }

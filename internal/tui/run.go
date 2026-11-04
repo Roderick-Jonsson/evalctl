@@ -71,6 +71,12 @@ type liveRun struct {
 	done    bool
 	dry     bool
 	cancel  context.CancelFunc
+	// iter and path are the output lane's: which iteration this run writes, and where. They are set
+	// before the first case starts, so the screen can say what the run is and where it will land
+	// instead of naming the case that happens to be first.
+	iter     int
+	path     string
+	finished time.Time
 	// cancelled is the operator's x, as opposed to an error: a batch stops at the candidate it was
 	// on, and the queue behind it is dropped rather than walked through.
 	cancelled bool
@@ -255,8 +261,9 @@ func (m *Model) applyEvent(e runner.Event) {
 		p.log = append(p.log, e.Message)
 		_ = pc
 	case runner.EventTriggerRun, runner.EventArmStart:
-		pc := p.caseAt(e.Case)
-		pc.runs = append(pc.runs, liveArm{name: e.Arm, status: "running"})
+		// setArm, not append: an output run seeds every case with both arms before the first call, so
+		// the first event for a case has to move that arm from pending to running, not add a second.
+		setArm(p.caseAt(e.Case), e.Arm, "running", "")
 	case runner.EventArmDone:
 		pc := p.caseAt(e.Case)
 		status := "done"
@@ -341,6 +348,7 @@ func (m *Model) finishRun() tea.Cmd {
 	}
 	m.run.live.done = true
 	m.run.live.cancel = nil
+	m.run.live.finished = time.Now()
 	m.reload()
 	if m.run.kind == runQuality || m.run.kind == runGrade {
 		if m.run.live.err != nil {
@@ -405,6 +413,13 @@ func (m *Model) updateRunLive(msg tea.KeyMsg) tea.Cmd {
 		if p.done {
 			m.reload()
 		}
+	case "g":
+		// The run's own next move, on the run's own screen: a finished iteration that nothing judges
+		// is a directory, and this is where the operator is standing when he learns the run is over.
+		if p.done && r.kind == runQuality && p.err == nil && !p.cancelled {
+			m.run, m.mode = nil, screenQuality
+			return m.startGrading()
+		}
 	case "enter":
 		if p.done {
 			return m.leaveRun()
@@ -424,8 +439,9 @@ func (m *Model) leaveRun() tea.Cmd {
 		// A finished run or grade lands on the dojo: the next move is to read what failed, and that
 		// evidence is one section away from anywhere else in the lane.
 		if m.quality != nil {
-			m.quality.note = nil
+			m.quality.feedback = nil
 			m.setQualitySection(qDojo)
+			m.quality.selectFirstFailed()
 		}
 		m.mode = screenQuality
 		return nil
@@ -446,6 +462,13 @@ func (m *Model) leaveRun() tea.Cmd {
 
 func (r *runState) liveHints() []hint {
 	if r.live.done {
+		// A finished run offers the move it exists for, not only the way out.
+		switch r.kind {
+		case runQuality:
+			return []hint{{"g", "grade it"}, {"enter", "back to the loop"}, {"v", "activity log"}}
+		case runGrade:
+			return []hint{{"enter", "the dojo"}, {"v", "activity log"}}
+		}
 		return []hint{{"enter", "back to the loop"}, {"v", "activity log"}}
 	}
 	return []hint{{"x", "cancel"}, {"v", "activity log"}, {"q", "quit"}}
@@ -521,6 +544,224 @@ func activityStyled(line string, width int) string {
 		return activityTool.Render(line)
 	}
 	return dimStyle.Render(line)
+}
+
+// outputRunBody is the output lane's run as a table of the set: every case with both arms, from the
+// first frame. The shared liveBody grows its rows out of the events, which is right for a trigger
+// batch whose size is not known up front and wrong here — a two-case set showed one row until the
+// second case started, so the screen read as a run of one case.
+//
+// When it is over it stops being a progress table and becomes the result: a green head, the numbers
+// that matter, and the one key that carries on. The status row at the bottom is a record, not a
+// moment — a run that cost three minutes deserves more than a line of small print.
+func (m *Model) outputRunBody(h int) []string {
+	p := m.run.live
+	if p == nil {
+		return nil
+	}
+	grade := m.run.kind == runGrade
+	done, total := 0, 0
+	for _, c := range p.cases {
+		for _, a := range c.runs {
+			total++
+			if a.status == "done" || a.status == "failed" {
+				done++
+			}
+		}
+	}
+	ok := p.done && p.err == nil && !p.cancelled
+	name := fmt.Sprintf("OUTPUT RUN · ITERATION %d", p.iter)
+	if grade {
+		name = fmt.Sprintf("GRADING · ITERATION %d", p.iter)
+	}
+	if ok {
+		name = fmt.Sprintf("RUN FINISHED · ITERATION %d", p.iter)
+		if grade {
+			name = fmt.Sprintf("GRADED · ITERATION %d", p.iter)
+		}
+	}
+	if p.cancelled {
+		name = fmt.Sprintf("STOPPED · ITERATION %d", p.iter)
+	}
+	w := m.width
+	note := fmt.Sprintf("%d of %d arms", done, total)
+	if p.done && done == 0 {
+		// The judge skipped every arm because each one already carried a summary: the run changed
+		// nothing, and saying "0 of 4 arms" would blame it for that.
+		note = "already graded"
+	}
+	var head string
+	switch {
+	case ok:
+		head = endsLine(blockMark.Render(glyphs.Block)+" "+styleOn.Render(name),
+			styleOn.Render(note)+" ", w)
+	case p.cancelled || p.err != nil:
+		head = endsLine(blockMark.Render(glyphs.Block)+" "+statusBad.Render(name),
+			dimStyle.Render(note)+" ", w)
+	default:
+		head = regionHead(w, name, note, true)
+	}
+	out := []string{"", head, gateRule(w), m.outputRunFacts()}
+
+	// The action line is reserved before the table: on a finished run it is the whole point of the
+	// screen, and a short window must cut rows off the set before it cuts "grade it".
+	act := &docWriter{w: w}
+	if ok {
+		if grade {
+			act.action("enter", "the dojo — the failed assertions with the judge's evidence")
+		} else {
+			act.action("g", "grade it — a run is outputs; the loop opens on the verdicts")
+		}
+	}
+	logRows := 6
+	if p.done {
+		logRows = 3
+	}
+	room := h - len(out) - len(act.lines) - logRows - 3
+	if room < 0 {
+		room = 0
+	}
+
+	const armW = 7
+	caseW := min(28, max(16, w/3))
+	head2 := "  " + dimStyle.Render(padCell("CASE", caseW, false)) + "  " +
+		dimStyle.Render(padCell("WITH", armW, true)) + "  " +
+		dimStyle.Render(padCell("WITHOUT", armW, true)) + "  " + dimStyle.Render("STATE")
+	out = append(out, "", head2)
+	for i, c := range p.cases {
+		if i >= room {
+			out = append(out, "    "+dimStyle.Render(fmt.Sprintf("… %d more cases", len(p.cases)-i)))
+			break
+		}
+		with, without, state, running := m.runCaseCells(c, grade, ok)
+		mark := "  "
+		if running {
+			mark = cursorMark.Render(glyphs.Cursor)
+		}
+		out = append(out, mark+colText.Render(padCell(ellipsis(c.name, caseW), caseW, false))+"  "+
+			with+"  "+without+"  "+state)
+	}
+	out = append(out, "")
+	out = append(out, act.lines...)
+	log := p.log
+	if len(log) > logRows {
+		log = log[len(log)-logRows:]
+	}
+	if len(log) > 0 {
+		out = append(out, "  "+dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(60, w-4)))))
+	}
+	for _, line := range log {
+		out = append(out, "  "+activityStyled(line, w-4))
+	}
+	if p.err != nil {
+		out = append(out, "  "+statusBad.Render("! "+p.err.Error()))
+	}
+	return fitRows(out, h)
+}
+
+// outputRunFacts is the line under the head: what this run is, how long it has taken, and where it
+// lands. On a finished grade it is the two rates, which is the number the run was for.
+func (m *Model) outputRunFacts() string {
+	p := m.run.live
+	elapsed := shortDuration(time.Since(p.started))
+	if p.done {
+		elapsed = shortDuration(p.finished.Sub(p.started))
+	}
+	const pad = "  "
+	switch {
+	case p.cancelled:
+		return pad + dimStyle.Render(fmt.Sprintf("stopped after %s — nothing was scored, so nothing entered the loop",
+			elapsed))
+	case p.err != nil:
+		return pad + statusBad.Render("the run failed: "+p.err.Error())
+	case p.done && m.run.kind == runGrade:
+		lab := (*runner.QualityLab)(nil)
+		if m.quality != nil {
+			lab = m.quality.lab
+		}
+		if lab != nil {
+			if it := iterationOf(lab, p.iter); it != nil {
+				return pad + colText.Render(qRateText(it.With)+" with the skill · "+
+					qRateText(it.Without)+" without") + "  " + dimStyle.Render("· "+p.path)
+			}
+		}
+		return pad + dimStyle.Render("graded — "+p.path)
+	case p.done:
+		return pad + dimStyle.Render(fmt.Sprintf("every case ran both arms · %s · %s", elapsed, p.path))
+	}
+	return pad + dimStyle.Render(fmt.Sprintf("%d cases × 2 arms · %s elapsed · %s",
+		len(p.cases), elapsed, p.path))
+}
+
+// runCaseCells is one row of the run table. While it runs the two cells are the arms' states; when a
+// grade is finished they are the two rates, which is what the case is worth.
+func (m *Model) runCaseCells(c liveCase, grade, finished bool) (with, without, state string, running bool) {
+	const armW = 7
+	cell := func(arm string) string {
+		for _, a := range c.runs {
+			if a.name != arm {
+				continue
+			}
+			switch a.status {
+			case "done":
+				return styleOn.Render(padCell(glyphs.Done, armW, true))
+			case "failed":
+				return statusBad.Render(padCell(glyphs.Failed, armW, true))
+			case "running":
+				return cursorMark.Render(padCell(glyphs.Running, armW, true))
+			}
+		}
+		return dimStyle.Render(padCell(glyphs.Pending, armW, true))
+	}
+	with, without = cell(runner.ArmWith), cell(runner.ArmWithout)
+	if finished && grade {
+		if m.quality != nil {
+			for i := range m.quality.cases {
+				qc := &m.quality.cases[i]
+				if qc.Slug != c.name {
+					continue
+				}
+				with, without = colText.Render(padCell(qRateText(qc.With), armW, true)),
+					colText.Render(padCell(qRateText(qc.Without), armW, true))
+			}
+		}
+	}
+	state = dimStyle.Render("waiting")
+	if finished && grade {
+		return with, without, styleOn.Render("graded"), false
+	}
+	anyFailed, anyRunning, allDone := false, false, len(c.runs) > 0
+	for _, a := range c.runs {
+		switch a.status {
+		case "failed":
+			anyFailed = true
+		case "running":
+			anyRunning = true
+		case "done":
+		default:
+			allDone = false
+		}
+	}
+	switch {
+	case anyFailed:
+		state = statusBad.Render("failed")
+	case anyRunning:
+		state, running = cursorMark.Render("running"), true
+	case allDone:
+		state = styleOn.Render("done")
+	}
+	return with, without, state, running
+}
+
+// iterationOf is the iteration with that number, or nil: the run's own number, not "the newest",
+// because the two differ the moment a second run is started from the same screen.
+func iterationOf(lab *runner.QualityLab, n int) *runner.QualityIteration {
+	for i := range lab.Iterations {
+		if lab.Iterations[i].N == n {
+			return &lab.Iterations[i]
+		}
+	}
+	return nil
 }
 
 // openActivityDoc shows a finished arm's log in the document reader.

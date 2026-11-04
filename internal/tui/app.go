@@ -249,7 +249,7 @@ func (m *Model) syncTree() {
 	// the tick after the screen gives the keys back does the re-read.
 	// Only a field with the caret holds the re-read back: its draft is the one thing on screen the
 	// store cannot replace. Fields without it are seeded from the file and can be seeded again.
-	if m.runActive() || m.mode == screenAsk || m.formActive() || m.assertEditActive() || m.noteActive() {
+	if m.runActive() || m.mode == screenAsk || m.formActive() || m.assertEditActive() || m.feedbackActive() {
 		return
 	}
 	if m.reopen() {
@@ -326,8 +326,8 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.assertEditActive() {
 		return m, m.assertEdit.update(m, msg)
 	}
-	if m.noteActive() {
-		return m, m.quality.note.update(m, msg)
+	if m.feedbackActive() {
+		return m, m.quality.feedback.update(m, msg)
 	}
 	if m.formActive() {
 		return m, m.form.update(m, msg)
@@ -392,8 +392,8 @@ func (m *Model) passToForm(msg tea.Msg) tea.Cmd {
 	if m.assertEditActive() {
 		return m.assertEdit.updateMsg(msg)
 	}
-	if m.noteActive() {
-		return m.quality.note.updateMsg(msg)
+	if m.feedbackActive() {
+		return m.quality.feedback.updateMsg(msg)
 	}
 	if !m.formActive() {
 		return nil
@@ -600,8 +600,13 @@ func (m *Model) contextLine(w int) string {
 		return rail
 	}
 	// The output lane's three sections are its rail, in the same row the trigger lane's steps use:
-	// the sections say where you are, the facts on the right say how far the loop has got.
+	// the sections say where you are, the facts on the right say how far the loop has got. Before the
+	// loop exists there is no row: the entry is a checklist, and a rail above it would offer three
+	// sections of a loop that has nothing in it.
 	if m.mode == screenQuality {
+		if m.quality != nil && m.quality.gate {
+			return ""
+		}
 		return m.qualityRail(w)
 	}
 	switch m.mode {
@@ -644,6 +649,9 @@ func (m *Model) bodyLines(h int) []string {
 		}
 	case screenRunLive:
 		if m.run != nil {
+			if m.run.kind == runQuality || m.run.kind == runGrade {
+				return m.outputRunBody(h)
+			}
 			return m.run.liveBody(m, h)
 		}
 	case screenHelp:
@@ -792,7 +800,7 @@ func (m *Model) region() string {
 			return setRegionWord(false)
 		}
 	case screenQuality:
-		if m.assertEditActive() || m.noteActive() {
+		if m.assertEditActive() || m.feedbackActive() {
 			return "editor"
 		}
 		if q := m.quality; q != nil {
@@ -913,10 +921,10 @@ func (m *Model) position() string {
 		if q := m.quality; q != nil {
 			switch q.sec {
 			case qDojo:
-				if len(q.fails) > 0 {
-					return fmt.Sprintf("failure %d of %d", q.fsel+1, len(q.fails))
+				if len(q.cases) > 0 {
+					return fmt.Sprintf("case %d of %d", q.sel+1, len(q.cases))
 				}
-				return "nothing failed"
+				return "nothing to work"
 			case qQuality:
 				if q.lab != nil && len(q.lab.Iterations) > 0 {
 					return fmt.Sprintf("%d / %d", q.rsel+1, len(q.lab.Iterations))
@@ -1035,15 +1043,20 @@ func (m *Model) helpLines() []string {
 			"  v          the arm's activity log; esc back",
 			"  —          runs per query and dry run are set beside the two sections, on the set's pane",
 		},
-		head("output optimization — the loop"),
+		head("output optimization — the entry, then the loop"),
 		[]string{
-			"  R          run the next iteration: every case, both arms, in a fresh temp root",
-			"  g          grade the iteration on screen: one judge call per arm, PASS/FAIL with evidence",
-			"  j k        walk the cases; the pane is the evidence behind the row",
-			"  e          write the case's assertions under the pane: one per line, ctrl+s writes, esc discards",
-			"  tab        the ranking: every iteration's two rates, and the best complete one",
-			"  enter      the iteration's report.md · f its failed assertions as one list",
-			"  esc        back to the skills (from the ranking, first back to the loop)",
+			"  —          with no graded run the lane opens on the checklist: cases, assertions, run, grade",
+			"  S e        the cases in evals.json · a case's assertions, in the pane it is drawn in",
+			"  R          run iteration 1: every case, both arms, in a fresh temp root",
+			"  g          grade it: one judge call per arm, PASS/FAIL with the evidence it saw",
+			"  f          the feedback: what the output got wrong, in your words — empty means it looked fine",
+			"  —          a run is outputs; the loop opens on the verdicts, never on the run",
+			"  1 2 3      setup, dojo, quality — the rail, once there is a graded run to read",
+			"  j k        walk the cases or the failures; the pane is the record behind the row",
+			"  f E        the feedback for the case · SKILL.md, which is what a revision changes",
+			"  [ ]        the iteration the dojo is reading",
+			"  enter      the dojo on this case · the iteration's report from the ranking",
+			"  esc        one section back, then the skills",
 		},
 		dim("every write backs the old file up under .evalctl/backups/"),
 	)

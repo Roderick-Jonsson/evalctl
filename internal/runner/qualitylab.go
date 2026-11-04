@@ -27,6 +27,10 @@ import (
 
 // QualityArm is one arm's result in one iteration.
 type QualityArm struct {
+	// Response is what the arm actually wrote — the thing a human reviews, and the only thing a
+	// feedback sentence can be about. It is read from the arm's grading.json, so the pane needs no
+	// second read to show it.
+	Response   string  `json:"response,omitempty"`
 	Judged     int     `json:"judged"`
 	Passed     int     `json:"passed"`
 	Rate       float64 `json:"rate"`
@@ -68,15 +72,23 @@ type QualityIteration struct {
 
 // QualityLab is a skill's whole state in the output loop.
 type QualityLab struct {
-	Skill      string             `json:"skill"`
-	Cases      int                `json:"cases"`
-	Assertions int                `json:"assertions"`
-	Iterations []QualityIteration `json:"iterations"`
-	Best       int                `json:"best"` // iteration number, 0 = no complete one
-	Flat       bool               `json:"flat"` // the last two complete iterations tie
-	Ungraded   int                `json:"ungraded_arms"`
-	Checks     []LabCheck         `json:"checks"`
-	Next       LabNext            `json:"next"`
+	Skill      string `json:"skill"`
+	Cases      int    `json:"cases"`
+	Assertions int    `json:"assertions"`
+	// Unasserted counts the cases with nothing to be judged on. The initialization check is per
+	// case and not a total: three assertions on one case leave two cases whose grading can carry no
+	// verdict, so "9 assertions" is not a set the loop can measure.
+	Unasserted int `json:"unasserted"`
+	// InitPending is whether the loop is still closed: no set, a case with no assertion, nothing
+	// run, or a newest run with no verdict at all. A run is outputs; the grade is the only thing a
+	// revision can be written from, so the loop opens on the first verdict and not on the first run.
+	InitPending bool               `json:"init_pending"`
+	Iterations  []QualityIteration `json:"iterations"`
+	Best        int                `json:"best"` // iteration number, 0 = no complete one
+	Flat        bool               `json:"flat"` // the last two complete iterations tie
+	Ungraded    int                `json:"ungraded_arms"`
+	Checks      []LabCheck         `json:"checks"`
+	Next        LabNext            `json:"next"`
 }
 
 // QualityLabOf reads one skill's output loop back from disk.
@@ -96,6 +108,9 @@ func (r *Runner) QualityLab(skill string) (*QualityLab, error) {
 	for _, c := range cases {
 		lab.Assertions += len(c.Assertions)
 		declared[c.Slug] = len(c.Assertions)
+		if len(c.Assertions) == 0 {
+			lab.Unasserted++
+		}
 	}
 	workspace := r.WorkspaceDir(skill)
 	for _, n := range iterationNumbers(workspace) {
@@ -114,6 +129,7 @@ func (r *Runner) QualityLab(skill string) (*QualityLab, error) {
 		}
 	}
 	lab.Checks = qualityChecks(lab)
+	lab.InitPending = initPending(lab)
 	lab.Next = qualityNext(lab)
 	return lab, nil
 }
@@ -262,51 +278,115 @@ func bestQuality(iters []QualityIteration) (int, bool) {
 	return best, flat
 }
 
-// qualityChecks is the guide's preconditions, with numbers: a set that cannot grade cannot guide.
+// qualityChecks is the loop's entry, in four steps and in the order they have to be done: declare
+// the set, give every case something to be judged on, run it once, grade that run. The first two are
+// the declaration (a file); the last two are the only proof that the set can be measured at all.
+//
+// It used to be three checks with `graded` merging "nothing has run" with "nothing was judged", which
+// is the distinction the whole entry turns on: a run is outputs, and the loop has nothing to revise
+// from until a judge has read them.
 func qualityChecks(lab *QualityLab) []LabCheck {
 	var checks []LabCheck
 	checks = append(checks, LabCheck{
 		Key: "cases", OK: lab.Cases > 0, Blocking: lab.Cases == 0,
-		Detail: plural(lab.Cases, "case"),
-		Fix:    "cases",
+		Detail: declaredDetail(lab.Cases), Fix: "S",
 	})
 	checks = append(checks, LabCheck{
-		Key: "assertions", OK: lab.Assertions > 0, Blocking: lab.Assertions == 0,
-		Detail: fmt.Sprintf("%d assertion(s) across %d case(s)", lab.Assertions, lab.Cases),
-		Fix:    "assertions",
+		Key:      "assertions",
+		OK:       lab.Cases > 0 && lab.Unasserted == 0,
+		Blocking: lab.Cases == 0 || lab.Unasserted > 0,
+		Detail:   assertionDetail(lab),
+		Fix:      "e",
 	})
-	checks = append(checks, LabCheck{
-		Key: "graded", OK: lab.Ungraded == 0 && len(lab.Iterations) > 0,
-		Detail: gradedDetail(lab),
-		Fix:    "grade",
-	})
+	last, has := lastIteration(lab)
+	run := LabCheck{Key: "run", OK: has, Blocking: !has, Fix: "R", Detail: "nothing run yet"}
+	switch {
+	case has && !last.SetComplete:
+		// A run that reached part of the set still opened the loop; the row says what it missed,
+		// because the next run has to cover the set to be comparable with it.
+		run.Detail = fmt.Sprintf("iteration %d ran %d of %s", last.N, last.Cases, plural(lab.Cases, "case"))
+	case has:
+		run.Detail = fmt.Sprintf("iteration %d · %s", last.N, plural(last.Cases, "case"))
+	}
+	checks = append(checks, run)
+	grade := LabCheck{Key: "grade", OK: has && gradedArms(last) > 0,
+		Blocking: !has || gradedArms(last) == 0, Fix: "g", Detail: "the run has to exist first"}
+	switch {
+	case has && gradedArms(last) == 0:
+		grade.Detail = fmt.Sprintf("iteration %d carries no verdicts", last.N)
+	case has:
+		grade.Detail = fmt.Sprintf("iteration %d · %d of 2 arms graded", last.N, gradedArms(last))
+	}
+	checks = append(checks, grade)
 	return checks
 }
 
-func gradedDetail(lab *QualityLab) string {
-	if len(lab.Iterations) == 0 {
-		return "nothing measured yet"
+// declaredDetail is the cases row: the count, said as a declaration and not as a repetition of the
+// row's own label.
+func declaredDetail(n int) string {
+	if n == 0 {
+		return "none declared"
 	}
-	if lab.Ungraded == 0 {
-		return "every iteration's arms are graded"
-	}
-	return fmt.Sprintf("%d arm(s) without verdicts", lab.Ungraded)
+	return fmt.Sprintf("%d declared", n)
 }
 
-// qualityNext is one line: the move the guide asks for next, given what is on disk.
+// assertionDetail is the one line under the assertions step: a total is not the question, because a
+// case with no assertion produces no verdict however many the other cases carry.
+func assertionDetail(lab *QualityLab) string {
+	switch {
+	case lab.Cases == 0:
+		return "no case to judge yet"
+	case lab.Unasserted == lab.Cases:
+		return fmt.Sprintf("none of %s carry one", plural(lab.Cases, "case"))
+	case lab.Unasserted > 0:
+		return fmt.Sprintf("%d of %s carry none · %s declared",
+			lab.Unasserted, plural(lab.Cases, "case"), plural(lab.Assertions, "assertion"))
+	}
+	return fmt.Sprintf("%s across %s", plural(lab.Assertions, "assertion"), plural(lab.Cases, "case"))
+}
+
+// lastIteration is the newest iteration on disk, which is the one the entry reads: an older run that
+// was graded says nothing about the run the loop is holding now.
+func lastIteration(lab *QualityLab) (QualityIteration, bool) {
+	if len(lab.Iterations) == 0 {
+		return QualityIteration{}, false
+	}
+	return lab.Iterations[len(lab.Iterations)-1], true
+}
+
+// initPending is whether the loop is still closed — the one predicate the entry screen is drawn
+// from. Anything the loop needs and does not have closes it, including the grade: a run whose outputs
+// nobody read is not an iteration, it is a directory.
+func initPending(lab *QualityLab) bool {
+	last, has := lastIteration(lab)
+	if !has {
+		return true
+	}
+	return lab.Cases == 0 || lab.Unasserted > 0 || gradedArms(last) == 0
+}
+
+// qualityNext is one line: the move the guide asks for next, given what is on disk. Its first three
+// branches are the entry's, in the entry's order — the cases, an assertion per case, then the first
+// run — because a line that says "run iteration 1" over a set with nothing to judge is the one
+// instruction this lane must not give.
 func qualityNext(lab *QualityLab) LabNext {
+	last, has := lastIteration(lab)
 	switch {
 	case lab.Cases == 0:
 		return LabNext{Key: "set", Line: "write the cases", Detail: lab.Skill + "/evals/evals.json"}
-	case len(lab.Iterations) == 0:
-		return LabNext{Key: "run", Line: fmt.Sprintf("run iteration 1 — %s × 2 arms", plural(lab.Cases, "case")),
-			Detail: "nothing measured yet; the first run is also what shows which assertions to write"}
-	case lab.Assertions == 0:
+	case lab.Unasserted > 0:
 		return LabNext{Key: "assertions",
-			Line:   "read the first run, then write assertions into evals.json",
-			Detail: "without them there is no pass rate and nothing to optimize"}
+			Line: fmt.Sprintf("%d of %s carry no assertion — e writes them, then the run",
+				lab.Unasserted, plural(lab.Cases, "case")),
+			Detail: "a grade is made of assertions; a case without one has no verdict to give"}
+	case !has:
+		return LabNext{Key: "run", Line: fmt.Sprintf("run iteration 1 — %s × 2 arms", plural(lab.Cases, "case")),
+			Detail: "the first run is what the first assertions are written against"}
+	case gradedArms(last) == 0:
+		return LabNext{Key: "grade",
+			Line:   fmt.Sprintf("grade iteration %d — the loop opens on a verdict, not on an output", last.N),
+			Detail: "one judge call per arm, against the assertions the case declares"}
 	}
-	last := lab.Iterations[len(lab.Iterations)-1]
 	if !last.SetComplete {
 		return LabNext{Key: "set", Line: fmt.Sprintf("iteration %d ran %d of %d cases — rerun the whole set",
 			last.N, last.Cases, lab.Cases),
@@ -391,13 +471,14 @@ func (r *Runner) QualityCases(skill string, iteration int) ([]QualityCase, error
 	_ = readJSONFile(filepath.Join(dir, "feedback.json"), &feedback)
 	var out []QualityCase
 	for _, c := range cases {
-		caseDir := filepath.Join(dir, c.Slug)
-		if info, err := os.Stat(caseDir); err != nil || !info.IsDir() {
-			continue
-		}
+		// A case the set declares but no run has reached yet is still a case, and it is the one the
+		// setup section exists for: the assertions of iteration 1 are written before iteration 1
+		// exists, so the list has to hold a declaration with no arm behind it. Its verdict cells
+		// read as dashes, which is what "not judged" looks like.
 		row := QualityCase{Skill: skill, ID: c.ID, Slug: c.Slug, Prompt: c.Prompt,
 			ExpectedOutput: c.ExpectedOutput, Files: append([]string(nil), c.Files...),
 			Assertions: len(c.Assertions), Feedback: strings.TrimSpace(feedback[c.Slug])}
+		caseDir := filepath.Join(dir, c.Slug)
 		// The judge's answers per arm, kept whole: the pane shows every assertion with both marks,
 		// not just the failures, because "passes in both arms" is the pattern a revision starts from.
 		verdicts := map[string][]AssertionResult{}
@@ -418,6 +499,7 @@ func (r *Runner) QualityCases(skill string, iteration int) ([]QualityCase, error
 			var timing Timing
 			_ = readJSONFile(filepath.Join(armDir, "timing.json"), &timing)
 			target.DurationMS, target.Tokens = timing.DurationMS, tokensOrZero(timing.TotalTokens)
+			target.Response = grading.Response
 			if grading.Summary == nil {
 				continue
 			}
