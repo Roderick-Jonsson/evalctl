@@ -102,48 +102,59 @@ func TestOutputLaneReadsTheLoop(t *testing.T) {
 	}
 	press(m, "enter")
 	if m.mode != screenQuality {
-		t.Fatalf("mode = %v, want the workbench", m.mode)
+		t.Fatalf("mode = %v, want the output lane", m.mode)
+	}
+	// The lane opens where the disk is asking: this iteration has a failure, so it opens on the dojo.
+	if m.quality.sec != qDojo {
+		t.Fatalf("section = %d, want the dojo — the newest iteration has a failure to read", m.quality.sec)
 	}
 	body := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
-	for _, want := range []string{"CASES", "iteration 1", "dummy-1-one-die", "dummy-2-three-dice"} {
+	for _, want := range []string{"FAILED", "without", "dummy-2-three-dice", "assertion",
+		"The total adds up", "the reply said so", "the total was one off"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("the workbench is missing %q:\n%s", want, body)
+			t.Fatalf("the dojo is missing %q:\n%s", want, body)
 		}
 	}
-	// The list is the cases and nothing else: the rates and the failed count are the pane's reading of
-	// the case, not a second table in the column beside it.
+	// 1: the declaration. The list is the cases and one declaration mark, and nothing else — the
+	// rates and the verdicts belong to the sections that read them.
+	press(m, "1")
+	if m.quality.sec != qSetup {
+		t.Fatalf("1 did not open setup: section %d", m.quality.sec)
+	}
+	setup := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
+	for _, want := range []string{"CASES", "dummy-1-one-die", "dummy-2-three-dice"} {
+		if !strings.Contains(setup, want) {
+			t.Fatalf("setup is missing %q:\n%s", want, setup)
+		}
+	}
+	// The iteration the sections read is on the rail, once, for all three of them.
+	if !strings.Contains(stripMarks(m.View()), "iteration #1") {
+		t.Fatalf("the rail does not say which iteration is on screen:\n%s", stripMarks(m.View()))
+	}
 	for _, unwanted := range []string{"WITHOUT", "FAILED", "100%", "50%"} {
-		if strings.Contains(body, unwanted) {
-			t.Fatalf("the case list still carries %q:\n%s", unwanted, body)
+		if strings.Contains(setup, unwanted) {
+			t.Fatalf("the case list still carries %q:\n%s", unwanted, setup)
 		}
 	}
-	// The pane is the selected case's evidence: the failing arm and the human note.
-	press(m, "j")
-	pane := stripMarks(strings.Join(m.qualityPane(60, 30), "\n"))
-	for _, want := range []string{"dummy-2-three-dice", "The total adds up", "the total was one off"} {
-		if !strings.Contains(pane, want) {
-			t.Fatalf("the pane is missing %q:\n%s", want, pane)
-		}
+	// 3: the trend, with the best complete iteration tagged and the delta's basis named.
+	press(m, "3")
+	if m.quality.sec != qQuality {
+		t.Fatalf("3 did not open the quality section: section %d", m.quality.sec)
 	}
-	// tab: the ranking, which marks the best complete iteration.
-	press(m, "tab")
-	if m.mode != screenQRank {
-		t.Fatalf("tab did not open the ranking: mode %v", m.mode)
-	}
-	rank := stripMarks(strings.Join(m.qualityRankBody(m.bodyHeight()), "\n"))
-	for _, want := range []string{"ITERATIONS", "#1", "75%", "best"} {
+	rank := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
+	for _, want := range []string{"ITERATIONS", "#1", "75%", "best", "Δ w−w/o", "RAN"} {
 		if !strings.Contains(rank, want) {
-			t.Fatalf("the ranking is missing %q:\n%s", want, rank)
+			t.Fatalf("the quality section is missing %q:\n%s", want, rank)
 		}
 	}
-	// esc walks back one level at a time.
+	// esc walks back one level at a time: a section, then the skills.
 	press(m, "esc")
-	if m.mode != screenQuality {
-		t.Fatalf("esc from the ranking = %v, want the loop", m.mode)
+	if m.mode != screenQuality || m.quality.sec != qSetup {
+		t.Fatalf("esc from quality = mode %v section %d, want setup", m.mode, m.quality.sec)
 	}
 	press(m, "esc")
 	if m.mode != screenSkill {
-		t.Fatalf("esc from the loop = %v, want the skills", m.mode)
+		t.Fatalf("esc from setup = %v, want the skills", m.mode)
 	}
 }
 
@@ -283,7 +294,8 @@ func readEvals(t *testing.T, root string) string {
 func TestThePaneListsEveryAssertionWithBothVerdicts(t *testing.T) {
 	m, _ := qualityFixture(t)
 	m.openQualitySkill("dummy")
-	first := stripMarks(strings.Join(m.qualityPane(60, 34), "\n"))
+	press(m, "1") // the record pane is setup's; the lane opens on the dojo
+	first := stripMarks(strings.Join(m.casePane(60, 34), "\n"))
 	for _, want := range []string{"assertions — 2", "✓ with", "✗ without",
 		"The reply reports one face", "Nothing was written", "✓ ✓",
 		"prompt", "expected_output", "files", "none — the run root starts empty"} {
@@ -294,7 +306,7 @@ func TestThePaneListsEveryAssertionWithBothVerdicts(t *testing.T) {
 	// The case with a failure: both marks, both assertions (the passing one is not dropped), and the
 	// evidence only under the one that failed.
 	press(m, "j")
-	second := stripMarks(strings.Join(m.qualityPane(60, 30), "\n"))
+	second := stripMarks(strings.Join(m.casePane(60, 30), "\n"))
 	for _, want := range []string{"Three faces", "The total adds up", "✓ ✓", "✓ ✗", "without · the reply said so"} {
 		if !strings.Contains(second, want) {
 			t.Fatalf("the pane is missing %q:\n%s", want, second)
@@ -333,7 +345,7 @@ func TestThePaneListsTheFilesTheCaseStages(t *testing.T) {
 	m.openQualitySkill("dummy")
 	c := m.quality.caseAt()
 	c.Files = []string{"raw/page.md", "MC-dice/pages/01.md"}
-	pane := stripMarks(strings.Join(m.qualityPane(70, 40), "\n"))
+	pane := stripMarks(strings.Join(m.casePane(70, 40), "\n"))
 	assertRecordOrder(t, pane)
 	for _, want := range []string{"raw/page.md", "MC-dice/pages/01.md"} {
 		if !strings.Contains(pane, want) {
@@ -358,8 +370,9 @@ func TestAnAssertionNobodyJudgedIsADash(t *testing.T) {
 	m = newModel(s)
 	m.width, m.height = 120, 34
 	m.openQualitySkill("dummy")
+	press(m, "1") // the case list is setup's; the lane opens on the dojo
 	press(m, "j")
-	pane := stripMarks(strings.Join(m.qualityPane(60, 30), "\n"))
+	pane := stripMarks(strings.Join(m.casePane(60, 30), "\n"))
 	if !strings.Contains(pane, "Every face is a d20") {
 		t.Fatalf("the new assertion is not on the pane:\n%s", pane)
 	}
@@ -381,6 +394,7 @@ func TestTheAssertionListIsEditedUnderThePane(t *testing.T) {
 	m, root := qualityFixture(t)
 	was := readEvals(t, root)
 	m.openQualitySkill("dummy")
+	press(m, "1") // the case list is setup's; the lane opens on the dojo
 	press(m, "j")
 	press(m, "e")
 	if !m.assertEditActive() {
@@ -434,7 +448,7 @@ func TestTheAssertionListIsEditedUnderThePane(t *testing.T) {
 		t.Fatalf("the save must say the verdicts on screen are from the old list: status = %q", m.status)
 	}
 	// The pane re-reads the file: the new assertion is there, with no verdict.
-	pane := stripMarks(strings.Join(m.qualityPane(60, 30), "\n"))
+	pane := stripMarks(strings.Join(m.casePane(60, 30), "\n"))
 	if !strings.Contains(pane, "Every face is a d20") {
 		t.Fatalf("the pane did not re-read the list:\n%s", pane)
 	}
@@ -448,6 +462,7 @@ func TestEscLeavesTheAssertionListAlone(t *testing.T) {
 	m, root := qualityFixture(t)
 	was := readEvals(t, root)
 	m.openQualitySkill("dummy")
+	press(m, "1") // the case list is setup's; the lane opens on the dojo
 	press(m, "j")
 	press(m, "e")
 	m.assertEdit.text = "something the file must not keep"
@@ -468,6 +483,7 @@ func TestEscLeavesTheAssertionListAlone(t *testing.T) {
 func TestClearingTheListWritesACaseWithNoAssertionKey(t *testing.T) {
 	m, root := qualityFixture(t)
 	m.openQualitySkill("dummy")
+	press(m, "1") // the case list is setup's; the lane opens on the dojo
 	press(m, "j")
 	press(m, "e")
 	m.assertEdit.text = "\n  \n"
@@ -498,6 +514,7 @@ func TestAShortWindowKeepsTheFieldOnScreen(t *testing.T) {
 	m, _ := qualityFixture(t)
 	m.width, m.height = 100, 20
 	m.openQualitySkill("dummy")
+	press(m, "1") // the case list is setup's; the lane opens on the dojo
 	press(m, "j")
 	press(m, "e")
 	view := stripMarks(m.View())
@@ -547,5 +564,272 @@ func editAssertions(t *testing.T, root, slug, list string) {
 	}
 	if err := os.WriteFile(path, out, 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// ---------------------------------------------------------------- the dojo
+
+// The dojo is the loop's middle, and it has to carry the four things a revision is written from: the
+// assertion that failed, the judge's words for it, the end of the arm's execution transcript, and the
+// human's note. It is one screen because the note is written ABOUT the other three.
+func TestTheDojoReadsTheFailuresWithTheEvidence(t *testing.T) {
+	m, root := qualityFixture(t)
+	write(t, filepath.Join(root, "dummy-workspace", "iteration-1", "dummy-2-three-dice",
+		"without_skill", "activity.log"),
+		"read the die\nrolled three times\n  3 17 9\nwrote nothing\n")
+	m.openQualitySkill("dummy")
+	if m.quality.sec != qDojo {
+		t.Fatalf("the lane opened on section %d, want the dojo", m.quality.sec)
+	}
+	body := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
+	for _, want := range []string{"FAILED", "without", "dummy-2-three-dice", "The total adds up",
+		"the reply said so", "the total was one off", "+ 3 passed", "wrote nothing"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the dojo is missing %q:\n%s", want, body)
+		}
+	}
+	// The passing assertions are counted, not listed: the rail is the failures.
+	if strings.Contains(body, "Nothing was written") {
+		t.Fatalf("the failures rail listed an assertion both arms passed:\n%s", body)
+	}
+}
+
+// v opens the selected arm's whole transcript, and esc comes back to the dojo — not to the run screen
+// it was opened from, which has not existed for hours.
+func TestTheTranscriptOpensAndComesBack(t *testing.T) {
+	m, root := qualityFixture(t)
+	write(t, filepath.Join(root, "dummy-workspace", "iteration-1", "dummy-2-three-dice",
+		"without_skill", "activity.log"), "first line\nsecond line\n")
+	m.openQualitySkill("dummy")
+	press(m, "v")
+	if m.mode != screenDoc || m.doc == nil {
+		t.Fatalf("mode = %v, want the transcript in the document reader", m.mode)
+	}
+	if !strings.Contains(stripMarks(strings.Join(m.doc.lines, "\n")), "second line") {
+		t.Fatalf("the transcript is not the arm's log: %+v", m.doc.title)
+	}
+	press(m, "esc")
+	if m.mode != screenQuality {
+		t.Fatalf("esc from the transcript = %v, want the dojo", m.mode)
+	}
+}
+
+// The iteration ladder walks the disk without leaving the dojo: [ and ] are one iteration either way,
+// and the ends say they are the ends instead of wrapping into each other.
+func TestTheDojoStepsThroughIterations(t *testing.T) {
+	m, root := qualityFixture(t)
+	two := filepath.Join(root, "dummy-workspace", "iteration-2")
+	write(t, filepath.Join(two, "meta.json"), `{"iteration":2,"started":"2026-11-01T13:00:00+0100"}`)
+	writeGrading(t, two, "dummy-1-one-die", "with_skill", []graded{{"The reply reports one face", true}, {"Nothing was written", true}})
+	writeGrading(t, two, "dummy-1-one-die", "without_skill", []graded{{"The reply reports one face", true}, {"Nothing was written", true}})
+	writeGrading(t, two, "dummy-2-three-dice", "with_skill", []graded{{"Three faces", true}, {"The total adds up", true}})
+	writeGrading(t, two, "dummy-2-three-dice", "without_skill", []graded{{"Three faces", true}, {"The total adds up", true}})
+	m.openQualitySkill("dummy")
+	if m.quality.iter != 2 {
+		t.Fatalf("the lane opened on iteration %d, want the newest", m.quality.iter)
+	}
+	press(m, "2") // iteration 2 is clean, so the lane opened on the table; the ladder is the dojo's
+	press(m, "]")
+	if !strings.Contains(m.status, "newest") {
+		t.Fatalf("] past the newest must say so: status = %q", m.status)
+	}
+	press(m, "[")
+	if m.quality.iter != 1 {
+		t.Fatalf("iteration = %d, want 1 — the previous one", m.quality.iter)
+	}
+	// Iteration 1 is the one with the failure, so the cursor has something under it.
+	if len(m.quality.fails) != 1 || m.quality.fails[0].Case != "dummy-2-three-dice" {
+		t.Fatalf("failures = %+v, want iteration 1's one failure", m.quality.fails)
+	}
+	press(m, "[")
+	if !strings.Contains(m.status, "oldest") {
+		t.Fatalf("[ past the oldest must say so: status = %q", m.status)
+	}
+}
+
+// ---------------------------------------------------------------- the note
+
+// n opens the note of the case under the failure cursor and ctrl+s writes it into the iteration's
+// feedback.json — the file the pane has always read and nothing has ever written. The write keeps the
+// other case's note, backs the old file up, and the pane re-reads it.
+func TestTheNoteIsWrittenIntoTheIteration(t *testing.T) {
+	m, root := qualityFixture(t)
+	m.openQualitySkill("dummy")
+	press(m, "n")
+	if m.quality.note == nil {
+		t.Fatal("n must open the note of the case under the cursor")
+	}
+	view := stripMarks(m.View())
+	for _, want := range []string{"NOTE · dummy-2-three-dice", "feedback.json"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("the note strip is missing %q:\n%s", want, view)
+		}
+	}
+	// The field owns the keystrokes: q and j are characters here, not commands.
+	press(m, "q")
+	press(m, "j")
+	if !strings.Contains(m.quality.note.text, "qj") && !strings.Contains(m.quality.note.text, "the total was one off") {
+		t.Fatalf("the field did not take the keystrokes: %+v", m.quality.note)
+	}
+	m.quality.note.text = "the total drifts when the faces repeat\ncheck the second roll"
+	press(m, "ctrl+s")
+	if m.quality.note != nil {
+		t.Fatal("the strip must close after the write")
+	}
+	var notes map[string]string
+	b, err := os.ReadFile(filepath.Join(root, "dummy-workspace", "iteration-1", "feedback.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &notes); err != nil {
+		t.Fatal(err)
+	}
+	if notes["dummy-2-three-dice"] != "the total drifts when the faces repeat\ncheck the second roll" {
+		t.Fatalf("the note on disk = %q", notes["dummy-2-three-dice"])
+	}
+	if _, ok := notes["dummy-1-one-die"]; !ok {
+		t.Fatalf("the other case's key was dropped: %q", string(b))
+	}
+	backups, _ := filepath.Glob(filepath.Join(root, ".evalctl", "backups", "*feedback.json"))
+	if len(backups) == 0 {
+		t.Fatal("the note write left no backup of the old file")
+	}
+	// The pane is the file's again.
+	pane := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
+	if !strings.Contains(pane, "check the second roll") {
+		t.Fatalf("the pane did not re-read the note:\n%s", pane)
+	}
+}
+
+// esc in the note writes nothing: leaving the field is not a way to save.
+func TestEscLeavesTheNoteAlone(t *testing.T) {
+	m, root := qualityFixture(t)
+	was, _ := os.ReadFile(filepath.Join(root, "dummy-workspace", "iteration-1", "feedback.json"))
+	m.openQualitySkill("dummy")
+	press(m, "n")
+	m.quality.note.text = "something the file must not keep"
+	press(m, "esc")
+	if m.quality.note != nil {
+		t.Fatal("esc must close the note strip")
+	}
+	now, _ := os.ReadFile(filepath.Join(root, "dummy-workspace", "iteration-1", "feedback.json"))
+	if string(now) != string(was) {
+		t.Fatalf("a discarded note wrote the file:\n%s", now)
+	}
+}
+
+// ---------------------------------------------------------------- the rail and the table
+
+// The three sections are on the rail, and tab walks it: 1 2 3 in order, then round again. A section
+// reachable only by a key nobody can see is the mistake this rail replaces.
+func TestTheRailWalksTheThreeSections(t *testing.T) {
+	m, _ := qualityFixture(t)
+	m.openQualitySkill("dummy")
+	if !strings.Contains(stripMarks(m.View()), "1 setup") {
+		t.Fatalf("the rail is not on the head row:\n%s", stripMarks(m.View()))
+	}
+	want := []int{qQuality, qSetup, qDojo}
+	for _, sec := range want {
+		press(m, "tab")
+		if m.quality.sec != sec {
+			t.Fatalf("tab = section %d, want %d", m.quality.sec, sec)
+		}
+	}
+	press(m, "shift+tab")
+	if m.quality.sec != qSetup {
+		t.Fatalf("shift+tab = section %d, want the section before the dojo", m.quality.sec)
+	}
+}
+
+// The table's enter is "what happened in that iteration", and the answer is its evidence, not its
+// own report: enter lands on the dojo at that iteration, r opens the report.
+func TestTheTableOpensTheDojoAndTheReport(t *testing.T) {
+	m, root := qualityFixture(t)
+	write(t, filepath.Join(root, "dummy-workspace", "iteration-1", "report.md"), reportMD)
+	m.openQualitySkill("dummy")
+	press(m, "3")
+	press(m, "enter")
+	if m.quality.sec != qDojo || m.quality.iter != 1 {
+		t.Fatalf("enter = section %d iteration %d, want the dojo on iteration 1",
+			m.quality.sec, m.quality.iter)
+	}
+	press(m, "3")
+	press(m, "r")
+	if m.mode != screenDoc || m.doc == nil {
+		t.Fatalf("r did not open the report: mode %v", m.mode)
+	}
+}
+
+// A finished run lands on the dojo: the next move is to read what failed, and the evidence is there.
+func TestAFinishedGradeLandsOnTheDojo(t *testing.T) {
+	m, _ := qualityFixture(t)
+	m.openQualitySkill("dummy")
+	press(m, "3")
+	m.run = &runState{kind: runGrade}
+	m.run.live = newLiveRun("grading run", false)
+	m.run.live.done = true
+	m.leaveRun()
+	if m.mode != screenQuality || m.quality.sec != qDojo {
+		t.Fatalf("after a grade: mode %v section %d, want the dojo", m.mode, m.quality.sec)
+	}
+}
+
+// The editor is whatever $EDITOR says, split the way a shell splits it; vi is the last resort, not
+// the first guess.
+func TestTheEditorComesFromTheEnvironment(t *testing.T) {
+	t.Setenv("EDITOR", "nvim -u NONE")
+	t.Setenv("VISUAL", "nano")
+	argv, err := editorCommand("/tmp/x.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(argv, " ") != "nvim -u NONE /tmp/x.md" {
+		t.Fatalf("argv = %v", argv)
+	}
+	t.Setenv("EDITOR", "")
+	argv, err = editorCommand("/tmp/x.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if argv[0] != "nano" {
+		t.Fatalf("argv = %v, want $VISUAL when $EDITOR is empty", argv)
+	}
+}
+
+// Every section is a window: at no size may a line be wider than the frame, and at no size may the
+// rail or the panes be missing — a section that only works at 132 columns is a section half the
+// terminals cannot use.
+func TestEverySectionFitsTheWindow(t *testing.T) {
+	m, _ := qualityFixture(t)
+	m.openQualitySkill("dummy")
+	for _, size := range [][2]int{{132, 40}, {100, 24}, {80, 20}, {60, 18}} {
+		m.width, m.height = size[0], size[1]
+		for _, sec := range []int{qSetup, qDojo, qQuality} {
+			m.setQualitySection(sec)
+			view := stripMarks(m.View())
+			if !strings.Contains(view, "1 setup") {
+				t.Fatalf("%dx%d %s: the rail is gone:\n%s", size[0], size[1],
+					m.quality.sectionName(), view)
+			}
+			for _, line := range strings.Split(view, "\n") {
+				if w := len([]rune(line)); w > size[0] {
+					t.Fatalf("%dx%d %s: a line is %d cells: %q", size[0], size[1],
+						m.quality.sectionName(), w, line)
+				}
+			}
+		}
+	}
+	// And the two fields: the list is reachable in the pane, the note under the columns.
+	m.width, m.height = 90, 22
+	m.setQualitySection(qSetup)
+	press(m, "e")
+	if !strings.Contains(stripMarks(m.View()), "ASSERTIONS") {
+		t.Fatalf("the assertion field is not in the pane at 90x22:\n%s", stripMarks(m.View()))
+	}
+	press(m, "esc")
+	m.setQualitySection(qDojo)
+	press(m, "n")
+	if !strings.Contains(stripMarks(m.View()), "NOTE ·") {
+		t.Fatalf("the note field is not under the dojo at 90x22:\n%s", stripMarks(m.View()))
 	}
 }

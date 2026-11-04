@@ -26,6 +26,7 @@ type glyphSet struct {
 	Arrow    string // "this becomes that": the step screen's one action line
 	KnobL    string // the left bracket of a setting that steps: runs per query, dry run
 	KnobR    string // and its right bracket
+	Pending  string // declared, but not yet asserted: a case with a prompt and no assertions
 	Rule     string // the thin rules inside a screen
 	Heavy    string // the rule under the bar, so the bar reads as a bar
 	Ellipsis string // what a fitted line ends with
@@ -34,11 +35,11 @@ type glyphSet struct {
 var (
 	unicodeGlyphs = glyphSet{
 		Name: "unicode", Cursor: "▶ ", Block: "▌", Here: "●", Running: "⟳", Done: "✓", Failed: "✗", Seam: "│",
-		Arrow: "→", KnobL: "‹", KnobR: "›", Rule: "─", Heavy: "━", Ellipsis: "…",
+		Arrow: "→", KnobL: "‹", KnobR: "›", Rule: "─", Heavy: "━", Ellipsis: "…", Pending: "○",
 	}
 	asciiGlyphs = glyphSet{
 		Name: "ascii", Cursor: "> ", Block: "|", Here: "*", Running: "~", Done: "+", Failed: "x", Seam: "|",
-		Arrow: ">", KnobL: "<", KnobR: ">", Rule: "-", Heavy: "=", Ellipsis: "~",
+		Arrow: ">", KnobL: "<", KnobR: ">", Rule: "-", Heavy: "=", Ellipsis: "~", Pending: "o",
 	}
 )
 

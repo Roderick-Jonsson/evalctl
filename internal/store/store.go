@@ -349,6 +349,17 @@ func (s *Store) writeFile(path string, data []byte) error {
 	return os.Rename(name, path)
 }
 
+// BackupFile copies a file's bytes into .evalctl/backups under their timestamped name, the way every
+// write of this tool's own does. It exists for the files a lane writes INTO a workspace — a case's
+// feedback.json is not the store's, but a note typed into it is as easy to lose as an assertion, and
+// the recovery has to be the same one. A file that is not there yet has nothing to back up.
+func (s *Store) BackupFile(path string) error {
+	if !isFile(path) {
+		return nil
+	}
+	return s.backup(path)
+}
+
 // backup copies the previous bytes of path into .evalctl/backups so a bad trim is undoable.
 func (s *Store) backup(path string) error {
 	old, err := os.ReadFile(path)

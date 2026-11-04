@@ -483,81 +483,130 @@ last iteration scored on each arm, and how many iterations it has measured.
   learning-path            2        —        —       2
 ```
 
-`enter` opens the loop at the newest iteration. The left column is the cases and nothing else — their
-slugs, the cursor, and the iteration they belong to in the region head's corner; the rates and the
-failed count lived there as a second table and were two places to read one figure. Everything about a
-case is in the pane beside it, which shows **the case as its own record writes it**: `prompt`,
-`expected_output`, `files` (the fixtures the run root is given, or `none — the run root starts
-empty`), `assertions`, and then your `feedback`. The fields keep the file's names and the file's
-order, because the pane is meant to be read as the case, not as a summary of it; the only thing on it
-that is not in `evals.json` is the pair of rates above the record, which says how the two arms scored
-against it.
+`enter` opens the loop at the section the disk is asking for: **setup** when nothing is declared yet,
+the **dojo** when the newest iteration has failures to read, **quality** when the loop is waiting on a
+grade or on a rerun. The three sections are on one rail — `1` `2` `3`, `tab` for the next and
+`shift+tab` for the previous — because a section reachable only by a key nobody can see is a section
+nobody finds. `esc` is one level up in the lane's own ladder: a section back to setup, then the skills.
 
-The assertion rows carry both arms' verdicts (`✓ with · ✗ without`) and the judge's evidence under
-the ones that failed. The passing assertions are listed too because a pass in both arms is a reading:
-it measures the model, not the procedure, and an assertion like that is one to rewrite or drop. A
-window too short for the whole record truncates it at the bottom — never with a field missing out of
-the middle — and the list says how many rows it could not show.
+**1 · setup — declare the case.** The left column is the cases, one slug and one declaration mark each
+(`✓` prompt and assertions, `○` prompt alone, `✗` nothing yet), and nothing else: the rates and the
+verdicts belong to the sections that read them. The pane beside it shows **the case as its own record
+writes it** — `prompt`, `expected_output`, `files` (the fixtures the run root is given, or `none — the
+run root starts empty`), `assertions` — the fields keeping the file's names and the file's order,
+because the pane is meant to be read as the case and not as a summary of it.
 
 ```
- output optimization > dummy > iteration                                                      evalctl v0.9.0 · 11:06
-▌ CASES  iteration 3  │   dummy-2-three-dice
-  ─────────────────   │   ────────────────────────────────────────────────
-▶ dummy-1-one-die     │   with 3/3 · without 2/3
-  dummy-2-three-dice  │
-                      │   prompt
-                      │   Throw three twenty-sided dice and give me the faces and the total.
-                      │
-                      │   expected_output
-                      │   Three faces, each an integer from 1 to 20, and their sum as the total.
-                      │
-                      │   files
-                      │   none — the run root starts empty
-                      │
-                      │   assertions — 3 · ✓ with · ✗ without
-                      │   ✓ ✓  The reply reports exactly three faces, each an integer from 1 to 20
-                      │   ✓ ✗  The run created no file and no folder
-                      │        without · the arm wrote out.txt
-                      │   ✓ ✓  The total given is the sum of the faces
+ output optimization > dummy > setup                                                         evalctl v0.9.0 · 11:06
+ ● 1 setup ─── 2 dojo ─── 3 quality                          3 cases · 6 assertions · iteration #2 · best #2
+                       │
+▌ CASES                │   dummy-1-one-die                                                       #1
+  ──────────────────   │   ─────────────────────────────────────────────────────────────────
+▶ ✓ dummy-1-one-die    │   with 3/3 · without 2/3
+  ○ dummy-2-three-dice │
+  ✓ dummy-3-no-writes  │   prompt
+                       │   Throw three twenty-sided dice and give me the faces and the total.
+                       │
+                       │   expected_output
+                       │   Three faces, each an integer from 1 to 20, and their sum as the total.
+                       │
+                       │   files
+                       │   none — the run root starts empty
+                       │
+                       │   assertions — 1 · ✓ with · ✗ without
+                       │   ✓ ✗  The total given is the sum of the faces
+                       │        without · the arm wrote out.txt
 ```
 
-`e` writes that list. It opens the declared assertions as one field **under both columns** — one
-assertion per line, the way `evalctl edit --assertions` takes them — with the case table and the pane
-still on screen above it, because the evidence a revision is written from should stay visible while
-the revision is typed. `ctrl+s` writes `<skill>/evals/evals.json` (backed up first) and `esc`
-discards; enter is a line in that field, not a submit, since the list is lines. The save says what it
-did and one more thing: the verdicts on screen were read against the *old* list, so `g` re-grades.
-An assertion added after grading shows a dash for both arms until it is judged; clearing the field
-leaves the case with no `assertions` key at all, the shape a case is in before its list is known.
+`e` writes that list where it is drawn: the field takes the assertion block's place in the pane, one
+assertion per line, the way `evalctl edit --assertions` takes them, so the record above it stays on
+screen while the sentence it is about is typed. `ctrl+s` writes `<skill>/evals/evals.json` (backed up
+first), `esc` discards, and enter is a line in the field rather than a submit. The save says one more
+thing: the verdicts on screen were read against the *old* list, so `g` re-grades. An assertion added
+after grading shows a dash for both arms until it is judged; clearing the field leaves the case with no
+`assertions` key at all, the shape a case is in before its list is known. `S` hands the case file whole
+to `$EDITOR` — a prompt and a fixture list are prose and paths, not a text area — and the pane re-reads
+it when the editor exits.
 
-The strip is paid for before the columns, so a short window shrinks the workbench rather than cutting
-the field off. A window too narrow for a pane drops to the stacked reading — the list, then the same
-record as labelled lines under it — where `e` opens the same field.
+**Facts ride in the assertion's own sentence.** `assertions` is a list of strings in the format, and the
+judge reads them in that order, so what an expectation is checked against is written where the
+expectation is: `every Sub-Topic appears exactly once — facts: ST-1 … ST-9, as in PS.md`. A second array
+of facts would have to be kept in step by position, which is the one join this tool already distrusts.
 
-`g` grades the iteration on screen — one judge call per arm, verdicts into each arm's `grading.json`,
-then the benchmark and the report re-aggregated; an already-fully-graded iteration says so instead of
-spending again. `R` runs the next iteration; the live run is the trigger lane's screen with case rows
-and arm marks. `tab` is the ranking: every iteration's two rates, the delta, and the best **complete**
-one — a partial grade never ranks, the same rule the trigger lab enforces.
+**2 · dojo — work one iteration.** The left rail is the iteration's **failed** assertions, one row per
+case and arm; the passing ones are counted under it (`+ 4 passed in both arms`), because an assertion
+both arms pass measures the model and not the procedure. The pane works the one under the cursor: the
+sentence the judge graded, the judge's words for it, the end of that arm's execution transcript, and the
+human note. `[` and `]` walk the iterations without leaving the section; `v` (or `enter`) opens the whole
+`activity.log`; `n` writes the note into the iteration's `feedback.json` (backed up first — it is a file
+in the workspace, not in the tree, and it is backed up like one); `E` hands `SKILL.md` to `$EDITOR`,
+because the revision is a document and a text field is not an editor.
 
 ```
- output optimization > dummy > ranking                                                       evalctl v0.9.0 · 11:06
-▌ ITERATIONS
-    ITER       WITH    WITHOUT   DELTA  CASES  WHEN
-▶     #2   100% 5/5   100% 5/5      +0      2  2026-11-01 12:22  best
-
-  the best is the highest with-skill rate among iterations whose every case was graded — not the newest
+ output optimization > dummy > dojo                                                          evalctl v0.9.0 · 11:06
+ 1 setup ─── ● 2 dojo ─── 3 quality                          3 cases · 6 assertions · iteration #2 · best #2
+                             │
+▌ FAILED                  1  │   dummy-2-three-dice                                      #2 · without ✗
+  ────────────────────────   │   ─────────────────────────────────────────────────────────────────
+▶ without dummy-2-three-dice │
+                             │   assertion
+  + 4 passed in both arms    │   The total given is the sum of the faces
+                             │
+                             │   evidence
+                             │   the arm's out.txt totals 30, the reply says 27
+                             │
+                             │   transcript
+                             │   rolled 3d20 → 17 9 4
+                             │   wrote out.txt
+                             │   … v reads the whole log
+                             │
+                             │   note
+                             │   the total is the one that drifts — check the second roll
 ```
 
-The guide's stop condition is a fact here too: when the last two complete iterations tie, the ranking
-says it, and the lab's `next:` line says "stop, or sharpen the assertions". `f` opens the failed
-assertions as one list, and `enter` the iteration's report; `esc` walks back one level at a time.
+That is the loop's middle, and it is the part that used to be a sentence in the guide: the failures and
+the note were read into a pane that had no way to answer them. `n` is the answer, and it lands in the
+same `feedback.json` the pane quotes.
+
+**3 · quality — judge the trend.** Every iteration's two rates, the difference between them, how much
+of the set ran, and how much of the grading list the judge saw. `enter` opens that iteration on the
+dojo — the question a table row raises is what happened in it, and the answer is its evidence, not its
+own report (`r` opens `report.md`).
+
+```
+ output optimization > dummy > quality                                                       evalctl v0.9.0 · 11:06
+ 1 setup ─── 2 dojo ─── ● 3 quality                          3 cases · 6 assertions · iteration #2 · best #2
+
+▌ ITERATIONS                                                       best = highest with-skill rate, complete only
+    ITER    WITH WITHOUT Δ w−w/o   RAN   JUDGED  WHEN
+▶     #1     89%     56%     +33   3/3      6/6  2026-11-01 12:00
+      #2    100%     89%     +11   3/3      6/6  2026-11-01 14:20  best
+
+  Δ = with − without, this iteration · RAN = cases run of 3 · JUDGED = assertions judged of 6
+```
+
+A rate is a percentage and nothing beside it: `89% 5/6` used to share one cell, and it reads as
+arithmetic that does not hold — a rate that averages the cases is not the pooled assertions, so the two
+numbers invite a division that lies about one of them. `JUDGED` carries the completeness fact in its own
+column, `RAN` the set coverage, and both column names that cannot say their own basis have it spelled
+out under the table: a delta between the arms and a delta against the last iteration are different
+facts. A partial grade never ranks, the same rule the trigger lab enforces, and the best is the highest
+with-skill rate among **complete** iterations — ties go to the later one.
+
+The guide's stop condition is a fact here too: when the last two complete iterations tie, the table
+says so, and the lab's `next:` line says "stop, or sharpen the assertions".
+
+`g` grades the iteration on screen — one judge call per arm, verdicts into each arm's `grading.json`, then
+the benchmark and the report re-aggregated; an already-fully-graded iteration says so instead of spending
+again. `R` runs the next iteration; the live run is the trigger lane's screen with case rows and arm
+marks. A finished run or grade lands on the dojo, because the next move after a spend is to read what
+failed.
 
 ### The frame
 
 The bar carries the path — `trigger optimization > skill > step` — and the tool with its build at the
 right edge. The rail sits under it, and the loop's own numbers sit at the right end of the rail's row.
-The two screens that draw no rail — the workbench and the ranking — spend that row on the body.
+The output lane draws the same rail with its three sections, `1 setup ─── 2 dojo ─── 3 quality`, and the loop's numbers at its right end.
 
 **Where the keys are.** A screen here is one or more *regions* — a list, a table, a pane, a field — and
 exactly one of them has the keystrokes. It says so in two places and no more: the region that has them

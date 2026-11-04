@@ -44,8 +44,7 @@ const (
 	screenAsk                    // a yes/no question
 	screenDoc                    // a scrollable document (failures, a report, a log)
 	screenRunLive                // the run, while it runs
-	screenQuality                // output lane: the cases of one iteration, and their verdicts
-	screenQRank                  // output lane: iterations ranked by pass rate
+	screenQuality                // output lane: setup, dojo and quality, as three sections on one rail
 	screenHelp
 )
 
@@ -209,6 +208,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case watchMsg:
 		m.syncTree()
 		return m, watchEvery()
+	case editorDoneMsg:
+		// The editor exited; whatever it did to the file is now the disk. The tree is re-read and the
+		// screens are put back on it, so a revision written in $EDITOR is on the pane the moment the
+		// terminal comes back.
+		m.stamp = ""
+		m.syncTree()
+		m.reload()
+		if msg.err != nil {
+			m.setStatus(msg.scope+" editor exited with "+msg.err.Error(), true)
+			return m, nil
+		}
+		m.setStatus(msg.scope+" re-read — the screens are the file's again", false)
+		return m, nil
 	}
 	return m, m.passToForm(msg)
 }
@@ -237,7 +249,7 @@ func (m *Model) syncTree() {
 	// the tick after the screen gives the keys back does the re-read.
 	// Only a field with the caret holds the re-read back: its draft is the one thing on screen the
 	// store cannot replace. Fields without it are seeded from the file and can be seeded again.
-	if m.runActive() || m.mode == screenAsk || m.formActive() || m.assertEditActive() {
+	if m.runActive() || m.mode == screenAsk || m.formActive() || m.assertEditActive() || m.noteActive() {
 		return
 	}
 	if m.reopen() {
@@ -314,6 +326,9 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.assertEditActive() {
 		return m, m.assertEdit.update(m, msg)
 	}
+	if m.noteActive() {
+		return m, m.quality.note.update(m, msg)
+	}
 	if m.formActive() {
 		return m, m.form.update(m, msg)
 	}
@@ -357,8 +372,6 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.updateFlow(msg)
 	case screenQuality:
 		return m, m.updateQuality(msg)
-	case screenQRank:
-		return m, m.updateQRank(msg)
 	case screenAsk:
 		return m, m.ask.update(m, msg)
 	case screenDoc:
@@ -379,6 +392,9 @@ func (m *Model) passToForm(msg tea.Msg) tea.Cmd {
 	if m.assertEditActive() {
 		return m.assertEdit.updateMsg(msg)
 	}
+	if m.noteActive() {
+		return m.quality.note.updateMsg(msg)
+	}
 	if !m.formActive() {
 		return nil
 	}
@@ -394,12 +410,14 @@ func (m *Model) escUp() tea.Cmd {
 		m.mode = screenLane
 	case screenFlow:
 		m.mode = screenSections
-	case screenQRank:
-		if m.quality != nil {
-			m.quality.rank = false
-		}
-		m.mode = screenQuality
 	case screenQuality:
+		// The lane's own levels: a section back to setup, then the skills. The rail is one level of
+		// this screen, and esc has to walk it the way it walks a step's sections.
+		if q := m.quality; q != nil && q.sec != qSetup {
+			m.setQualitySection(qSetup)
+			m.setStatus("setup — the declaration", false)
+			return nil
+		}
 		m.skill = ""
 		m.quality = nil
 		m.mode = screenSkill
@@ -512,9 +530,7 @@ func (m *Model) pathSegments() []string {
 			}
 		}
 	case screenQuality:
-		segs = append(segs, "iteration")
-	case screenQRank:
-		segs = append(segs, "ranking")
+		segs = append(segs, m.quality.sectionName())
 	case screenDraft:
 		segs = append(segs, "revise")
 	case screenDoc:
@@ -583,6 +599,11 @@ func (m *Model) contextLine(w int) string {
 		}
 		return rail
 	}
+	// The output lane's three sections are its rail, in the same row the trigger lane's steps use:
+	// the sections say where you are, the facts on the right say how far the loop has got.
+	if m.mode == screenQuality {
+		return m.qualityRail(w)
+	}
 	switch m.mode {
 	case screenLane:
 		return ""
@@ -612,8 +633,6 @@ func (m *Model) bodyLines(h int) []string {
 		}
 	case screenQuality:
 		return m.qualityBody(h)
-	case screenQRank:
-		return m.qualityRankBody(h)
 	case screenAsk:
 		if m.ask != nil {
 			return m.ask.body(h)
@@ -689,7 +708,7 @@ func (m *Model) hints() []hint {
 		if m.flow != nil {
 			return m.flow.hints(m)
 		}
-	case screenQuality, screenQRank:
+	case screenQuality:
 		return qualityHints(m)
 	case screenAsk:
 		if m.ask != nil {
@@ -773,8 +792,17 @@ func (m *Model) region() string {
 			return setRegionWord(false)
 		}
 	case screenQuality:
-		if m.assertEditActive() {
-			return "assertions"
+		if m.assertEditActive() || m.noteActive() {
+			return "editor"
+		}
+		if q := m.quality; q != nil {
+			switch q.sec {
+			case qDojo:
+				return "failures"
+			case qQuality:
+				return "iterations"
+			}
+			return "cases"
 		}
 	}
 	return ""
@@ -816,11 +844,12 @@ func (m *Model) stateText() string {
 		}
 	case screenQuality:
 		if q := m.quality; q != nil && q.lab != nil {
+			if q.lab.Next.Line != "" {
+				return q.lab.Next.Line
+			}
 			return fmt.Sprintf("%s · %s · %s", plural(q.lab.Cases, "case"),
 				plural(q.lab.Assertions, "assertion"), plural(len(q.lab.Iterations), "iteration"))
 		}
-	case screenQRank:
-		return "the best is the highest with-skill rate among complete iterations"
 	}
 	return ""
 }
@@ -881,12 +910,22 @@ func (m *Model) position() string {
 	case screenSkill:
 		return fmt.Sprintf("%d / %d", m.skills.cursor+1, max(1, len(m.skillNames())))
 	case screenQuality:
-		if q := m.quality; q != nil && len(q.cases) > 0 {
-			return fmt.Sprintf("case %d of %d", q.sel+1, len(q.cases))
-		}
-	case screenQRank:
-		if q := m.quality; q != nil && q.lab != nil && len(q.lab.Iterations) > 0 {
-			return fmt.Sprintf("%d / %d", q.rsel+1, len(q.lab.Iterations))
+		if q := m.quality; q != nil {
+			switch q.sec {
+			case qDojo:
+				if len(q.fails) > 0 {
+					return fmt.Sprintf("failure %d of %d", q.fsel+1, len(q.fails))
+				}
+				return "nothing failed"
+			case qQuality:
+				if q.lab != nil && len(q.lab.Iterations) > 0 {
+					return fmt.Sprintf("%d / %d", q.rsel+1, len(q.lab.Iterations))
+				}
+			default:
+				if len(q.cases) > 0 {
+					return fmt.Sprintf("case %d of %d", q.sel+1, len(q.cases))
+				}
+			}
 		}
 	case screenLane:
 		return fmt.Sprintf("%d / 2", m.lanes.cursor+1)

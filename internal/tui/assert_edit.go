@@ -13,12 +13,12 @@ import (
 
 // The case's assertion list, written where it is read.
 //
-// The workbench is the one screen that shows what the judge said about a case, so it is the screen
-// the list is edited from: `e` opens the declared assertions as one field under both columns — one
-// assertion per line, the way `evalctl edit --assertions` takes them. It is a strip and not a screen
-// because the evidence a revision is written from has to stay on screen while the revision is typed;
-// and it is the window's width and not the pane's because an assertion is a sentence, and a
-// forty-cell column is where a sentence goes to be typed twice.
+// Setup is the section that shows what a case declares, so it is the section the list is edited from:
+// `e` turns the assertion block into one field, in place — one assertion per line, the way `evalctl
+// edit --assertions` takes them. It is not a screen because the record above the list has to stay on
+// screen while the sentence it is about is typed, and it is not a strip under the columns any more
+// because the list is drawn in the pane and typing it somewhere else made the operator hunt for the
+// line they were editing.
 //
 // It is a huh form for the same reason the query fields are: huh already owns the caret, the
 // multi-line area and the scrolling, and a second implementation of those is a second set of bugs in
@@ -67,18 +67,15 @@ var assertKeys = func() *huh.KeyMap {
 	return km
 }()
 
-// body draws the strip: its head, the field, and the failure of the last write. The height it is
-// given is a share of the window measured by the caller, which also reserves it before the two
-// columns, so a short window shrinks the workbench above the strip rather than hiding the field.
-func (a *assertState) body(w, h int) []string {
+// pane draws the list as the setup pane's own block: the field takes the place the assertion list
+// had, under the record it belongs to. It is the same field the strip was — one assertion per line,
+// ctrl+s writes — and the reason it moved is that the pane is where the list is read, so it is where
+// the list is typed.
+func (a *assertState) pane(w, h int) []string {
 	a.width = w
 	a.form.WithWidth(max(20, w-4))
 	a.form.WithHeight(a.want)
-	lines := []string{
-		"",
-		regionHead(w, "ASSERTIONS", a.path, true),
-		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, w-4)))),
-	}
+	lines := []string{"", regionHead(w, "ASSERTIONS", a.path, true)}
 	for _, line := range strings.Split(strings.TrimRight(a.form.View(), "\n"), "\n") {
 		lines = append(lines, "  "+line)
 	}

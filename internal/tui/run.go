@@ -348,9 +348,9 @@ func (m *Model) finishRun() tea.Cmd {
 			return nil
 		}
 		if m.run.kind == runQuality {
-			m.run.live.summary = "iteration written — g grades it, tab ranks the iterations"
+			m.run.live.summary = "iteration written — g grades it, 3 ranks the iterations"
 		} else {
-			m.run.live.summary = "graded — the rates and the ranking are on the loop"
+			m.run.live.summary = "graded — 2 reads the failures, 3 the rates"
 		}
 		m.setStatus(m.run.live.summary, false)
 		return nil
@@ -421,8 +421,11 @@ func (m *Model) leaveRun() tea.Cmd {
 	gen := m.run.gen
 	m.run = nil
 	if kind == runQuality || kind == runGrade {
+		// A finished run or grade lands on the dojo: the next move is to read what failed, and that
+		// evidence is one section away from anywhere else in the lane.
 		if m.quality != nil {
-			m.quality.rank = false
+			m.quality.note = nil
+			m.setQualitySection(qDojo)
 		}
 		m.mode = screenQuality
 		return nil
@@ -522,13 +525,19 @@ func activityStyled(line string, width int) string {
 
 // openActivityDoc shows a finished arm's log in the document reader.
 func (m *Model) openActivityDoc(path, label string) {
+	m.openLogDoc(path, label, screenRunLive)
+}
+
+// openLogDoc is the activity log of any finished run, in the document reader, with the screen it was
+// opened from as the way back: a live run's own log, and an arm's transcript long after it stopped.
+func (m *Model) openLogDoc(path, label string, back screen) {
 	lines, err := readLog(path)
 	if err != nil {
 		m.setStatus(err.Error(), true)
 		return
 	}
 	m.doc = &docState{scope: "activity", title: "activity · " + label, lines: lines}
-	m.backTo = screenRunLive
+	m.backTo = back
 	m.mode = screenDoc
 }
 
