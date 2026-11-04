@@ -1,17 +1,18 @@
 package tui
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"evalctl/internal/runner"
 	"evalctl/internal/store"
 )
 
 // gateFixture is a skill whose set is declared and whose cases carry no assertion: the state the
 // lane used to open on with an empty case list and an `R` that spent six agent calls on outputs
-// nothing could judge.
+// nothing could judge. `assertions` declares a list, so the same fixture can be the closed loop at
+// its second step (a set with something to judge and nothing run).
 func gateFixture(t *testing.T, assertions bool) (*Model, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -47,48 +48,49 @@ func gateFixture(t *testing.T, assertions bool) (*Model, string) {
 	return m, root
 }
 
-// TestGateOpensInsteadOfAnEmptyLoop is the entry's contract with the screen: with nothing declared
-// measured, the lane opens on the checklist, draws no rail, and offers no run.
-func TestGateOpensInsteadOfAnEmptyLoop(t *testing.T) {
+// TestTheSetOpensOnItsBand is the closed loop's contract with the screen: the menu's cursor is on the
+// set, and the set's view says in one band what the loop needs before it exists — the steps as chips
+// and the one errand that opens it — above the cases the view is about.
+func TestTheSetOpensOnItsBand(t *testing.T) {
 	m, _ := gateFixture(t, false)
-	if !m.quality.gate {
-		t.Fatalf("the lane opened on section %d, want the initialization checklist", m.quality.sec)
+	if m.mode != screenQualityMenu || m.quality.vcursor != qSetup {
+		t.Fatalf("lane opened at mode %v row %d, want the menu on the set", m.mode, m.quality.vcursor)
 	}
-	if rail := stripMarks(m.contextLine(m.width)); rail != "" {
-		t.Fatalf("a rail is drawn before the loop exists: %q", rail)
+	// The status row says what the lane is waiting for before anything is pressed: the first key
+	// clears it, which is why it is read here.
+	if st := stripMarks(m.status); !strings.Contains(st, "assertion") {
+		t.Fatalf("status = %q, want the assertion the loop is asking for", st)
 	}
-	if bar := stripMarks(m.barLeft()); !strings.HasSuffix(bar, "init") {
-		t.Fatalf("path = %q, want it to end at init", bar)
+	press(m, "1")
+	if m.quality.sec != qSetup {
+		t.Fatalf("section = %d, want test cases", m.quality.sec)
+	}
+	if bar := stripMarks(m.barLeft()); !strings.HasSuffix(bar, "test cases") {
+		t.Fatalf("path = %q, want it to end at test cases", bar)
 	}
 	body := stripMarks(strings.Join(m.bodyLines(m.bodyHeight()), "\n"))
-	for _, want := range []string{"INITIALIZATION", "cases", "assertions", "run", "grade",
-		"2 declared", "none of 2 cases carry one", "e  an assertion for every case"} {
+	// Three steps here, not four: the grade is part of the run, so it is not a step of its own before
+	// the first run. The cases are declared; the assertions are the first step that is not done.
+	for _, want := range []string{"TEST CASES", "the loop is not open yet · 1 of 3",
+		"cases", "assertions", "run",
+		"an assertion for every case", "CASES", "d-1", "d-2"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("the checklist is missing %q:\n%s", want, body)
+			t.Fatalf("the band is missing %q:\n%s", want, body)
 		}
 	}
-	// R is the spend this screen exists to prevent, so it is not even offered.
+	// R is the spend the band exists to prevent, so it is not even offered.
 	for _, h := range m.hints() {
 		if h.key == "R" {
 			t.Fatalf("hints offer a run over a set with nothing to judge: %v", m.hints())
 		}
 	}
-	if st := stripMarks(m.status); !strings.Contains(st, "assertion") {
-		t.Fatalf("status = %q, want the assertion the entry is asking for", st)
-	}
 }
 
-// TestGateRefusesTheRunAndTheSections: the keys that would do nothing still say why, and R does not
-// leave the screen.
-func TestGateRefusesTheRunAndTheSections(t *testing.T) {
+// TestRRefusesAnUnassertedSet: the run key is global to the lane, so the guard has to be on the run
+// and not on the screen it was pressed from.
+func TestRRefusesAnUnassertedSet(t *testing.T) {
 	m, _ := gateFixture(t, false)
-	press(m, "2")
-	if m.quality.gate != true || m.quality.sec != qSetup {
-		t.Fatalf("2 left the entry: gate=%v sec=%d", m.quality.gate, m.quality.sec)
-	}
-	if st := stripMarks(m.status); !strings.Contains(st, "not open yet") {
-		t.Fatalf("status = %q, want the loop's reason", st)
-	}
+	press(m, "1")
 	press(m, "R")
 	if m.mode != screenQuality {
 		t.Fatalf("R started a run over an unasserted set: mode %v, status %q", m.mode, stripMarks(m.status))
@@ -98,31 +100,12 @@ func TestGateRefusesTheRunAndTheSections(t *testing.T) {
 	}
 }
 
-// TestGateHandsOverTheDeclaration: the entry's other job is the file, and the declaration lists the
-// cases of a set that has never run — the screen that was blank before.
-func TestGateHandsOverTheDeclaration(t *testing.T) {
-	m, _ := gateFixture(t, false)
-	press(m, "enter")
-	if m.quality.gate {
-		t.Fatalf("enter did not hand over the declaration")
-	}
-	body := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
-	for _, want := range []string{"CASES", "d-1", "d-2", "prompt", "Roll a die.", "expected_output"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("the declaration is missing %q:\n%s", want, body)
-		}
-	}
-	// The gate is where the disk says you are: reopening the lane comes back to it.
-	m.openQualitySkill("dummy")
-	if !m.quality.gate {
-		t.Fatalf("reopening the lane skipped the entry while the loop is still closed")
-	}
-}
-
-// TestGateClosesOnTheGrade: the entry's last errand is the judge's verdict, and finishing it opens
-// the loop on the failures of the run that opened it.
-func TestGateClosesOnTheGrade(t *testing.T) {
+// TestTheBandClosesOnTheGrade: the band is the disk's reading, not a screen the lane is stuck on. A
+// run nobody judged leaves the loop closed with the grade as its errand; the first verdicts open it,
+// and the band goes with them.
+func TestTheBandClosesOnTheGrade(t *testing.T) {
 	m, root := gateFixture(t, true)
+	press(m, "1")
 	iter := filepath.Join(root, "dummy-workspace", "iteration-1")
 	write(t, filepath.Join(iter, "meta.json"),
 		`{"iteration":1,"skill":"dummy","started":"2026-11-01T12:00:00+0100"}`)
@@ -133,11 +116,12 @@ func TestGateClosesOnTheGrade(t *testing.T) {
 		}
 	}
 	m.reloadQuality()
-	if !m.quality.gate {
-		t.Fatalf("an ungraded run opened the loop")
+	body := stripMarks(strings.Join(m.bodyLines(m.bodyHeight()), "\n"))
+	if !strings.Contains(body, "the loop is not open yet · 3 of 4") {
+		t.Fatalf("an ungraded run must leave the loop closed at the grade:\n%s", body)
 	}
-	if body := stripMarks(strings.Join(m.bodyLines(m.bodyHeight()), "\n")); !strings.Contains(body, "no verdicts") {
-		t.Fatalf("the entry does not say the run is ungraded:\n%s", body)
+	if !strings.Contains(body, "no verdicts") {
+		t.Fatalf("the band does not say why the grade is owed:\n%s", body)
 	}
 
 	writeGrading(t, iter, "d-1", "with_skill", []graded{{"the reply reports one face", false}})
@@ -145,96 +129,112 @@ func TestGateClosesOnTheGrade(t *testing.T) {
 	writeGrading(t, iter, "d-2", "with_skill", []graded{{"the reply reports one face", true}})
 	writeGrading(t, iter, "d-2", "without_skill", []graded{{"the reply reports one face", false}})
 	m.reloadQuality()
-	if m.quality.gate {
-		t.Fatalf("the gate is still drawn after the first grade: %+v", m.quality.lab.Checks)
-	}
-	if m.quality.sec != qDojo {
-		t.Fatalf("section = %d, want the dojo on the failures the grade found", m.quality.sec)
+	body = stripMarks(strings.Join(m.bodyLines(m.bodyHeight()), "\n"))
+	if strings.Contains(body, "the loop is not open yet") {
+		t.Fatalf("the band is still drawn after the first grade: %+v", m.quality.lab.Checks)
 	}
 	if len(m.quality.fails) == 0 {
-		t.Fatalf("the dojo has no failures after a failing grade")
+		t.Fatalf("the iteration view has no failures after a failing grade")
+	}
+	// Reopening the lane puts the cursor on the iteration: its newest run has failures to read.
+	m.openQualitySkill("dummy")
+	if m.quality.vcursor != qDojo {
+		t.Fatalf("reopened at row %d, want the iteration the grade left failures in", m.quality.vcursor)
 	}
 }
 
-// TestGateShowsTheSetBeforeItRuns: the entry is the last screen before a run costs money, so it
-// shows what that run will be judged on — the cases as a table, and the assertions of the one under
-// the cursor as their own band.
-func TestGateShowsTheSetBeforeItRuns(t *testing.T) {
+// TestTheBandRidesAboveTheCases: the band is a state of the set's view, not a screen of its own — a
+// closed loop still shows the set, and still shows it in a short window.
+func TestTheBandRidesAboveTheCases(t *testing.T) {
 	m, _ := gateFixture(t, true)
+	m.width, m.height = 120, 18
+	press(m, "1")
 	body := stripMarks(strings.Join(m.bodyLines(m.bodyHeight()), "\n"))
-	for _, want := range []string{"STEP", "WHAT", "NOW", "KEY", "THE SET", "CASE", "ASSERTIONS",
-		"STATE", "d-1", "d-2", "declared", "ASSERTIONS · D-1", "the reply reports one face"} {
+	for _, want := range []string{"TEST CASES", "the loop is not open yet · 2 of 3", "cases", "d-1", "d-2"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("the entry does not show the set: missing %q\n%s", want, body)
+			t.Fatalf("a short window lost %q:\n%s", want, body)
 		}
 	}
-	if strings.Contains(body, "the total adds up") {
-		t.Fatalf("the assertions under the list are not the selected case's:\n%s", body)
+	for _, line := range strings.Split(body, "\n") {
+		if w := len([]rune(line)); w > m.width {
+			t.Fatalf("a line is %d cells in a %d-cell frame: %q", w, m.width, line)
+		}
 	}
-	// The whole point of the cursor: the other case's assertions, without leaving the entry.
+}
+
+// TestAClosedLoopLocksTheTwoViews: the loop starts closed, and the two views that would answer
+// "nothing measured yet" are shut until it opens — dim in the menu, with the errand that opens them
+// where it belongs, and a refusal (not a screen) if you try to walk into one. The cursor cannot get
+// onto them either (TestTheMenuCannotWalkIntoALockedView pins that move); the pane is drawn here for
+// a row the cursor cannot reach, because the shape it refuses in is what the guard exists to keep.
+func TestAClosedLoopLocksTheTwoViews(t *testing.T) {
+	m, _ := gateFixture(t, false)
+	// The menu marks them, and only the set's row carries the action that opens one.
+	menu := stripMarks(strings.Join(m.qualityMenuBody(m.bodyHeight()), "\n"))
+	if !strings.Contains(menu, "locked until the loop opens") {
+		t.Fatalf("a closed loop's locked rows say nothing about it:\n%s", menu)
+	}
+	m.quality.vcursor = qDojo // a locked row, which no key would put the cursor on
+	locked := stripMarks(strings.Join(m.qualityMenuBody(m.bodyHeight()), "\n"))
+	if strings.Contains(locked, "→ enter") {
+		t.Fatalf("a locked row offers an action line it cannot honour:\n%s", locked)
+	}
+	if !strings.Contains(locked, "locked — ") || !strings.Contains(locked, "assertion for every case") {
+		t.Fatalf("a locked row's pane does not say what opens it:\n%s", locked)
+	}
+	m.quality.vcursor = qSetup
+	for _, sec := range []int{qDojo, qQuality} {
+		press(m, fmt.Sprint(sec+1))
+		if m.mode != screenQualityMenu {
+			t.Fatalf("%d walked into view %d from a closed loop", sec+1, m.quality.sec)
+		}
+		if st := stripMarks(m.status); !strings.Contains(st, "locked") {
+			t.Fatalf("%d was refused with %q, want the reason", sec+1, st)
+		}
+	}
+	// A move key cannot carry the cursor to a locked row, so the only `enter` this menu has is the
+	// set's — and it opens the set.
 	press(m, "j")
-	body = stripMarks(strings.Join(m.bodyLines(m.bodyHeight()), "\n"))
-	for _, want := range []string{"ASSERTIONS · D-2", "the reply reports three faces", "the total adds up"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("j did not walk the set: missing %q\n%s", want, body)
-		}
+	if m.quality.vcursor != qSetup {
+		t.Fatalf("j moved the cursor to row %d on a closed loop", m.quality.vcursor)
 	}
-	if strings.Contains(body, "the reply reports one face") {
-		t.Fatalf("the list still reads the first case after j:\n%s", body)
+	press(m, "enter")
+	if m.mode != screenQuality || m.quality.sec != qSetup {
+		t.Fatalf("enter on the set = mode %v section %d, want test cases", m.mode, m.quality.sec)
 	}
-	// And the keys that act on the selection are offered.
-	var keys []string
-	for _, h := range m.hints() {
-		keys = append(keys, h.key)
+	// And once the grade lands, the same two rows open.
+	m2, root := gateFixture(t, true)
+	iter := filepath.Join(root, "dummy-workspace", "iteration-1")
+	write(t, filepath.Join(iter, "meta.json"), `{"iteration":1,"skill":"dummy","started":"2026-11-01T12:00:00+0100"}`)
+	writeGrading(t, iter, "d-1", "with_skill", []graded{{"a", true}})
+	writeGrading(t, iter, "d-1", "without_skill", []graded{{"a", false}})
+	m2.reloadQuality()
+	if m2.quality.lab.InitPending {
+		t.Skip("the fixture's grade did not open the loop")
 	}
-	if got := strings.Join(keys, " "); !strings.Contains(got, "j k") || !strings.Contains(got, "enter") {
-		t.Fatalf("hints = %q, want the set walkable and the declaration reachable", got)
-	}
-}
-
-// TestGateSpendsRoomOnTheCasesFirst: in a short window the assertion band is what gives way, not the
-// case rows and not the action line.
-func TestGateSpendsRoomOnTheCasesFirst(t *testing.T) {
-	m, _ := gateFixture(t, true)
-	m.height = 20
-	body := stripMarks(strings.Join(m.bodyLines(m.bodyHeight()), "\n"))
-	if !strings.Contains(body, "run iteration 1") {
-		t.Fatalf("a short window cut the action line:\n%s", body)
-	}
-	for _, want := range []string{"THE SET", "d-1", "d-2", "2 declared"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("the case rows gave way before the band: missing %q\n%s", want, body)
-		}
-	}
-	if strings.Contains(body, "ASSERTIONS ·") {
-		t.Fatalf("the assertion band squeezed the cases out of a short window:\n%s", body)
+	m2.openQualitySkill("dummy")
+	press(m2, "2")
+	if m2.mode != screenQuality || m2.quality.sec != qDojo {
+		t.Fatalf("an open loop still locks the iteration: mode %v section %d (%q)",
+			m2.mode, m2.quality.sec, stripMarks(m2.status))
 	}
 }
 
-// TestAssertionBandNamesTheCut: a list that does not fit says how much it left out, because a list
-// that just stops reads as a complete one.
-func TestAssertionBandNamesTheCut(t *testing.T) {
-	c := runner.QualityCase{Slug: "d-1", Rows: []runner.QualityAssertion{
-		{Text: "one face"}, {Text: "two"}, {Text: "three"}, {Text: "four"},
-	}}
-	out := stripMarks(strings.Join(assertionLines(c, 80, 6), "\n"))
-	if !strings.Contains(out, "ASSERTIONS · D-1") || !strings.Contains(out, "one face") {
-		t.Fatalf("the band does not open with its own name and first row:\n%s", out)
-	}
-	if !strings.Contains(out, "more — enter for the record") {
-		t.Fatalf("the cut is not named:\n%s", out)
-	}
-}
-
-// TestGradedFixtureDoesNotGate: a skill already in the loop opens where it left off, unchanged.
-func TestGradedFixtureDoesNotGate(t *testing.T) {
+// TestAnOpenLoopHasNoBand: a skill already in the loop opens on the menu with the cursor on the
+// iteration, and its set's view draws the cases and nothing about a loop that is already open.
+func TestAnOpenLoopHasNoBand(t *testing.T) {
 	m, _ := qualityFixture(t)
 	m.lane = store.LaneOutput
 	m.openQualitySkill("dummy")
-	if m.quality.gate {
-		t.Fatalf("a graded, asserted set was sent back to the entry")
+	if m.quality.vcursor != qDojo {
+		t.Fatalf("row = %d, want the iteration", m.quality.vcursor)
 	}
-	if m.quality.sec != qDojo {
-		t.Fatalf("section = %d, want the dojo", m.quality.sec)
+	press(m, "1")
+	body := stripMarks(strings.Join(m.bodyLines(m.bodyHeight()), "\n"))
+	if strings.Contains(body, "the loop is not open yet") {
+		t.Fatalf("a graded, asserted set was described as a closed loop:\n%s", body)
+	}
+	if !strings.Contains(body, "dummy-1-one-die") {
+		t.Fatalf("the set's view does not list the cases:\n%s", body)
 	}
 }

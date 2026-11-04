@@ -546,11 +546,11 @@ func (r *runState) liveHints() []hint {
 			// A run that graded its own iteration has nothing left to press g for: the next move is
 			// the failures. An iteration with no verdicts (--no-grade, an older build) still offers it.
 			if r.live.judging {
-				return []hint{{"enter", "the dojo"}, {"v", "activity log"}}
+				return []hint{{"enter", "the iteration"}, {"v", "activity log"}}
 			}
 			return []hint{{"g", "grade it"}, {"enter", "back to the loop"}, {"v", "activity log"}}
 		case runGrade:
-			return []hint{{"enter", "the dojo"}, {"v", "activity log"}}
+			return []hint{{"enter", "the iteration"}, {"v", "activity log"}}
 		}
 		return []hint{{"enter", "back to the loop"}, {"v", "activity log"}}
 	}
@@ -697,14 +697,14 @@ func (m *Model) outputRunBody(h int) []string {
 	default:
 		head = regionHead(w, name, note, true)
 	}
-	out := []string{"", head, gateRule(w), m.outputRunFacts()}
+	out := []string{"", head, laneRule(w), m.outputRunFacts()}
 
 	// The action line is reserved before the table: on a finished run it is the whole point of the
 	// screen, and a short window must cut rows off the set before it cuts "grade it".
 	act := &docWriter{w: w}
 	if ok {
 		if graded {
-			act.action("enter", "the dojo — the failed assertions with the judge's evidence")
+			act.action("enter", "the iteration — the failed assertions with the judge's evidence")
 		} else {
 			act.action("g", "grade it — a run is outputs; the loop opens on the verdicts")
 		}

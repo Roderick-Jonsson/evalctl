@@ -159,7 +159,7 @@ func (m *Model) revisionBody(h int) []string {
 	} else if n := st.selectedCount(); n < len(st.hunks) {
 		right += fmt.Sprintf(" · %d of %d kept", n, len(st.hunks))
 	}
-	out := []string{"", regionHead(w, "PROPOSED REVISION · SKILL.md", right, true), gateRule(w)}
+	out := []string{"", regionHead(w, "PROPOSED REVISION · SKILL.md", right, true), laneRule(w)}
 
 	// The action is reserved first: on a short window the diff loses lines, the key does not.
 	act := &docWriter{w: w}

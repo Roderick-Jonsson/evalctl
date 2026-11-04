@@ -36,16 +36,17 @@ import (
 type screen int
 
 const (
-	screenLane     screen = iota // the front door: the two optimizations
-	screenSkill                  // which skill, with where each one is in the loop
-	screenSections               // iteration or generalization
-	screenFlow                   // the section's steps, one filling the body
-	screenDraft                  // the description being revised
-	screenAsk                    // a yes/no question
-	screenDoc                    // a scrollable document (failures, a report, a log)
-	screenRunLive                // the run, while it runs
-	screenQuality                // output lane: setup, dojo and quality, as three sections on one rail
-	screenRevision               // the agent's proposal for SKILL.md, as a diff against the file
+	screenLane        screen = iota // the front door: the two optimizations
+	screenSkill                     // which skill, with where each one is in the loop
+	screenSections                  // iteration or generalization
+	screenFlow                      // the section's steps, one filling the body
+	screenDraft                     // the description being revised
+	screenAsk                       // a yes/no question
+	screenDoc                       // a scrollable document (failures, a report, a log)
+	screenRunLive                   // the run, while it runs
+	screenQualityMenu               // output lane: the skill's three views, chosen on one screen
+	screenQuality                   // output lane: test cases, iteration or testing quality
+	screenRevision                  // the agent's proposal for SKILL.md, as a diff against the file
 	screenHelp
 )
 
@@ -377,6 +378,8 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.updateSections(msg)
 	case screenFlow:
 		return m, m.updateFlow(msg)
+	case screenQualityMenu:
+		return m, m.updateQualityMenu(msg)
 	case screenQuality:
 		return m, m.updateQuality(msg)
 	case screenRevision:
@@ -419,17 +422,15 @@ func (m *Model) escUp() tea.Cmd {
 		m.mode = screenLane
 	case screenFlow:
 		m.mode = screenSections
-	case screenQuality:
-		// The lane's own levels: a section back to setup, then the skills. The rail is one level of
-		// this screen, and esc has to walk it the way it walks a step's sections.
-		if q := m.quality; q != nil && q.sec != qSetup {
-			m.setQualitySection(qSetup)
-			m.setStatus("setup — the declaration", false)
-			return nil
-		}
-		m.skill = ""
+	case screenQualityMenu:
+		// The lane's own levels: the menu is the skill's screen, and a view is one level in.
 		m.quality = nil
+		m.skill = ""
 		m.mode = screenSkill
+	case screenQuality:
+		// A view goes back to the menu the three were chosen on; esc is one level, every time.
+		m.mode = screenQualityMenu
+		m.setStatus("", false)
 	case screenSections:
 		// The run's block is inside the pane, so esc leaves it before it leaves the screen: one
 		// level up, every time, is the only promise the key has to keep.
@@ -615,15 +616,11 @@ func (m *Model) contextLine(w int) string {
 		}
 		return rail
 	}
-	// The output lane's three sections are its rail, in the same row the trigger lane's steps use:
-	// the sections say where you are, the facts on the right say how far the loop has got. Before the
-	// loop exists there is no row: the entry is a checklist, and a rail above it would offer three
-	// sections of a loop that has nothing in it.
+	// The output lane's three views are reached from the menu and nowhere else, so a view carries no
+	// rail of them: its path already ends in its own name, and the menu above is where the switch is.
+	// What stays is the one row no view counts for itself — the loop's numbers.
 	if m.mode == screenQuality {
-		if m.quality != nil && m.quality.gate {
-			return ""
-		}
-		return m.qualityRail(w)
+		return m.qualityFactsLine(w)
 	}
 	switch m.mode {
 	case screenLane:
@@ -652,6 +649,8 @@ func (m *Model) bodyLines(h int) []string {
 		if m.flow != nil {
 			return m.flow.body(m, h)
 		}
+	case screenQualityMenu:
+		return m.qualityMenuBody(h)
 	case screenQuality:
 		return m.qualityBody(h)
 	case screenAsk:
@@ -737,6 +736,8 @@ func (m *Model) hints() []hint {
 		if m.flow != nil {
 			return m.flow.hints(m)
 		}
+	case screenQualityMenu:
+		return m.qualityMenuHints()
 	case screenQuality:
 		return qualityHints(m)
 	case screenRevision:
@@ -874,7 +875,9 @@ func (m *Model) stateText() string {
 		if m.run != nil && m.run.live != nil {
 			return m.run.live.stateText()
 		}
-	case screenQuality:
+	case screenQualityMenu, screenQuality:
+		// The menu's own line is where the loop stands: the lab's `next` is the one sentence that
+		// says what the disk is waiting for, and the menu is the screen that offers it.
 		if q := m.quality; q != nil && q.lab != nil {
 			if q.lab.Next.Line != "" {
 				return q.lab.Next.Line
@@ -941,6 +944,8 @@ func (m *Model) position() string {
 		return fmt.Sprintf("%d / 2", m.sections.cursor+1)
 	case screenSkill:
 		return fmt.Sprintf("%d / %d", m.skills.cursor+1, max(1, len(m.skillNames())))
+	case screenQualityMenu:
+		return m.qualityMenuPosition()
 	case screenQuality:
 		if q := m.quality; q != nil {
 			switch q.sec {
@@ -1067,23 +1072,25 @@ func (m *Model) helpLines() []string {
 			"  v          the arm's activity log; esc back",
 			"  —          runs per query and dry run are set beside the two sections, on the set's pane",
 		},
-		head("output optimization — the entry, then the loop"),
+		head("output optimization — three views, chosen on one screen"),
 		[]string{
-			"  —          with no graded run the lane opens on the checklist: cases, assertions, run",
+			"  enter      the skill, then the view — the cursor is on the one its disk is asking for",
+			"  1 2 3      test cases, iteration, testing quality — on the menu, and nowhere else",
+			"  esc        one level back: a view to the menu, the menu to the skills",
+			"  —          a view has no key to another view; the rail only says where you are",
+			"  —          the loop is closed until a graded run exists, and only test cases opens then",
 			"  S e        the cases in evals.json · a case's assertions, in the pane it is drawn in",
 			"  R          run the next iteration: every case, both arms, then the judge — one spend",
 			"  g          grade an iteration with no verdicts (--no-grade, an older build); on a graded one",
 			"             it re-grades after an assertion edit, and asks first",
 			"  f          the feedback: what the output got wrong, in your words — empty means it looked fine",
-			"  —          a run grades itself; the loop still opens on the verdicts, never on the outputs",
-			"  1 2 3      setup, dojo, quality — the rail, once there is a graded run to read",
+			"  —          a run grades itself; the loop opens on the verdicts, never on the outputs",
 			"  j k        walk the cases or the failures; the pane is the record behind the row",
 			"  f E        the feedback for the case · SKILL.md, which is what a revision changes",
 			"  p          ask the revising agent for a new SKILL.md — the diff lands on its own screen,",
 			"             one hunk per change: space ticks a hunk off, n jumps to the next, a writes",
-			"  [ ]        the iteration the dojo is reading",
-			"  enter      the dojo on this case · the iteration's report from the ranking",
-			"  esc        one section back, then the skills",
+			"  [ ]        the iteration the iteration view is reading",
+			"  enter      the iteration on this case · its evidence from the testing table",
 		},
 		dim("every write backs the old file up under .evalctl/backups/"),
 	)

@@ -483,13 +483,50 @@ last iteration scored on each arm, and how many iterations it has measured.
   learning-path            2        —        —       2
 ```
 
-`enter` opens the loop at the section the disk is asking for: **setup** when nothing is declared yet,
-the **dojo** when the newest iteration has failures to read, **quality** when the loop is waiting on a
-grade or on a rerun. The three sections are on one rail — `1` `2` `3`, `tab` for the next and
-`shift+tab` for the previous — because a section reachable only by a key nobody can see is a section
-nobody finds. `esc` is one level up in the lane's own ladder: a section back to setup, then the skills.
+`enter` opens the skill's own screen: the lane's three jobs as three rows, the choice on the left and
+the row under the cursor said properly on the right — the same split as the door and the skill
+chooser, because the three views are a choice and not a step of one run.
 
-**1 · setup — declare the case.** The left column is the cases, one slug and one declaration mark each
+```
+ output optimization > dummy                                                         evalctl v0.9.0 · 11:06
+▌ SECTIONS                               │   TEST CASES
+  ────────────────────────────────────   │   ───────────────────────────────────────────────────────
+▶ test cases                             │   the set the loop is measured on
+    3 cases · 6 assertions               │   A case is a prompt, the expected output, the fixtures it stages
+                                         │   and the assertions a judge reads — and an assertion is a
+  iteration                              │   sentence a PASS or a FAIL can be written against, which a
+    iteration #2 · 1 assertion failed    │   total is not.
+                                         │
+  testing quality                        │   It writes
+    best #2 · 2 iterations on disk       │   the set        dummy/evals/evals.json
+                                         │   fixtures       dummy/evals/files/<slug>/
+                                         │
+                                         │   → enter  the cases · S opens evals.json, e writes the assertions
+```
+
+The cursor is the one thing the disk decides — it opens on the view that is asking for work: **test
+cases** while the loop is closed, **iteration** when the newest run has failures to read, **testing
+quality** when the trend is all there is to look at. `1` `2` `3` open a view **here and only here**: the
+menu is the one screen where the three are a choice. Inside a view there is no rail of the three: the
+view's own name is the bar path's last segment, and the row under the bar is only the loop's numbers —
+`3 cases · 6 assertions · iteration #2 · best #2` — which no view counts for itself. No key changes
+view; `esc` is the way back to the menu, and `esc` again is the skills.
+
+**The loop starts closed**, and that is a state of the test cases view rather than a screen of its own:
+a band above the case list draws the four steps as chips — `✓ cases ● assertions ○ run` — and the one
+errand that opens the loop with the key that does it (`→ e an assertion for every case…`). A run over a
+case nothing can judge spends both arms on outputs nobody can score, so `R` is not offered there and
+refuses with the reason if pressed. The band goes when the first verdict lands, and comes back if a case
+is left unasserted later — it is the disk's reading, not a screen the lane is stuck on.
+
+**While the loop is closed, the other two views are shut.** The menu draws them dim with
+`locked until the loop opens`, and the pane under the cursor says what opens them — there is no action
+line on a row that cannot open, and `enter` or its number refuses in the status row rather than
+opening a screen that would answer "nothing measured yet". The way in is the declaration: cases, an
+assertion on every one, the first run — the set is where the loop is opened, so the set is the only
+view a closed loop offers.
+
+**1 · test cases — declare the case.** The left column is the cases, one slug and one declaration mark each
 (`✓` prompt and assertions, `○` prompt alone, `✗` nothing yet), and nothing else: the rates and the
 verdicts belong to the sections that read them. The pane beside it shows **the case as its own record
 writes it** — `prompt`, `expected_output`, `files` (the fixtures the run root is given, or `none — the
@@ -497,8 +534,8 @@ run root starts empty`), `assertions` — the fields keeping the file's names an
 because the pane is meant to be read as the case and not as a summary of it.
 
 ```
- output optimization > dummy > setup                                                         evalctl v0.9.0 · 11:06
- ● 1 setup ─── 2 dojo ─── 3 quality                          3 cases · 6 assertions · iteration #2 · best #2
+ output optimization > dummy > test cases                                                    evalctl v0.9.0 · 11:06
+ 3 cases · 6 assertions · iteration #2 · best #2
                        │
 ▌ CASES                │   dummy-1-one-die                                                       #1
   ──────────────────   │   ─────────────────────────────────────────────────────────────────
@@ -534,7 +571,7 @@ judge reads them in that order, so what an expectation is checked against is wri
 expectation is: `every Sub-Topic appears exactly once — facts: ST-1 … ST-9, as in PS.md`. A second array
 of facts would have to be kept in step by position, which is the one join this tool already distrusts.
 
-**2 · dojo — work one iteration.** The left rail is the iteration's **failed** assertions, one row per
+**2 · iteration — work one iteration.** The left rail is the iteration's **failed** assertions, one row per
 case and arm; the passing ones are counted under it (`+ 4 passed in both arms`), because an assertion
 both arms pass measures the model and not the procedure. The pane works the one under the cursor: the
 sentence the judge graded, the judge's words for it, the end of that arm's execution transcript, and the
@@ -544,8 +581,8 @@ in the workspace, not in the tree, and it is backed up like one); `E` hands `SKI
 because the revision is a document and a text field is not an editor.
 
 ```
- output optimization > dummy > dojo                                                          evalctl v0.9.0 · 11:06
- 1 setup ─── ● 2 dojo ─── 3 quality                          3 cases · 6 assertions · iteration #2 · best #2
+ output optimization > dummy > iteration                                                     evalctl v0.9.0 · 11:06
+ 3 cases · 6 assertions · iteration #2 · best #2
                              │
 ▌ FAILED                  1  │   dummy-2-three-dice                                      #2 · without ✗
   ────────────────────────   │   ─────────────────────────────────────────────────────────────────
@@ -569,14 +606,14 @@ That is the loop's middle, and it is the part that used to be a sentence in the 
 the note were read into a pane that had no way to answer them. `n` is the answer, and it lands in the
 same `feedback.json` the pane quotes.
 
-**3 · quality — judge the trend.** Every iteration's two rates, the difference between them, how much
+**3 · testing quality — judge the trend.** Every iteration's two rates, the difference between them, how much
 of the set ran, and how much of the grading list the judge saw. `enter` opens that iteration on the
-dojo — the question a table row raises is what happened in it, and the answer is its evidence, not its
+iteration view — the question a table row raises is what happened in it, and the answer is its evidence, not its
 own report (`r` opens `report.md`).
 
 ```
- output optimization > dummy > quality                                                       evalctl v0.9.0 · 11:06
- 1 setup ─── 2 dojo ─── ● 3 quality                          3 cases · 6 assertions · iteration #2 · best #2
+ output optimization > dummy > testing quality                                               evalctl v0.9.0 · 11:06
+ 3 cases · 6 assertions · iteration #2 · best #2
 
 ▌ ITERATIONS                                                       best = highest with-skill rate, complete only
     ITER    WITH WITHOUT Δ w−w/o   RAN   JUDGED  WHEN
@@ -609,13 +646,16 @@ carry no verdicts — a run made with `--no-grade`, by a build older than the fo
 failed — is graded by it, and an iteration that already has verdicts is re-graded by it **after asking**,
 because that is the one thing an assertion edit leaves behind: the verdicts on screen describe the old
 list. `evalctl run --no-grade` is the same trade from the shell. A finished run or grade lands on the
-dojo, because the next move after a spend is to read what failed.
+iteration view, because the next move after a spend is to read what failed.
 
 ### The frame
 
 The bar carries the path — `trigger optimization > skill > step` — and the tool with its build at the
 right edge. The rail sits under it, and the loop's own numbers sit at the right end of the rail's row.
-The output lane draws the same rail with its three sections, `1 setup ─── 2 dojo ─── 3 quality`, and the loop's numbers at its right end.
+The output lane has no rail under the bar, in a view or on its menu: the three views are a choice, and
+a choice has one screen. Inside a view the name is already the path's last segment, so a rail of its
+siblings would be the menu drawn again above a screen with no key to any of them; what stands there
+instead is the loop's numbers, the one reading no view counts for itself.
 
 **Where the keys are.** A screen here is one or more *regions* — a list, a table, a pane, a field — and
 exactly one of them has the keystrokes. It says so in two places and no more: the region that has them

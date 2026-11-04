@@ -64,7 +64,7 @@ func TestARunThatGradedEndsAsOneRecord(t *testing.T) {
 	finish(m, "done")
 	body := stripMarks(strings.Join(m.bodyLines(m.bodyHeight()), "\n"))
 	for _, want := range []string{"RUN + GRADED · ITERATION 1", "4 of 4 arms",
-		"100% with the skill", "75% without", "graded", "the dojo — the failed assertions"} {
+		"100% with the skill", "75% without", "graded", "the iteration — the failed assertions"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the finished run is missing %q:\n%s", want, body)
 		}
@@ -131,7 +131,7 @@ func TestGOnAGradedIterationAsksBeforeSpending(t *testing.T) {
 	}
 }
 
-// TestGradeFinishShowsTheRates: a finished grade is the two rates per case and the dojo as the way
+// TestGradeFinishShowsTheRates: a finished grade is the two rates per case and the iteration as the way
 // on, because the number is what the run was for and the failures are what a revision starts from.
 func TestGradeFinishShowsTheRates(t *testing.T) {
 	m, _ := qualityFixture(t)
@@ -141,7 +141,7 @@ func TestGradeFinishShowsTheRates(t *testing.T) {
 	m.reloadQuality()
 	body := stripMarks(strings.Join(m.bodyLines(m.bodyHeight()), "\n"))
 	for _, want := range []string{"GRADED · ITERATION 1", "100% with the skill", "graded",
-		"the dojo — the failed assertions"} {
+		"the iteration — the failed assertions"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the finished grade is missing %q:\n%s", want, body)
 		}
@@ -167,11 +167,13 @@ func TestGFinishesAnUngradedIterationWithoutAsking(t *testing.T) {
 	}
 	m = newModel(s)
 	m.width, m.height = 120, 34
+	// An ungraded run leaves the loop closed, so the two views after the set are locked: the errand
+	// is `g`, and it is asked for in the set's view — which is where the band says so.
 	m.openQualitySkill("dummy")
-	press(m, "2")
+	press(m, "1")
 	press(m, "g")
 	if m.mode != screenRunLive {
-		t.Fatalf("g on an ungraded iteration = mode %v, want the grading run", m.mode)
+		t.Fatalf("g on an ungraded iteration = mode %v, want the grading run (status %q)", m.mode, stripMarks(m.status))
 	}
 	if m.run == nil || m.run.kind != runGrade || !strings.Contains(m.run.scope, "grading run · iteration 2") {
 		t.Fatalf("run = %+v, want the judge on iteration 2", m.run)

@@ -59,7 +59,7 @@ per the guide they are added after the first graded iteration, so a case without
 whose shape is not known yet, not a case with an empty list. `evalctl` treats them as part of the
 format rather than a stray key: `evalctl skills` counts them per skill (`ASR 2/3`), the case view
 lists them, `evalctl edit … --assertions` replaces them (one per line), and a search reads them.
-The output lane's setup section shows the whole list with both arms' verdicts and writes it in
+The output lane's test cases view shows the whole list with both arms' verdicts and writes it in
 place: `e` opens it as one field in the pane, where the list is drawn, `ctrl+s` saves, `esc`
 discards — the same splitter as the CLI, so a list typed in the TUI and one typed in a shell land
 in the file identically. Facts an assertion is checked against ride in its own sentence

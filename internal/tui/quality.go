@@ -15,41 +15,46 @@ import (
 	"evalctl/internal/store"
 )
 
-// The output lane has three jobs, and they are three sections on one rail — after an entry that is
-// not one of them.
+// The output lane has three jobs, and they are three views on one menu.
 //
-//   - the ENTRY is not a section because it is not part of the loop: it is what has to be true
-//     before a loop exists. A set of cases, an assertion on every one of them, a run, and a grade of
-//     that run. The lane opens on it whenever the disk says the loop is still closed, and the rail,
-//     the dojo and the ranking are unreachable from it — a section offered before there is anything
-//     in it is a screen that answers "nothing measured yet" three times.
-//   - SETUP declares the case: the skill it belongs to, the prompt, the expected output, the fixtures
-//     it stages and the assertions it will be judged on. This is the only place the declaration is
-//     edited, because a case is written before anything can be measured against it.
-//   - DOJO works one iteration: the assertions that failed, the judge's evidence for each, the arm's
-//     execution transcript, and the human note. That is the diagram's loop — a person reads, the skill
-//     is revised, the next iteration measures it — so it is one screen and not a document opened off
-//     another.
-//   - QUALITY judges the trend: every iteration's two rates against each other and against the last
-//     one, and which complete iteration is the best.
+//   - TEST CASES is the set the loop is measured on: the skill, the prompt, the expected output,
+//     the fixtures a case stages, and the assertions it will be judged on. This is the only place
+//     the declaration is edited, because a case is written before anything can be measured against
+//     it, and it is the first thing to come back to when an assertion turns out to be unmeasurable.
+//   - ITERATION works one iteration: the assertions that failed, the judge's evidence for each, the
+//     arm's execution transcript, and the human's feedback. That is the guide's loop — a person
+//     reads, the skill is revised, the next iteration measures it — so it is one screen and not a
+//     document opened off another.
+//   - TESTING QUALITY judges the trend: every iteration's two rates against each other and against
+//     the last one, and which complete iteration is the best.
 //
-// They used to be two screens and a hidden toggle: the workbench carried declaration, work and rank
-// at once, and the ranking was reachable only through `tab`. A section that is not on the rail is a
-// section nobody finds, so all three are on the rail the way the trigger lane's sections are, and the
-// ranking stops being a mode of the workbench.
+// The loop can also be CLOSED — no set, a case with no assertion, nothing run, or a run that nothing
+// judged. That is not a fourth view; it is the state of the first one, so the test cases view says
+// it in a band above the case list, with the one errand that opens the loop and the key that does
+// it. It used to be a screen of its own, unnumbered, that the lane opened on and that could not be
+// returned to once it was behind you: a state you cannot look at again is a state you have to
+// remember instead.
+//
+// The three used to be two screens and a hidden toggle: the workbench carried declaration, work and
+// rank at once, and the ranking was reachable only through `tab`. Then they were a rail — right, but
+// you still did not choose one, the disk picked for you. A view you did not choose is a view you
+// cannot find again; the menu is the one screen that says what the lane's three jobs are.
 const (
-	qSetup   = iota // declare: the case's record and its assertion list
-	qDojo           // work: one iteration's failures, transcripts and the note
+	qSetup   = iota // declare: the cases, their records and their assertions
+	qDojo           // work: one iteration's failures, transcripts and feedback
 	qQuality        // judge: the iterations against each other
 )
 
+// qualitySections is the lane's three views in the order the loop walks them: the menu's rows, the
+// rail's chips, and one name per screen — so a view is called the same thing in all three places.
 var qualitySections = []struct {
-	sec  int
-	name string
+	sec   int
+	name  string
+	blurb string
 }{
-	{qSetup, "setup"},
-	{qDojo, "dojo"},
-	{qQuality, "quality"},
+	{qSetup, "test cases", "the set the loop is measured on"},
+	{qDojo, "iteration", "one iteration, worked: failures, evidence, feedback"},
+	{qQuality, "testing quality", "the trend: every iteration's two rates"},
 }
 
 // qualityState is the output lane's reading of the disk: the lab (one row per iteration), the cases
@@ -78,16 +83,10 @@ type qualityState struct {
 	feedback *feedbackState
 	first    bool
 
-	// gate is the initialization checklist, and the lane opens on it while the loop is closed: no
-	// set, a case with nothing to judge, nothing run, or a run with no verdict. The sections below
-	// it are the loop, and a loop with no graded run has nothing to show but three ways of saying
-	// "nothing measured yet".
-	//
-	// gateOff records that the operator asked for the declaration anyway. The gate is where the
-	// disk says you are, not a lock on the files: the first run's assertions are written before the
-	// first run, and that is the declaration's job.
-	gate    bool
-	gateOff bool
+	// vcursor is the menu's row: which of the three views the skill's screen is offering. It is on
+	// the state and not on the model because it is a reading of this skill's disk — the row the
+	// lane opens on is the one the loop is waiting in.
+	vcursor int
 }
 
 func (q *qualityState) iteration() *runner.QualityIteration {
@@ -143,24 +142,20 @@ func (q *qualityState) caseOf(slug string) *runner.QualityCase {
 // sectionName is where the path bar says you are inside the lane.
 func (q *qualityState) sectionName() string {
 	if q == nil {
-		return "setup"
-	}
-	if q.gate {
-		// The bar names the job, not a section: there is no section yet, and saying "setup" over a
-		// checklist would put the declaration's name on the entry's work.
-		return "init"
+		return qualitySections[qSetup].name
 	}
 	for _, s := range qualitySections {
 		if s.sec == q.sec {
 			return s.name
 		}
 	}
-	return "setup"
+	return qualitySections[qSetup].name
 }
 
-// openQualitySkill opens one skill's output loop at the section the disk is asking for: the dojo when
-// the newest iteration has failures to read, setup otherwise. A loop left mid-iteration reopens where
-// it stopped, which is the whole point of reading the disk instead of remembering the session.
+// openQualitySkill opens one skill's output loop where the disk is asking for it: the menu, with the
+// cursor on the view that is asking for work. The lane opens on the choice and not inside a section,
+// because the three views are three jobs and which one you want is not something a directory name
+// can decide for you — the cursor is the part the disk gets to choose.
 func (m *Model) openQualitySkill(name string) {
 	if m.store.Skill(name) == nil {
 		m.setStatus("unknown skill "+name, true)
@@ -170,15 +165,14 @@ func (m *Model) openQualitySkill(name string) {
 	m.lane = store.LaneOutput
 	m.quality = &qualityState{}
 	m.reload()
-	m.mode = screenQuality
+	m.mode = screenQualityMenu
 	if m.quality.lab == nil {
 		return
 	}
-	if m.quality.gate {
-		// The loop does not exist yet, so the lane opens on the checklist that builds it rather
-		// than on a section of a loop with nothing in it.
+	m.quality.vcursor = menuRowFor(m.quality.lab)
+	if m.quality.lab.InitPending {
 		if _, text := gateNext(m.quality.lab); text != "" {
-			m.setStatus(name+" · initialization — "+text, false)
+			m.setStatus(name+" · test cases — "+text, false)
 		}
 		return
 	}
@@ -186,15 +180,11 @@ func (m *Model) openQualitySkill(name string) {
 		last := m.quality.lab.Iterations[n-1]
 		switch {
 		case len(last.Failed) > 0:
-			m.setQualitySection(qDojo)
-			m.quality.selectFirstFailed()
 			m.setStatus(fmt.Sprintf("%s · iteration %d failed %s — read them, revise, R runs iteration %d",
 				name, last.N, plural(len(last.Failed), "assertion"), last.N+1), false)
 		case !last.Complete:
-			m.setQualitySection(qQuality)
 			m.setStatus(fmt.Sprintf("%s · iteration %d owes verdicts — g grades it", name, last.N), false)
 		default:
-			m.setQualitySection(qQuality)
 			m.setStatus(fmt.Sprintf("%s · iteration %d is clean — R runs the next one", name, last.N), false)
 		}
 		return
@@ -234,11 +224,6 @@ func (m *Model) reloadQuality() {
 	}
 	q := m.quality
 	q.lab = lab
-	// The gate is the disk's verdict on whether a loop exists yet, not the session's memory of a
-	// screen: it closes the moment the first verdict lands. gateOff only remembers that the
-	// operator stepped past it into the declaration.
-	wasGate := q.gate
-	q.gate = lab.InitPending && !q.gateOff
 	// Keep the iteration the operator is looking at while it still exists; otherwise open the
 	// newest, which is the one the loop is waiting on.
 	if len(lab.Iterations) > 0 {
@@ -268,13 +253,6 @@ func (m *Model) reloadQuality() {
 		q.rsel = bestRow(q.lab)
 	}
 	q.first = false
-	if wasGate && !q.gate {
-		// The entry's last errand was just done, so the loop is open: it opens on the failures of
-		// the run that opened it, which is what there now is to read.
-		q.sec = qDojo
-		q.feedback, m.assertEdit = nil, nil
-		q.selectFirstFailed()
-	}
 	q.syncLog()
 }
 
@@ -360,220 +338,89 @@ func (m *Model) qualityBody(h int) []string {
 	if q == nil || q.lab == nil {
 		return fitRows([]string{"", "  " + dimStyle.Render("reading the workspace…")}, h)
 	}
-	if q.gate {
-		return m.gateBody(h)
-	}
 	switch q.sec {
 	case qDojo:
 		return m.dojoBody(h)
 	case qQuality:
 		return m.qualityTableBody(h)
 	}
-	return m.setupBody(h)
+	return m.testCasesBody(h)
 }
 
-// ---------------------------------------------------------------- the entry: is there a loop yet
+// ---------------------------------------------------------------- test cases: the set, and the loop
 
-// gateBody is the entry, as two tables and one action line: the four steps the loop needs before it
-// exists — numbered, in the order they have to be done, with the state each is in and the key that
-// moves it — and the set those steps are about.
+// testCasesBody is the first view: the set the loop is measured on, and — while the loop is still
+// closed — the band that says why and what opens it. The band is part of this view and not a screen
+// of its own, because "the loop is not open yet" is a fact about the set, and a screen you can only
+// see once (the old entry) is a screen you cannot check the set against later.
+func (m *Model) testCasesBody(h int) []string {
+	band := m.loopBand(m.width)
+	if band == nil {
+		return m.setupBody(h)
+	}
+	// A band with no room under it is not a view: the case list is what this screen is about, so a
+	// window too short for both spends its rows on the set and drops the band's own tail.
+	rest := h - len(band)
+	if rest < 6 {
+		return fitRows(band, h)
+	}
+	return fitRows(append(band, m.setupBody(rest)...), h)
+}
+
+// loopBand is the loop's state as one band above the set: the four steps the loop needs before it
+// exists, as chips in the order they have to be done, then the one errand it is asking for and the
+// key that does it.
 //
-// It used to be a checklist of sentences. A screen whose lines are prose has no columns to scan and
-// no bands to orient by, and this one is read by someone who has never seen the lane: a header row,
-// a rule and a fixed label column are what make "which step, and what is it waiting for" one glance.
-//
-// It draws no rail. The sections are the loop, and offering three of them before the loop exists is
-// three screens answering "nothing measured yet".
-func (m *Model) gateBody(h int) []string {
+// It used to be a table of four rows with a STEP/WHAT/NOW/KEY header, and then a second table of the
+// cases under it — two tables competing for one window, and both of them re-stating the set the
+// screen was already going to draw. A chip row says the same four facts in one line, and it reads in
+// the same register as the step rail on every other screen here.
+func (m *Model) loopBand(w int) []string {
 	lab := m.quality.lab
-	done := 0
-	for _, c := range lab.Checks {
+	if lab == nil || !lab.InitPending {
+		return nil
+	}
+	done, current := 0, -1
+	for i, c := range lab.Checks {
 		if c.OK {
 			done++
+			continue
 		}
-	}
-	// The action is reserved before either table is drawn: the one line that says what to press must
-	// not be the line a short window cuts, and the set is the band that can afford to lose its tail.
-	key, text := gateNext(lab)
-	if key == "" {
-		key, text = "enter", "the loop is open — the declaration is behind this screen"
-	}
-	act := &docWriter{w: m.width}
-	act.action(key, text)
-
-	out := m.gateSteps(done)
-	if room := h - len(out) - len(act.lines); room > 0 {
-		out = append(out, m.gateSet(room)...)
-	}
-	out = append(out, act.lines...)
-	return fitRows(out, h)
-}
-
-// The two tables share one grid: a two-cell cursor column, a fixed label column, then the detail.
-const (
-	gateStepW = 4  // the step number
-	gateWhatW = 12 // the step's name
-	gateKeyW  = 3  // the key that does it, at the right edge
-	gateCaseW = 22 // the longest slug the case table holds before it is cut
-)
-
-func gateRule(w int) string {
-	return "  " + dimStyle.Render(strings.Repeat(glyphs.Rule, min(64, max(10, w-4))))
-}
-
-// gateSteps is the four steps as a table. The step the entry is asking for carries the here-mark and
-// the bright register; the ones after it are quiet, and the ones before it are done — so the row the
-// screen is about is the only row that reads as an instruction.
-func (m *Model) gateSteps(done int) []string {
-	lab := m.quality.lab
-	w := m.width
-	current := -1
-	for i, c := range lab.Checks {
-		if !c.OK {
+		if current < 0 {
 			current = i
-			break
 		}
 	}
-	// The detail column is measured, not guessed: the four keys line up in one column just past the
-	// longest detail, which keeps them near the sentence they act on instead of floating at the far
-	// edge of a wide window.
-	nowW := lipgloss.Width("NOW")
-	for _, c := range lab.Checks {
-		nowW = max(nowW, lipgloss.Width(c.Detail))
-	}
-	nowW = min(nowW, max(24, w-gateStepW-gateWhatW-gateKeyW-14))
-	head := "    " + dimStyle.Render(padCell("STEP", gateStepW, true)) + "  " +
-		dimStyle.Render(padCell("WHAT", gateWhatW, false)) + "  " +
-		dimStyle.Render(padCell("NOW", nowW, false)) + "  " + dimStyle.Render("KEY")
-	out := []string{"", regionHead(w, "INITIALIZATION", fmt.Sprintf("%d of %d", done, len(lab.Checks)), true),
-		gateRule(w), head}
+	out := []string{"", regionHead(w, "TEST CASES",
+		fmt.Sprintf("the loop is not open yet · %d of %d", done, len(lab.Checks)), true), laneRule(w)}
+
+	var chips []string
 	for i, c := range lab.Checks {
-		mark, name, detail, fix := "  ", dimStyle.Render(padCell(c.Key, gateWhatW, false)),
-			dimStyle.Render(padCell(ellipsis(c.Detail, nowW), nowW, false)), dimStyle.Render(c.Fix)
-		if c.OK {
-			// A done step keeps its tick: "2 of 4" in the corner is a number, two ticks are a record.
-			mark = styleOn.Render(glyphs.Done) + " "
+		mark, name := dimStyle.Render(glyphs.Pending), dimStyle.Render(c.Key)
+		switch {
+		case c.OK:
+			// A done step keeps its tick: a count in the corner is a number, the ticks are a record.
+			mark = styleOn.Render(glyphs.Done)
+		case i == current:
+			mark, name = stepHere.Render(glyphs.Here), titleStyle.Render(c.Key)
 		}
-		if i == current {
-			mark = stepHere.Render(glyphs.Here) + " "
-			name = titleStyle.Render(padCell(c.Key, gateWhatW, false))
-			detail = colText.Render(padCell(ellipsis(c.Detail, nowW), nowW, false))
-			fix = titleStyle.Render(c.Fix)
-		}
-		if c.OK {
-			fix = ""
-		} else {
-			fix = padCell(fix, gateKeyW, true)
-		}
-		out = append(out, mark+dimStyle.Render(padCell(fmt.Sprintf("%d", i+1), gateStepW, true))+
-			"  "+name+"  "+detail+"  "+fix)
+		chips = append(chips, mark+" "+name)
+	}
+	out = append(out, "  "+strings.Join(chips, "  "))
+
+	if key, text := gateNext(lab); key != "" {
+		act := &docWriter{w: w}
+		act.action(key, text)
+		// The action's own leading blank is the gutter the columns below already get from their
+		// region head: keeping both would spend a row of a short window on white space.
+		out = append(out, act.lines[1:]...)
 	}
 	return out
 }
 
-// gateSet is the declaration the entry is about: the cases as a table, then the selected case's
-// assertions as their own numbered band. "5 assertions" is a number nobody can check from this
-// screen, and the entry is the last place to change the set before it costs a run.
-//
-// The list is walked with j and k, so the assertions under it are the ones of the case the cursor is
-// on — a case at a time, because a set of six cases with three assertions each is not a block that
-// fits, and a list cut mid-assertion reads as a declaration that ends there.
-func (m *Model) gateSet(room int) []string {
-	q := m.quality
-	if len(q.cases) == 0 || room < 6 {
-		return nil
-	}
-	w := m.width
-	const assertW = 10
-	head := "    " + dimStyle.Render(padCell("CASE", gateCaseW, false)) + "  " +
-		dimStyle.Render(padCell("ASSERTIONS", assertW, true)) + "  " + dimStyle.Render("STATE")
-	out := []string{"", regionHead(w, "THE SET", plural(len(q.cases), "case"), false), gateRule(w), head}
-	// The case rows are spent first and the assertion band gets what is left: the list is the set, and
-	// a band that would push the last case off the screen is the wrong band to keep.
-	// The band is four lines (a blank, its head, its rule and its column names), and it is only worth
-	// reserving when at least one case row survives the reservation. Measuring that against the rows
-	// already drawn — and not against a constant — is what keeps a window one line taller from turning
-	// the case table into "… 2 more cases".
-	limit := room - 4
-	if limit < len(out)+1 {
-		limit = room
-	}
-	shown := 0
-	for i, c := range q.cases {
-		if len(out) >= limit {
-			break
-		}
-		mark := "  "
-		if i == q.sel {
-			mark = cursorMark.Render(glyphs.Cursor)
-		}
-		line := mark + colText.Render(padCell(c.Slug, gateCaseW, false)) + "  " +
-			colText.Render(padCell(fmt.Sprintf("%d", len(c.Rows)), assertW, true)) + "  " +
-			caseState(c)
-		if i == q.sel {
-			line = selected(line)
-		}
-		out = append(out, line)
-		shown++
-	}
-	if shown < len(q.cases) {
-		out = append(out, "    "+dimStyle.Render(fmt.Sprintf("… %d more cases", len(q.cases)-shown)))
-	}
-	if c := q.caseAt(); c != nil {
-		out = append(out, assertionLines(*c, w, room-len(out))...)
-	}
-	return out
-}
-
-// caseState is the case table's last column in words: a newcomer should not have to learn a glyph to
-// find out that a case is still a stub.
-func caseState(c runner.QualityCase) string {
-	switch {
-	case strings.TrimSpace(c.Prompt) == "":
-		return statusBad.Render("empty")
-	case len(c.Rows) == 0:
-		return dimStyle.Render("prompt only")
-	}
-	return dimStyle.Render("declared")
-}
-
-// assertionLines is the selected case's list, in its own band under the set: numbered, because
-// "assertion 2 failed" is a sentence the dojo will use, and the numbers are what it counts by. One
-// line stays reserved for the count of what did not fit — a list that just stops reads as complete.
-func assertionLines(c runner.QualityCase, w, room int) []string {
-	const indent = "   "
-	if room < 2 {
-		return nil
-	}
-	out := []string{"", regionHead(w, "ASSERTIONS · "+strings.ToUpper(c.Slug),
-		plural(len(c.Rows), "row"), false), gateRule(w)}
-	if len(out)+1 > room {
-		return out[:room]
-	}
-	if len(c.Rows) == 0 {
-		return append(out, indent+dimStyle.Render("none declared — e writes the first one"))
-	}
-	hidden := 0
-	for i, a := range c.Rows {
-		block := wrapPlain(a.Text, max(10, w-10))
-		if len(out)+len(block) > room-1 {
-			hidden = len(c.Rows) - i
-			break
-		}
-		for j, line := range block {
-			if j == 0 {
-				out = append(out, indent+dimStyle.Render(padCell(fmt.Sprintf("%d", i+1), 2, true))+
-					"   "+colText.Render(line))
-				continue
-			}
-			out = append(out, indent+"     "+colText.Render(line))
-		}
-	}
-	if hidden > 0 {
-		out = append(out, indent+dimStyle.Render(fmt.Sprintf("… %s more — enter for the record",
-			plural(hidden, "assertion"))))
-	}
-	return out
+// laneRule is the quiet rule under a region head inside the lane, at the width a head gets: it is
+// the same mark the case list and the tables draw, and one rule per region is the whole grammar.
+func laneRule(w int) string {
+	return "  " + dimStyle.Render(strings.Repeat(glyphs.Rule, min(64, max(10, w-4))))
 }
 
 // gateNext is the one errand the entry is asking for: the first step that is not done, with the key
@@ -741,10 +588,13 @@ func (m *Model) casePane(w, h int) []string {
 	// The action line is reserved before anything is measured against the window: the one line that
 	// says what to press must not be the one a short window cuts.
 	act := &docWriter{w: w}
-	if it := q.iteration(); it != nil && !it.Complete {
-		act.action("e", "the assertions · g grades this iteration · 2 the dojo")
-	} else {
-		act.action("e", "the assertions · 2 the dojo · R runs the next iteration")
+	switch {
+	case q.lab != nil && q.lab.InitPending:
+		// No run is offered while the loop is closed: a run over a set with a case nothing can judge
+		// is the spend this lane exists to prevent, and the band above says which key opens it.
+		act.action("e", "the assertions · S opens evals.json")
+	default:
+		act.action("e", "the assertions · S evals.json · R runs the next iteration")
 	}
 	room := max(1, h-len(act.lines))
 
@@ -1286,20 +1136,11 @@ func (m *Model) updateQuality(msg tea.KeyMsg) tea.Cmd {
 	if q == nil {
 		return nil
 	}
-	if q.gate {
-		return m.updateGate(msg)
-	}
-	// The rail is the lane's first key of every section, so it is read before the section's own.
+	// A view is entered from the menu and left with esc; inside one, nothing switches views. The
+	// keys here are the view's own, plus the two spends that belong to the loop rather than to the
+	// screen it is standing on — a lane you can jump around inside is a lane where "where am I" is a
+	// question you ask twice.
 	switch msg.String() {
-	case "1", "2", "3":
-		m.setQualitySection(int(msg.String()[0] - '1'))
-		return nil
-	case "tab":
-		m.setQualitySection((q.sec + 1) % len(qualitySections))
-		return nil
-	case "shift+tab":
-		m.setQualitySection((q.sec + len(qualitySections) - 1) % len(qualitySections))
-		return nil
 	case "g":
 		return m.startGrading()
 	case "R":
@@ -1312,45 +1153,6 @@ func (m *Model) updateQuality(msg tea.KeyMsg) tea.Cmd {
 		return m.updateQualityTable(msg)
 	}
 	return m.updateSetup(msg)
-}
-
-// updateGate is the entry's keys: the one errand it is asking for, the declaration behind it, and
-// the set itself — which is walkable, because the assertions are what the run will be judged on and
-// this is the last screen before it costs one. `2` and `3` are answered with what the loop is still
-// waiting on instead of a section, because there is no section yet to go to.
-func (m *Model) updateGate(msg tea.KeyMsg) tea.Cmd {
-	q := m.quality
-	switch msg.String() {
-	case "j", "down":
-		q.sel = min(q.sel+1, max(0, len(q.cases)-1))
-	case "k", "up":
-		q.sel = max(0, q.sel-1)
-	case "home":
-		q.sel = 0
-	case "G", "end":
-		q.sel = max(0, len(q.cases)-1)
-	case "R":
-		return m.startQualityRun()
-	case "g":
-		return m.startGrading()
-	case "S":
-		return m.editCaseFile()
-	case "e":
-		if q.caseAt() == nil {
-			m.setStatus("no case to judge yet — S opens evals.json", true)
-			return nil
-		}
-		q.gate, q.gateOff = false, true
-		return m.openAssertEditor()
-	case "enter", "1", "tab":
-		q.gate, q.gateOff = false, true
-		m.setStatus("the declaration — e writes a case's assertions, S opens evals.json", false)
-	case "2", "3":
-		if _, text := gateNext(q.lab); text != "" {
-			m.setStatus("the loop is not open yet — "+text, true)
-		}
-	}
-	return nil
 }
 
 func (m *Model) updateSetup(msg tea.KeyMsg) tea.Cmd {
@@ -1368,9 +1170,6 @@ func (m *Model) updateSetup(msg tea.KeyMsg) tea.Cmd {
 		return m.openAssertEditor()
 	case "S":
 		return m.editCaseFile()
-	case "enter":
-		// The dojo reads the same cursor the declaration does: enter on a case means "work this one".
-		m.setQualitySection(qDojo)
 	}
 	return nil
 }
@@ -1430,7 +1229,7 @@ func (m *Model) stepIteration(delta int) {
 	}
 	m.quality.iter, m.quality.sel, m.quality.top = l.Iterations[next].N, 0, 0
 	m.reloadQuality()
-	m.setStatus(fmt.Sprintf("iteration %d of %d on the dojo", m.quality.iter, len(l.Iterations)), false)
+	m.setStatus(fmt.Sprintf("iteration %d of %d in the iteration view", m.quality.iter, len(l.Iterations)), false)
 }
 
 func (m *Model) updateQualityTable(msg tea.KeyMsg) tea.Cmd {
@@ -1451,7 +1250,7 @@ func (m *Model) updateQualityTable(msg tea.KeyMsg) tea.Cmd {
 			q.iter, q.sel, q.top = q.lab.Iterations[q.rsel].N, 0, 0
 			m.reloadQuality()
 			m.setQualitySection(qDojo)
-			m.setStatus(fmt.Sprintf("iteration %d is on the dojo", q.iter), false)
+			m.setStatus(fmt.Sprintf("iteration %d is in the iteration view", q.iter), false)
 		}
 	case "r":
 		m.openQualityReport()
@@ -1517,7 +1316,7 @@ func (m *Model) askRegrade(it *runner.QualityIteration) tea.Cmd {
 			fmt.Sprintf("      That is %d judge call(s), and the rates it produces replace the ones on screen.", arms),
 			"",
 			"      Do it when an assertion changed after the grade: the verdicts describe the old list,",
-			"      and the dojo draws a verdict nobody gave as a dash.",
+			"      and the iteration view draws a verdict nobody gave as a dash.",
 		},
 		yes:  "re-grade it",
 		back: screenQuality,
@@ -1669,7 +1468,8 @@ func (m *Model) openQualityReport() {
 	m.mode = screenDoc
 }
 
-// qualityHints are the lane's keys, worded as the thing each one does in the section you are in.
+// qualityHints are the lane's keys, worded as the thing each one does in the view you are in. A view
+// has no key to another view: the way across is esc, and the menu names the three.
 func qualityHints(m *Model) []hint {
 	q := m.quality
 	if q == nil {
@@ -1681,28 +1481,9 @@ func qualityHints(m *Model) []hint {
 	if q.feedback != nil {
 		return q.feedback.hints()
 	}
-	if q.gate {
-		// The entry's keys: the set it is about, the errand it is asking for, the file it is asked
-		// of, and the way back. A key is offered only where it can do its job — R over a set with
-		// nothing to judge is the spend this screen exists to prevent.
-		hints := []hint{}
-		if len(q.cases) > 0 {
-			hints = append(hints, hint{"j k", "the set"}, hint{"e", "assertions"})
-		}
-		hints = append(hints, hint{"enter", "the declaration"}, hint{"S", "evals.json"})
-		if q.lab.Cases > 0 && q.lab.Unasserted == 0 {
-			next := "run iteration 1"
-			if n := len(q.lab.Iterations); n > 0 {
-				next = fmt.Sprintf("run iteration %d", q.lab.Iterations[n-1].N+1)
-			}
-			hints = append(hints, hint{"R", next})
-		}
-		if len(q.lab.Iterations) > 0 {
-			hints = append(hints, hint{"g", "grade · re-grade"})
-		}
-		return append(hints, hint{"esc", "skills"})
-	}
-	rail := []hint{{"1 2 3", "setup dojo quality"}}
+	// A key is offered only where it can do its job — R over a set with nothing to judge is the
+	// spend the lane exists to prevent — and the way out names the level it goes to.
+	trail := []hint{{"esc", "the three views"}}
 	switch q.sec {
 	case qDojo:
 		hints := []hint{{"j k", "cases"}, {"[ ]", "iteration"}, {"v", "transcript"},
@@ -1710,50 +1491,43 @@ func qualityHints(m *Model) []hint {
 		if it := q.iteration(); it != nil && !it.Complete {
 			hints = append(hints, hint{"g", "grade"})
 		}
-		return append(append(hints, hint{"R", "run next"}), rail...)
+		return append(append(hints, hint{"R", "run next"}), trail...)
 	case qQuality:
-		hints := []hint{{"j k", "iterations"}, {"enter", "the dojo on it"}, {"r", "report"},
+		hints := []hint{{"j k", "iterations"}, {"enter", "its evidence"}, {"r", "report"},
 			{"g", "grade"}}
-		return append(append(hints, hint{"R", "run next"}), rail...)
+		return append(append(hints, hint{"R", "run next"}), trail...)
 	}
-	hints := []hint{{"j k", "cases"}, {"e", "assertions"}, {"S", "evals.json"},
-		{"enter", "the dojo"}}
-	if it := q.iteration(); it != nil && !it.Complete {
-		hints = append(hints, hint{"g", "grade"})
+	hints := []hint{{"j k", "cases"}, {"e", "assertions"}, {"S", "evals.json"}}
+	if q.lab != nil && q.lab.Cases > 0 && q.lab.Unasserted == 0 {
+		next := "run iteration 1"
+		if n := len(q.lab.Iterations); n > 0 {
+			next = fmt.Sprintf("run iteration %d", q.lab.Iterations[n-1].N+1)
+		}
+		hints = append(hints, hint{"R", next})
 	}
-	return append(append(hints, hint{"R", "run next"}), rail...)
+	if len(q.lab.Iterations) > 0 {
+		hints = append(hints, hint{"g", "grade · re-grade"})
+	}
+	return append(hints, trail...)
 }
 
-// qualityRail is the lane's three sections on the head row, in the same register as the trigger
-// lane's step rail: a filled dot for the section you are in, the others quiet.
-func (m *Model) qualityRail(w int) string {
-	q := m.quality
-	if q == nil {
+// qualityFactsLine is the row under the bar inside a view: the loop's numbers, and nothing else. The
+// three view names used to stand on the left of this row as a rail — the screen's siblings with a dot
+// on the one you are in — and that was the menu drawn a second time above a view whose path already
+// ends in its own name, advertising a position with no key behind it. The numbers keep the row
+// because no view counts the loop: the set counts its cases, the iteration its failures, the table its
+// iterations, and none of them says "iteration #3 · 5 on disk · best #3".
+func (m *Model) qualityFactsLine(w int) string {
+	facts := m.qualityFacts()
+	if facts == "" {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString(" ")
-	for i, s := range qualitySections {
-		if i > 0 {
-			b.WriteString(dimStyle.Render(" " + strings.Repeat(glyphs.Rule, 3) + " "))
-		}
-		label := fmt.Sprintf("%d %s", i+1, s.name)
-		if q.sec == s.sec {
-			b.WriteString(stepHere.Render(glyphs.Here + " " + label))
-			continue
-		}
-		b.WriteString(dimStyle.Render(label))
-	}
-	facts := m.qualityFacts()
-	if facts != "" && lipgloss.Width(b.String())+lipgloss.Width(facts)+4 <= w {
-		return endsLine(b.String(), statValue.Render(facts)+" ", w)
-	}
-	return ellipsis(b.String(), w)
+	return " " + statValue.Render(ellipsis(facts, max(8, w-1)))
 }
 
-// qualityFacts is the rail row's right half: the loop's numbers, and which iteration the sections are
+// qualityFacts is that row's content: the loop's numbers, and which iteration the sections are
 // reading. The sections count the set once above the columns; this row is where the whole loop is one
-// glance.
+// glance — which is why it outlives the view names that used to share the row.
 func (m *Model) qualityFacts() string {
 	q := m.quality
 	if q == nil || q.lab == nil {

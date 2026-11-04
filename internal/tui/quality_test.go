@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,14 @@ import (
 	"evalctl/internal/runner"
 	"evalctl/internal/store"
 )
+
+// openView walks the lane the way a person does: the skill, then the view off the menu. A test that
+// wants one of the three does not reach past the screen between them, because the menu is where the
+// cursor lands and a section reached by a shortcut is not the section an operator reaches.
+func openView(m *Model, name string, sec int) {
+	m.openQualitySkill(name)
+	press(m, fmt.Sprint(sec+1))
+}
 
 // qualityFixture builds the smallest tree the output lane can draw: one skill, two cases, and one
 // iteration whose arms carry verdicts. Nothing here runs an agent — the screens read files, and the
@@ -86,6 +95,9 @@ func writeJSON(t *testing.T, path string, v any) {
 	write(t, path, string(b))
 }
 
+// TestOutputLaneReadsTheLoop walks the lane the way it is drawn: the skill opens on its menu, the
+// menu's three rows are the lane's three jobs, and a row opens the view it names — with the rail
+// offering the same three once you are inside.
 func TestOutputLaneReadsTheLoop(t *testing.T) {
 	m, _ := qualityFixture(t)
 	// The door, then output, then the skill.
@@ -101,33 +113,51 @@ func TestOutputLaneReadsTheLoop(t *testing.T) {
 		}
 	}
 	press(m, "enter")
-	if m.mode != screenQuality {
-		t.Fatalf("mode = %v, want the output lane", m.mode)
+	if m.mode != screenQualityMenu {
+		t.Fatalf("mode = %v, want the skill's three views", m.mode)
 	}
-	// The lane opens where the disk is asking: this iteration has a failure, so it opens on the dojo.
-	if m.quality.sec != qDojo {
-		t.Fatalf("section = %d, want the dojo — the newest iteration has a failure to read", m.quality.sec)
+	// The menu offers the three names the rest of the lane uses, and the cursor is on the view the
+	// disk is asking for: this iteration has a failure, so it is the iteration.
+	menu := stripMarks(strings.Join(m.qualityMenuBody(m.bodyHeight()), "\n"))
+	for _, want := range []string{"SECTIONS", "test cases", "iteration", "testing quality",
+		"2 cases · 4 assertions", "1 assertion failed", "iteration #1"} {
+		if !strings.Contains(menu, want) {
+			t.Fatalf("the menu is missing %q:\n%s", want, menu)
+		}
+	}
+	if m.quality.vcursor != qDojo {
+		t.Fatalf("the menu opened on row %d, want the iteration — its newest run failed", m.quality.vcursor)
+	}
+	press(m, "enter")
+	if m.mode != screenQuality || m.quality.sec != qDojo {
+		t.Fatalf("mode %v section %d, want the iteration view", m.mode, m.quality.sec)
 	}
 	body := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
 	for _, want := range []string{"FAILED", "without", "dummy-2-three-dice", "assertion",
 		"The total adds up", "the reply said so", "the total was one off"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("the dojo is missing %q:\n%s", want, body)
+			t.Fatalf("the iteration view is missing %q:\n%s", want, body)
 		}
 	}
+	// esc is the only way across: a view has no key to another view, so the menu is one level back
+	// and the number is pressed there.
+	press(m, "esc")
+	if m.mode != screenQualityMenu {
+		t.Fatalf("esc from the iteration = mode %v, want the menu", m.mode)
+	}
 	// 1: the declaration. The list is the cases and one declaration mark, and nothing else — the
-	// rates and the verdicts belong to the sections that read them.
+	// rates and the verdicts belong to the views that read them.
 	press(m, "1")
 	if m.quality.sec != qSetup {
-		t.Fatalf("1 did not open setup: section %d", m.quality.sec)
+		t.Fatalf("1 did not open test cases: section %d", m.quality.sec)
 	}
 	setup := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
 	for _, want := range []string{"CASES", "dummy-1-one-die", "dummy-2-three-dice"} {
 		if !strings.Contains(setup, want) {
-			t.Fatalf("setup is missing %q:\n%s", want, setup)
+			t.Fatalf("test cases is missing %q:\n%s", want, setup)
 		}
 	}
-	// The iteration the sections read is on the rail, once, for all three of them.
+	// The iteration the views read is on the rail, once, for all three of them.
 	if !strings.Contains(stripMarks(m.View()), "iteration #1") {
 		t.Fatalf("the rail does not say which iteration is on screen:\n%s", stripMarks(m.View()))
 	}
@@ -137,27 +167,31 @@ func TestOutputLaneReadsTheLoop(t *testing.T) {
 		}
 	}
 	// 3: the trend, with the best complete iteration tagged and the delta's basis named.
+	press(m, "esc")
 	press(m, "3")
 	if m.quality.sec != qQuality {
-		t.Fatalf("3 did not open the quality section: section %d", m.quality.sec)
+		t.Fatalf("3 did not open testing quality: section %d", m.quality.sec)
 	}
 	rank := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
 	for _, want := range []string{"ITERATIONS", "#1", "75%", "best", "Δ w−w/o", "RAN"} {
 		if !strings.Contains(rank, want) {
-			t.Fatalf("the quality section is missing %q:\n%s", want, rank)
+			t.Fatalf("testing quality is missing %q:\n%s", want, rank)
 		}
 	}
-	// esc walks back one level at a time: a section, then the skills.
+	// esc walks back one level at a time: the view to the menu, the menu to the skills.
 	press(m, "esc")
-	if m.mode != screenQuality || m.quality.sec != qSetup {
-		t.Fatalf("esc from quality = mode %v section %d, want setup", m.mode, m.quality.sec)
+	if m.mode != screenQualityMenu {
+		t.Fatalf("esc from a view = mode %v, want the menu", m.mode)
 	}
 	press(m, "esc")
 	if m.mode != screenSkill {
-		t.Fatalf("esc from setup = %v, want the skills", m.mode)
+		t.Fatalf("esc from the menu = %v, want the skills", m.mode)
 	}
 }
 
+// TestOutputLaneSaysWhatIsMissing: a skill with no cases is a closed loop, and the set's view says
+// so in one band — the steps as chips, and the one errand that opens it — above the cases the screen
+// is about.
 func TestOutputLaneSaysWhatIsMissing(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("HERMES_BIN", filepath.Join(root, "no-such-hermes"))
@@ -173,16 +207,18 @@ func TestOutputLaneSaysWhatIsMissing(t *testing.T) {
 	m := newModel(s)
 	m.width, m.height = 120, 34
 	m.openQualitySkill("bare")
-	// Nothing declared means no loop, so the lane opens on the entry rather than on a section of a
-	// loop that does not exist.
-	if !m.quality.gate {
-		t.Fatalf("the lane opened on section %d, want the initialization checklist", m.quality.sec)
+	// Nothing declared means no loop: the menu's cursor is on the set, because that is the view the
+	// disk is asking for.
+	if m.quality.vcursor != qSetup {
+		t.Fatalf("the menu opened on row %d, want the set", m.quality.vcursor)
 	}
+	press(m, "1")
 	body := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
 	// Three moves, not four: the grade is part of the run, so it is not a step before the first run.
-	for _, want := range []string{"INITIALIZATION", "none declared", "cases", "assertions", "run", "0 of 3"} {
+	for _, want := range []string{"TEST CASES", "the loop is not open yet · 0 of 3", "cases", "assertions",
+		"write the cases — evals.json", "S", "NO CASE"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("the checklist is missing %q:\n%s", want, body)
+			t.Fatalf("the band is missing %q:\n%s", want, body)
 		}
 	}
 	if m.quality.lab == nil || m.quality.lab.Next.Key != "set" {
@@ -253,7 +289,7 @@ The **total** was one off, and ` + "`roll`" + ` is the tool it came from.
 func TestTheIterationReportReadsAsMarkdown(t *testing.T) {
 	m, root := qualityFixture(t)
 	write(t, filepath.Join(root, "dummy-workspace", "iteration-1", "report.md"), reportMD)
-	m.openQualitySkill("dummy")
+	openView(m, "dummy", qDojo)
 	m.openQualityReport()
 	if m.mode != screenDoc || m.doc == nil {
 		t.Fatalf("mode = %v, want the report in the document reader", m.mode)
@@ -300,7 +336,7 @@ func readEvals(t *testing.T, root string) string {
 // cannot make — so the case that passed has to be selectable and its note has to open.
 func TestFeedbackIsPossibleOnACaseThatPassed(t *testing.T) {
 	m, root := qualityFixture(t)
-	m.openQualitySkill("dummy")
+	openView(m, "dummy", qDojo)
 	press(m, "home") // dummy-1-one-die passes every assertion in both arms
 	if c := m.quality.caseAt(); c == nil || len(c.Failed) != 0 {
 		t.Fatalf("the case under the cursor failed: %+v", c)
@@ -342,9 +378,8 @@ func TestFeedbackIsPossibleOnACaseThatPassed(t *testing.T) {
 // assertions are evidence too.
 func TestThePaneListsEveryAssertionWithBothVerdicts(t *testing.T) {
 	m, _ := qualityFixture(t)
-	m.openQualitySkill("dummy")
-	press(m, "1")    // the record pane is setup's; the lane opens on the dojo
-	press(m, "home") // the dojo opens on the case that failed, the declaration on the first
+	openView(m, "dummy", qSetup)
+	press(m, "home") // the declaration opens on the first case
 	first := stripMarks(strings.Join(m.casePane(60, 34), "\n"))
 	for _, want := range []string{"assertions — 2", "✓ with", "✗ without",
 		"The reply reports one face", "Nothing was written", "✓ ✓",
@@ -392,7 +427,7 @@ func assertRecordOrder(t *testing.T, pane string) {
 // given before the agent starts, so a revision can be about the fixture as much as about the skill.
 func TestThePaneListsTheFilesTheCaseStages(t *testing.T) {
 	m, _ := qualityFixture(t)
-	m.openQualitySkill("dummy")
+	openView(m, "dummy", qDojo)
 	c := m.quality.caseAt()
 	c.Files = []string{"raw/page.md", "MC-dice/pages/01.md"}
 	pane := stripMarks(strings.Join(m.casePane(70, 40), "\n"))
@@ -419,8 +454,7 @@ func TestAnAssertionNobodyJudgedIsADash(t *testing.T) {
 	}
 	m = newModel(s)
 	m.width, m.height = 120, 34
-	m.openQualitySkill("dummy")
-	press(m, "1") // the case list is setup's; the lane opens on the dojo
+	openView(m, "dummy", qSetup)
 	press(m, "j")
 	pane := stripMarks(strings.Join(m.casePane(60, 30), "\n"))
 	if !strings.Contains(pane, "Every face is a d20") {
@@ -443,8 +477,7 @@ func TestAnAssertionNobodyJudgedIsADash(t *testing.T) {
 func TestTheAssertionListIsEditedUnderThePane(t *testing.T) {
 	m, root := qualityFixture(t)
 	was := readEvals(t, root)
-	m.openQualitySkill("dummy")
-	press(m, "1") // the case list is setup's; the lane opens on the dojo
+	openView(m, "dummy", qSetup)
 	press(m, "j")
 	press(m, "e")
 	if !m.assertEditActive() {
@@ -511,8 +544,7 @@ func TestTheAssertionListIsEditedUnderThePane(t *testing.T) {
 func TestEscLeavesTheAssertionListAlone(t *testing.T) {
 	m, root := qualityFixture(t)
 	was := readEvals(t, root)
-	m.openQualitySkill("dummy")
-	press(m, "1") // the case list is setup's; the lane opens on the dojo
+	openView(m, "dummy", qSetup)
 	press(m, "j")
 	press(m, "e")
 	m.assertEdit.text = "something the file must not keep"
@@ -532,8 +564,7 @@ func TestEscLeavesTheAssertionListAlone(t *testing.T) {
 // shape the format gives a case whose list is still unknown.
 func TestClearingTheListWritesACaseWithNoAssertionKey(t *testing.T) {
 	m, root := qualityFixture(t)
-	m.openQualitySkill("dummy")
-	press(m, "1") // the case list is setup's; the lane opens on the dojo
+	openView(m, "dummy", qSetup)
 	press(m, "j")
 	press(m, "e")
 	m.assertEdit.text = "\n  \n"
@@ -563,8 +594,7 @@ func TestClearingTheListWritesACaseWithNoAssertionKey(t *testing.T) {
 func TestAShortWindowKeepsTheFieldOnScreen(t *testing.T) {
 	m, _ := qualityFixture(t)
 	m.width, m.height = 100, 20
-	m.openQualitySkill("dummy")
-	press(m, "1") // the case list is setup's; the lane opens on the dojo
+	openView(m, "dummy", qSetup)
 	press(m, "j")
 	press(m, "e")
 	view := stripMarks(m.View())
@@ -627,9 +657,15 @@ func TestTheDojoReadsTheFailuresWithTheEvidence(t *testing.T) {
 	write(t, filepath.Join(root, "dummy-workspace", "iteration-1", "dummy-2-three-dice",
 		"without_skill", "activity.log"),
 		"read the die\nrolled three times\n  3 17 9\nwrote nothing\n")
+	// The disk is asking for the iteration: its newest run has a failure to read, so the menu's
+	// cursor is on that view rather than on the set.
 	m.openQualitySkill("dummy")
+	if m.mode != screenQualityMenu || m.quality.vcursor != qDojo {
+		t.Fatalf("lane opened at mode %v row %d, want the menu on the iteration", m.mode, m.quality.vcursor)
+	}
+	press(m, "2")
 	if m.quality.sec != qDojo {
-		t.Fatalf("the lane opened on section %d, want the dojo", m.quality.sec)
+		t.Fatalf("the iteration view did not open: section %d", m.quality.sec)
 	}
 	body := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
 	for _, want := range []string{"CASES", "1 failed", "dummy-2-three-dice", "assertion · without",
@@ -650,7 +686,7 @@ func TestTheTranscriptOpensAndComesBack(t *testing.T) {
 	m, root := qualityFixture(t)
 	write(t, filepath.Join(root, "dummy-workspace", "iteration-1", "dummy-2-three-dice",
 		"without_skill", "activity.log"), "first line\nsecond line\n")
-	m.openQualitySkill("dummy")
+	openView(m, "dummy", qDojo)
 	press(m, "v")
 	if m.mode != screenDoc || m.doc == nil {
 		t.Fatalf("mode = %v, want the transcript in the document reader", m.mode)
@@ -674,11 +710,10 @@ func TestTheDojoStepsThroughIterations(t *testing.T) {
 	writeGrading(t, two, "dummy-1-one-die", "without_skill", []graded{{"The reply reports one face", true}, {"Nothing was written", true}})
 	writeGrading(t, two, "dummy-2-three-dice", "with_skill", []graded{{"Three faces", true}, {"The total adds up", true}})
 	writeGrading(t, two, "dummy-2-three-dice", "without_skill", []graded{{"Three faces", true}, {"The total adds up", true}})
-	m.openQualitySkill("dummy")
+	openView(m, "dummy", qDojo)
 	if m.quality.iter != 2 {
 		t.Fatalf("the lane opened on iteration %d, want the newest", m.quality.iter)
 	}
-	press(m, "2") // iteration 2 is clean, so the lane opened on the table; the ladder is the dojo's
 	press(m, "]")
 	if !strings.Contains(m.status, "newest") {
 		t.Fatalf("] past the newest must say so: status = %q", m.status)
@@ -704,7 +739,7 @@ func TestTheDojoStepsThroughIterations(t *testing.T) {
 // other case's note, backs the old file up, and the pane re-reads it.
 func TestFeedbackIsWrittenIntoTheIteration(t *testing.T) {
 	m, root := qualityFixture(t)
-	m.openQualitySkill("dummy")
+	openView(m, "dummy", qDojo)
 	press(m, "f")
 	if m.quality.feedback == nil {
 		t.Fatal("f must open the feedback of the case under the cursor")
@@ -755,7 +790,7 @@ func TestFeedbackIsWrittenIntoTheIteration(t *testing.T) {
 func TestEscLeavesTheFeedbackAlone(t *testing.T) {
 	m, root := qualityFixture(t)
 	was, _ := os.ReadFile(filepath.Join(root, "dummy-workspace", "iteration-1", "feedback.json"))
-	m.openQualitySkill("dummy")
+	openView(m, "dummy", qDojo)
 	press(m, "f")
 	m.quality.feedback.text = "something the file must not keep"
 	press(m, "esc")
@@ -768,26 +803,48 @@ func TestEscLeavesTheFeedbackAlone(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------- the rail and the table
+// ---------------------------------------------------------------- the facts row and the table
 
-// The three sections are on the rail, and tab walks it: 1 2 3 in order, then round again. A section
-// reachable only by a key nobody can see is the mistake this rail replaces.
-func TestTheRailWalksTheThreeSections(t *testing.T) {
+// A view carries no rail of its three siblings: the menu is the only place they are listed and the
+// only place a key switches between them, and the bar's path already ends in the view's own name. The
+// row under it is the loop's numbers, which no view counts for itself.
+func TestAViewCarriesTheLoopNumbersAndNoRail(t *testing.T) {
 	m, _ := qualityFixture(t)
-	m.openQualitySkill("dummy")
-	if !strings.Contains(stripMarks(m.View()), "1 setup") {
-		t.Fatalf("the rail is not on the head row:\n%s", stripMarks(m.View()))
-	}
-	want := []int{qQuality, qSetup, qDojo}
-	for _, sec := range want {
-		press(m, "tab")
-		if m.quality.sec != sec {
-			t.Fatalf("tab = section %d, want %d", m.quality.sec, sec)
+	openView(m, "dummy", qDojo)
+	row := stripMarks(m.contextLine(m.width))
+	// The rail's own marks: the here-dot on the current view and the two names beside it. "iteration"
+	// alone is not the tell — the facts row legitimately says "iteration #1".
+	for _, rail := range []string{glyphs.Here, "testing quality", glyphs.Rule + glyphs.Rule} {
+		if strings.Contains(row, rail) {
+			t.Fatalf("the view still carries its siblings (%q) in the facts row: %q", rail, row)
 		}
 	}
-	press(m, "shift+tab")
-	if m.quality.sec != qSetup {
-		t.Fatalf("shift+tab = section %d, want the section before the dojo", m.quality.sec)
+	// What the row is for: the loop in one glance, including the iteration the view is reading.
+	for _, want := range []string{"2 cases", "4 assertions", "iteration #1"} {
+		if !strings.Contains(row, want) {
+			t.Fatalf("the facts row is missing %q: %q", want, row)
+		}
+	}
+	// This screen's keys cannot switch views, so there is nothing to advertise beyond esc.
+	keys := qualityHints(m)
+	if len(keys) == 0 || keys[len(keys)-1].key != "esc" {
+		t.Fatalf("the iteration view does not end its band with esc: %v", keys)
+	}
+	// Nothing on this screen changes the view: the three keys, tab and shift+tab are all inert.
+	for _, key := range []string{"1", "2", "3", "tab", "shift+tab"} {
+		press(m, key)
+		if m.mode != screenQuality || m.quality.sec != qDojo {
+			t.Fatalf("%q left the iteration view: mode %v section %d", key, m.mode, m.quality.sec)
+		}
+	}
+	// esc is the door, and the menu is where the numbers do their job.
+	press(m, "esc")
+	if m.mode != screenQualityMenu {
+		t.Fatalf("esc = mode %v, want the menu", m.mode)
+	}
+	press(m, "2")
+	if m.mode != screenQuality || m.quality.sec != qDojo {
+		t.Fatalf("2 on the menu = mode %v section %d, want the iteration", m.mode, m.quality.sec)
 	}
 }
 
@@ -796,13 +853,13 @@ func TestTheRailWalksTheThreeSections(t *testing.T) {
 func TestTheTableOpensTheDojoAndTheReport(t *testing.T) {
 	m, root := qualityFixture(t)
 	write(t, filepath.Join(root, "dummy-workspace", "iteration-1", "report.md"), reportMD)
-	m.openQualitySkill("dummy")
-	press(m, "3")
+	openView(m, "dummy", qQuality)
 	press(m, "enter")
 	if m.quality.sec != qDojo || m.quality.iter != 1 {
-		t.Fatalf("enter = section %d iteration %d, want the dojo on iteration 1",
+		t.Fatalf("enter = section %d iteration %d, want the iteration view on iteration 1",
 			m.quality.sec, m.quality.iter)
 	}
+	press(m, "esc")
 	press(m, "3")
 	press(m, "r")
 	if m.mode != screenDoc || m.doc == nil {
@@ -813,8 +870,7 @@ func TestTheTableOpensTheDojoAndTheReport(t *testing.T) {
 // A finished run lands on the dojo: the next move is to read what failed, and the evidence is there.
 func TestAFinishedGradeLandsOnTheDojo(t *testing.T) {
 	m, _ := qualityFixture(t)
-	m.openQualitySkill("dummy")
-	press(m, "3")
+	openView(m, "dummy", qQuality)
 	m.run = &runState{kind: runGrade}
 	m.run.live = newLiveRun("grading run", false)
 	m.run.live.done = true
@@ -847,18 +903,25 @@ func TestTheEditorComesFromTheEnvironment(t *testing.T) {
 }
 
 // Every section is a window: at no size may a line be wider than the frame, and at no size may the
-// rail or the panes be missing — a section that only works at 132 columns is a section half the
-// terminals cannot use.
+// panes be missing — a section that only works at 132 columns is a section half the terminals cannot
+// use. With the three-view rail gone the name has to survive on the bar's path, so that is what is
+// read at every size.
 func TestEverySectionFitsTheWindow(t *testing.T) {
 	m, _ := qualityFixture(t)
-	m.openQualitySkill("dummy")
+	openView(m, "dummy", qDojo)
+	// The view's name lives on the bar's path now that the rail is gone: it is that path's last
+	// segment, drawn at every width by the bar's own rules.
+	if segs := m.pathSegments(); segs[len(segs)-1] != m.quality.sectionName() {
+		t.Fatalf("the path ends at %q, want the view's own name", segs[len(segs)-1])
+	}
 	for _, size := range [][2]int{{132, 40}, {100, 24}, {80, 20}, {60, 18}} {
 		m.width, m.height = size[0], size[1]
 		for _, sec := range []int{qSetup, qDojo, qQuality} {
 			m.setQualitySection(sec)
 			view := stripMarks(m.View())
-			if !strings.Contains(view, "1 setup") {
-				t.Fatalf("%dx%d %s: the rail is gone:\n%s", size[0], size[1],
+			// The row under the bar is the loop's numbers — the one reading no view counts for itself.
+			if !strings.Contains(view, "cases ·") {
+				t.Fatalf("%dx%d %s: the facts row is gone:\n%s", size[0], size[1],
 					m.quality.sectionName(), view)
 			}
 			for _, line := range strings.Split(view, "\n") {
