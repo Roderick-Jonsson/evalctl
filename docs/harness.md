@@ -59,10 +59,12 @@ per the guide they are added after the first graded iteration, so a case without
 whose shape is not known yet, not a case with an empty list. `evalctl` treats them as part of the
 format rather than a stray key: `evalctl skills` counts them per skill (`ASR 2/3`), the case view
 lists them, `evalctl edit … --assertions` replaces them (one per line), and a search reads them.
-The output lane's test cases view shows the whole list with both arms' verdicts and writes it in
-place: `e` opens it as one field in the pane, where the list is drawn, `ctrl+s` saves, `esc`
-discards — the same splitter as the CLI, so a list typed in the TUI and one typed in a shell land
-in the file identically. Facts an assertion is checked against ride in its own sentence
+The output lane's initialization view shows the whole list with both arms' verdicts and writes it in
+place: `e` opens it as the list it is — one bullet per assertion, the bullet drawn by the pane and
+never part of the text, the caret a bar inside the sentence — with `enter` starting the next
+assertion, `↑ ↓` walking them, `ctrl+s` saving and `esc` discarding. The block grows with the list
+instead of scrolling to the height it opened at; rows are lost only when the window itself is too
+short, and then the assertion being typed stays in view. Facts an assertion is checked against ride in its own sentence
 (`… — facts: …`), because the format's list is strings and the judge reads it in order.
 `evalctl run` grades them as part of the run: the judge writes one verdict per assertion into each
 arm's `grading.json` (see *Grading and iterating*), so an iteration is outputs and verdicts in one
@@ -217,6 +219,7 @@ evalctl run --dry-run                       # plan + exact hermes commands, writ
 evalctl run --skill source-research         # one stage, next free iteration-N
 evalctl run --skill learning-path --case 1,3
 evalctl run --skill slide-builder --iteration 2 --resume    # add cases to an iteration
+evalctl run --skill slide-builder --fill --case 3           # add case 3 to the newest open iteration
 evalctl grade --skill source-research       # judge the newest iteration (one call per arm)
 evalctl run --skill source-research --grade # run, then grade in one command
 evalctl lab --skill source-research --lane output   # iterations, rates, delta, the next move
@@ -239,6 +242,14 @@ previewed before you press enter. The case keeps `promoted_from` (`run`, `case`,
 `fixture_sha256`) in its JSON, and `meta.json` records the fixture hash the run actually staged —
 so a fixture edited after its promotion is visible instead of silently changing what a later
 iteration measured.
+
+**An iteration is the set measured once.** A run that covers part of the set does not start a number
+of its own: `--fill` (and the TUI's `r` and `R`, which always fill) writes into the newest iteration
+while that iteration is still open — it does not hold every case the set declares — so three cases
+run one at a time make one iteration of three, and `R` over an iteration that half holds the set runs
+exactly the cases it is missing. A case the iteration already holds is measured again in place
+(`--force`, or `r` on it), never doubled. A complete iteration, or one measured against a skill that
+has changed since, starts the next number: filling it would compare two versions under one label.
 
 Per arm it writes `stream.jsonl`, `stderr.txt`, `timing.json`, `changes.json` (new/modified/deleted
 files vs the staged fixture), `grading.json` (mechanical checks + the skills the run actually

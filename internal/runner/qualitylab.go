@@ -292,6 +292,21 @@ func qualityChecks(lab *QualityLab) []LabCheck {
 		Key: "cases", OK: lab.Cases > 0, Blocking: lab.Cases == 0,
 		Detail: declaredDetail(lab.Cases), Fix: "S",
 	})
+	last, has := lastIteration(lab)
+	// The run comes before the assertions, because that is the order the work is done in: the first
+	// run exists to show what the agent writes, and what it writes is what the assertions are written
+	// from. A run over a set with no assertion is not a measurement — it is the look that a sentence
+	// is written against — and it is the one spend this lane offers before anything can be judged.
+	run := LabCheck{Key: "run", OK: has, Blocking: !has, Fix: "R", Detail: "nothing run yet"}
+	switch {
+	case has && !last.SetComplete:
+		// A run that reached part of the set still opened it; the row says what it missed, because
+		// the next run has to cover the set to be comparable with it.
+		run.Detail = fmt.Sprintf("iteration %d ran %d of %s", last.N, last.Cases, plural(lab.Cases, "case"))
+	case has:
+		run.Detail = fmt.Sprintf("iteration %d · %s · outputs to read", last.N, plural(last.Cases, "case"))
+	}
+	checks = append(checks, run)
 	checks = append(checks, LabCheck{
 		Key:      "assertions",
 		OK:       lab.Cases > 0 && lab.Unasserted == 0,
@@ -299,21 +314,9 @@ func qualityChecks(lab *QualityLab) []LabCheck {
 		Detail:   assertionDetail(lab),
 		Fix:      "e",
 	})
-	last, has := lastIteration(lab)
-	run := LabCheck{Key: "run", OK: has, Blocking: !has, Fix: "R", Detail: "nothing run yet"}
-	switch {
-	case has && !last.SetComplete:
-		// A run that reached part of the set still opened the loop; the row says what it missed,
-		// because the next run has to cover the set to be comparable with it.
-		run.Detail = fmt.Sprintf("iteration %d ran %d of %s", last.N, last.Cases, plural(lab.Cases, "case"))
-	case has:
-		run.Detail = fmt.Sprintf("iteration %d · %s", last.N, plural(last.Cases, "case"))
-	}
-	checks = append(checks, run)
-	// The judge is part of the run, so there is no grade step until there is a run to grade: with no
-	// iteration on disk the loop needs three moves, not four. Once one exists, this row is the
-	// recovery — a run made with --no-grade, by a build older than the fold, or one whose grade was
-	// cancelled or failed — and it names `g` only in that case.
+	// The judge is part of the run, so there is no grade step until there is a run to grade. Once one
+	// exists, this row is the recovery — a run made before the assertions were written, one made with
+	// --no-grade, or one whose grade was cancelled or failed — and `g` is what answers it.
 	if !has {
 		return checks
 	}
@@ -337,11 +340,16 @@ func declaredDetail(n int) string {
 }
 
 // assertionDetail is the one line under the assertions step: a total is not the question, because a
-// case with no assertion produces no verdict however many the other cases carry.
+// case with no assertion produces no verdict however many the other cases carry. Once a run is on
+// disk the line says where the sentences are written from, because that is the step the view is on.
 func assertionDetail(lab *QualityLab) string {
+	last, has := lastIteration(lab)
 	switch {
 	case lab.Cases == 0:
 		return "no case to judge yet"
+	case lab.Unasserted == lab.Cases && has:
+		return fmt.Sprintf("none of %s carry one — write them from iteration %d's outputs",
+			plural(lab.Cases, "case"), last.N)
 	case lab.Unasserted == lab.Cases:
 		return fmt.Sprintf("none of %s carry one", plural(lab.Cases, "case"))
 	case lab.Unasserted > 0:
@@ -371,32 +379,38 @@ func initPending(lab *QualityLab) bool {
 	return lab.Cases == 0 || lab.Unasserted > 0 || gradedArms(last) == 0
 }
 
-// qualityNext is one line: the move the guide asks for next, given what is on disk. Its first three
-// branches are the entry's, in the entry's order — the cases, an assertion per case, then the first
-// run — because a line that says "run iteration 1" over a set with nothing to judge is the one
-// instruction this lane must not give.
+// qualityNext is one line: the move the guide asks for next, given what is on disk. Its branches are
+// the entry's, in the entry's order — the cases, the first run, an assertion per case, then the grade
+// — because the first run is what the assertions are written from: a line that says "write the
+// assertions" over a set nobody has run is the instruction that makes them guesses.
 func qualityNext(lab *QualityLab) LabNext {
 	last, has := lastIteration(lab)
 	switch {
 	case lab.Cases == 0:
 		return LabNext{Key: "set", Line: "write the cases", Detail: lab.Skill + "/evals/evals.json"}
-	case lab.Unasserted > 0:
-		return LabNext{Key: "assertions",
-			Line: fmt.Sprintf("%d of %s carry no assertion — e writes them, then the run",
-				lab.Unasserted, plural(lab.Cases, "case")),
-			Detail: "a grade is made of assertions; a case without one has no verdict to give"}
+	case !has && lab.Unasserted == lab.Cases:
+		return LabNext{Key: "run",
+			Line:   fmt.Sprintf("run iteration 1 — %s × 2 arms; the outputs are what the assertions are written from", plural(lab.Cases, "case")),
+			Detail: "nothing is judged yet: there is nothing to judge, and the first run is the look"}
 	case !has:
 		return LabNext{Key: "run", Line: fmt.Sprintf("run iteration 1 — %s × 2 arms, then the judge",
 			plural(lab.Cases, "case")),
 			Detail: "the run grades itself; the verdicts are what a revision is written from"}
+	case lab.Unasserted > 0:
+		return LabNext{Key: "assertions",
+			Line: fmt.Sprintf("%d of %s carry no assertion — e writes them from iteration %d's outputs",
+				lab.Unasserted, plural(lab.Cases, "case"), last.N),
+			Detail: "a grade is made of assertions; a case without one has no verdict to give"}
 	case gradedArms(last) == 0:
 		return LabNext{Key: "grade",
 			Line:   fmt.Sprintf("iteration %d carries no verdicts — g grades it", last.N),
-			Detail: "that is what --no-grade and an interrupted grade leave behind; one judge call per arm"}
+			Detail: "the assertions are declared now; the judge reads each arm against them"}
 	}
 	if !last.SetComplete {
-		return LabNext{Key: "set", Line: fmt.Sprintf("iteration %d ran %d of %d cases — rerun the whole set",
-			last.N, last.Cases, lab.Cases),
+		// An open iteration is finished, not restarted: the runs it already holds are a measurement of
+		// those cases, and re-running the set to reach the three that make it whole would buy them again.
+		return LabNext{Key: "set", Line: fmt.Sprintf("iteration %d holds %d of %d cases — R runs the %d that are open",
+			last.N, last.Cases, lab.Cases, lab.Cases-last.Cases),
 			Detail: "a rate over a subset is not comparable with one over the set"}
 	}
 	if !last.Complete {
@@ -428,10 +442,12 @@ func plural(n int, noun string) string {
 	return fmt.Sprintf("%d %ss", n, noun)
 }
 
-// QualityCase is one case of one iteration, as the workbench reads it: both arms' verdicts, the
-// declared assertions with what each arm said about them, and the human note. The lab ranks
-// iterations; this is the evidence behind a row, which is what the operator actually edits a skill
-// from — and, since the workbench is where a revision is written, the list it edits.
+// QualityCase is one declared case as the setup view reads it: the declaration, the two arms of the
+// iteration on screen, and — once a judge has answered — the verdicts per assertion.
+//
+// Ran is whether the iteration on screen actually reached the case. A case that has never been run and
+// a case whose run has not been judged yet both carry no verdicts, and the set view's next move is
+// different for the two: the first is a run, the second is an assertion.
 type QualityCase struct {
 	Skill          string             `json:"skill"`
 	ID             int                `json:"id"`
@@ -440,11 +456,33 @@ type QualityCase struct {
 	ExpectedOutput string             `json:"expected_output"`
 	Files          []string           `json:"files"`
 	Assertions     int                `json:"assertions"`
+	Ran            bool               `json:"ran,omitempty"`
 	With           QualityArm         `json:"with_skill"`
 	Without        QualityArm         `json:"without_skill"`
 	Rows           []QualityAssertion `json:"rows,omitempty"`
 	Failed         []QualityFailure   `json:"failed,omitempty"`
 	Feedback       string             `json:"feedback,omitempty"`
+}
+
+// Graded reports whether a judge has answered for either arm of this case.
+func (c QualityCase) Graded() bool { return c.With.Judged > 0 || c.Without.Judged > 0 }
+
+// Unjudged is how many of the case's declared assertions carry no verdict in either arm while the
+// judge has read the case at least once: the sentences that were written or rewritten after the grade.
+// A verdict belongs to the words it was written against, so an edited assertion is not graded — and an
+// iteration that is "complete" by count can still owe verdicts for what the list says now. That is the
+// guide's order: re-grade after editing the assertions, and revise from the verdicts you can trust.
+func (c QualityCase) Unjudged() int {
+	if !c.Graded() {
+		return 0
+	}
+	n := 0
+	for _, a := range c.Rows {
+		if a.With == nil && a.Without == nil {
+			n++
+		}
+	}
+	return n
 }
 
 // FailedAssertions is how many of the case's declared assertions failed, each counted once. A failure
@@ -510,6 +548,9 @@ func (r *Runner) QualityCases(skill string, iteration int) ([]QualityCase, error
 			ExpectedOutput: c.ExpectedOutput, Files: append([]string(nil), c.Files...),
 			Assertions: len(c.Assertions), Feedback: strings.TrimSpace(feedback[c.Slug])}
 		caseDir := filepath.Join(dir, c.Slug)
+		if info, err := os.Stat(caseDir); err == nil && info.IsDir() {
+			row.Ran = true
+		}
 		// The judge's answers per arm, kept whole: the pane shows every assertion with both marks,
 		// not just the failures, because "passes in both arms" is the pattern a revision starts from.
 		verdicts := map[string][]AssertionResult{}

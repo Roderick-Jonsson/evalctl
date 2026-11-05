@@ -30,16 +30,20 @@ type glyphSet struct {
 	Rule     string // the thin rules inside a screen
 	Heavy    string // the rule under the bar, so the bar reads as a bar
 	Ellipsis string // what a fitted line ends with
+	Bullet   string // a list item that is not the cursor's: one assertion
+	Caret    string // where the next character goes, inside a sentence being typed
 }
 
 var (
 	unicodeGlyphs = glyphSet{
 		Name: "unicode", Cursor: "▶ ", Block: "▌", Here: "●", Running: "⟳", Done: "✓", Failed: "✗", Seam: "│",
 		Arrow: "→", KnobL: "‹", KnobR: "›", Rule: "─", Heavy: "━", Ellipsis: "…", Pending: "○",
+		Bullet: "•", Caret: "▏",
 	}
 	asciiGlyphs = glyphSet{
 		Name: "ascii", Cursor: "> ", Block: "|", Here: "*", Running: "~", Done: "+", Failed: "x", Seam: "|",
 		Arrow: ">", KnobL: "<", KnobR: ">", Rule: "-", Heavy: "=", Ellipsis: "~", Pending: "o",
+		Bullet: "-", Caret: "|",
 	}
 )
 

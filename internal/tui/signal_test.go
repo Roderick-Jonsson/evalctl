@@ -150,9 +150,11 @@ func TestTheAssertionTableSurvivesAShortWindow(t *testing.T) {
 			t.Fatalf("a short window lost %q from the table:\n%s", want, pane)
 		}
 	}
-	// The fields go before the verdicts do: the record is one keypress away, the verdicts are the screen.
-	if strings.Contains(pane, "expected_output") && !strings.Contains(pane, "assertions ·") {
-		t.Fatalf("the pane kept the prose and lost the verdicts:\n%s", pane)
+	// The record goes whole or not at all: here it is the one-line pointer to the file it came from,
+	// and the verdicts are what the window is spent on — a half-drawn record is worse than a pointer,
+	// and the fields are one keypress away.
+	if !strings.Contains(pane, "CASE · the prompt") {
+		t.Fatalf("the pane drew neither a whole record nor the line that says where it is:\n%s", pane)
 	}
 }
 

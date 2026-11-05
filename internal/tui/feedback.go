@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 
@@ -29,21 +30,27 @@ import (
 // them off the window is feedback about a memory.
 
 type feedbackState struct {
-	form *huh.Form
-	slug string
-	iter int
-	text string
-	path string // <skill>-workspace/iteration-N/feedback.json, as the head names it
-	// from is the assertion the cursor was on when `f` was pressed, when that was the table: the note
-	// belongs to the case, and this is the row it was written from — a person who selected a passing
-	// assertion and wrote "this passed in both arms, so the case measures nothing" should see which
-	// row they were reading when they said it.
-	from   string
+	form   *huh.Form
+	slug   string
+	iter   int
+	text   string
+	path   string // <skill>-workspace/iteration-N/feedback.json, as the head names it
 	errMsg string
 	// want is the field's height, fixed when it opens: a list that grows the strip while the
 	// operator types would move the line under their cursor with every enter.
 	want int
 }
+
+// noteKeys is huh's keymap for a field of sentences: enter is a line, tab has nowhere to go (there is
+// one field), and the app owns ctrl+s and esc, so huh is given neither.
+var noteKeys = func() *huh.KeyMap {
+	km := huh.NewDefaultKeyMap()
+	km.Quit = key.NewBinding(key.WithKeys("ctrl+c"))
+	km.Text.NewLine = key.NewBinding(key.WithKeys("enter", "ctrl+j"))
+	km.Text.Next = key.NewBinding(key.WithDisabled())
+	km.Text.Submit = key.NewBinding(key.WithDisabled())
+	return km
+}()
 
 func (fb *feedbackState) build() {
 	fb.want = min(6, max(3, len(wrapPlain(fb.text, 60))+1))
@@ -55,7 +62,7 @@ func (fb *feedbackState) build() {
 		),
 	).
 		WithShowHelp(false).
-		WithKeyMap(assertKeys).
+		WithKeyMap(noteKeys).
 		WithTheme(huh.ThemeBase())
 	fb.form.Init()
 }
@@ -68,9 +75,6 @@ func (fb *feedbackState) body(w, h int) []string {
 		"",
 		regionHead(w, "FEEDBACK · "+fb.slug, fb.path, true),
 		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, w-4)))),
-	}
-	if fb.from != "" {
-		lines = append(lines, "  "+dimStyle.Render(ellipsis(fb.from, max(10, min(96, w-4)))))
 	}
 	for _, line := range strings.Split(strings.TrimRight(fb.form.View(), "\n"), "\n") {
 		lines = append(lines, "  "+line)
@@ -140,13 +144,7 @@ func (m *Model) openFeedbackEditor() tea.Cmd {
 		m.setStatus("no case under the cursor — feedback is written against one case", true)
 		return nil
 	}
-	var from string
-	if q.tbl && len(c.Rows) > 0 {
-		i := min(max(0, q.asel), len(c.Rows)-1)
-		from = fmt.Sprintf("on assertion %d of %d \u2014 %q", i+1, len(c.Rows),
-			strings.Join(strings.Fields(c.Rows[i].Text), " "))
-	}
-	fb := &feedbackState{slug: c.Slug, iter: q.iter, text: c.Feedback, from: from,
+	fb := &feedbackState{slug: c.Slug, iter: q.iter, text: c.Feedback,
 		path: fmt.Sprintf("%s-workspace/iteration-%d/feedback.json", m.skill, q.iter)}
 	fb.build()
 	q.feedback = fb

@@ -1,7 +1,9 @@
 package runner
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -66,19 +68,20 @@ func TestQualityLabGateIsClosedWithoutAnAssertion(t *testing.T) {
 	if lab.Unasserted != 1 || lab.Cases != 2 {
 		t.Fatalf("unasserted = %d of %d cases, want 1 of 2", lab.Unasserted, lab.Cases)
 	}
-	// Three steps, in the order they have to be done, and only the first is satisfied. The grade is not
-	// one of them: the run grades itself, so there is no step to take before there is a run.
+	// Four steps, and the first two are what the set needs: the cases, then the first run — the run
+	// that shows what the agent writes, which is what the assertions are written from. The grade is
+	// not one of them until a run exists: the run grades itself.
 	want := []struct {
 		key    string
 		ok     bool
 		detail string
 	}{
 		{"cases", true, ""},
-		{"assertions", false, "1 of 2 cases carry none"},
 		{"run", false, "nothing run yet"},
+		{"assertions", false, "1 of 2 cases carry none"},
 	}
 	if len(lab.Checks) != len(want) {
-		t.Fatalf("checks = %+v, want three steps", lab.Checks)
+		t.Fatalf("checks = %+v, want three steps before the first run", lab.Checks)
 	}
 	for i, w := range want {
 		c := lab.Checks[i]
@@ -92,8 +95,8 @@ func TestQualityLabGateIsClosedWithoutAnAssertion(t *testing.T) {
 			t.Fatalf("check %q is owed and names no key", c.Key)
 		}
 	}
-	if lab.Next.Key != "assertions" {
-		t.Fatalf("next = %+v, want the assertions before the run", lab.Next)
+	if lab.Next.Key != "run" {
+		t.Fatalf("next = %+v, want the run before the assertions", lab.Next)
 	}
 }
 
@@ -167,5 +170,125 @@ func TestQualityCasesListsWhatNoRunReached(t *testing.T) {
 		if len(c.Rows) != c.Assertions {
 			t.Fatalf("case %q declares %d assertions and draws %d", c.Slug, c.Assertions, len(c.Rows))
 		}
+	}
+}
+
+// TestAFillJoinsTheOpenIteration: an iteration is the set measured once. A case run on its own joins
+// the iteration being built — otherwise three cases run one at a time make three one-case iterations
+// and the set is never measured — and a run that joins adds its cases to the iteration's own record
+// instead of replacing it, or the next join reads the iteration as missing what it already holds.
+func TestAFillJoinsTheOpenIteration(t *testing.T) {
+	s := qualityStore(t, `{"skill_name":"dummy","evals":[
+	  {"id":1,"slug":"d1","prompt":"p","expected_output":"e","files":[],"assertions":["a"]},
+	  {"id":2,"slug":"d2","prompt":"p","expected_output":"e","files":[],"assertions":["a"]},
+	  {"id":3,"slug":"d3","prompt":"p","expected_output":"e","files":[],"assertions":["a"]}]}`)
+	r := New(s)
+	iter := filepath.Join(s.Root, "dummy-workspace", "iteration-1")
+	write(t, filepath.Join(iter, "meta.json"),
+		`{"iteration":1,"skill":"dummy","started":"2026-11-01T12:00:00+0100","cases":["d1"]}`)
+	write(t, filepath.Join(iter, "d1", "with_skill", "response.md"), "one face")
+
+	plan, err := r.PlanIteration("dummy", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Join || plan.Iter != 1 {
+		t.Fatalf("an iteration holding 1 of 3 cases is not joined: %+v", plan)
+	}
+	if strings.Join(plan.Open, ",") != "d2,d3" {
+		t.Fatalf("the open cases are %v, want the two the iteration does not hold", plan.Open)
+	}
+
+	// Off by request: a run that does not fill mints the next number, which is what the shell wants.
+	next, err := r.PlanIteration("dummy", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Iter != 2 || next.Join {
+		t.Fatalf("without fill the plan is %+v, want iteration 2", next)
+	}
+
+	// A whole iteration is not reopened for the case that runs next.
+	write(t, filepath.Join(iter, "meta.json"),
+		`{"iteration":1,"skill":"dummy","started":"2026-11-01T12:00:00+0100","cases":["d1","d2","d3"]}`)
+	if plan, err = r.PlanIteration("dummy", true); err != nil {
+		t.Fatal(err)
+	}
+	if plan.Join || plan.Iter != 2 {
+		t.Fatalf("a complete iteration is reopened: %+v", plan)
+	}
+}
+
+// TestAFillTakesTheCaseTheSetIsMissing: filling is a continuation of one measurement, so the case the
+// iteration does not hold is the case that closes it — the number is not advanced for it.
+func TestAFillTakesTheCaseTheSetIsMissing(t *testing.T) {
+	s := qualityStore(t, `{"skill_name":"dummy","evals":[
+	  {"id":1,"slug":"d1","prompt":"p","expected_output":"e","files":[],"assertions":["a"]},
+	  {"id":2,"slug":"d2","prompt":"p","expected_output":"e","files":[],"assertions":["a"]}]}`)
+	iter := filepath.Join(s.Root, "dummy-workspace", "iteration-1")
+	write(t, filepath.Join(iter, "meta.json"), `{"iteration":1,"skill":"dummy","cases":["d1"]}`)
+	plan, err := New(s).PlanIteration("dummy", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Join || plan.Iter != 1 || strings.Join(plan.Open, ",") != "d2" {
+		t.Fatalf("the case the iteration is missing did not close it: %+v", plan)
+	}
+}
+
+// TestTwoCasesRunOneAtATimeMakeOneIteration is the loop as a person actually walks it: `r` on one
+// case, then `r` on the next. Both runs belong to the same iteration — the set measured once — and the
+// second run finds the first one's case still there instead of starting iteration 2 beside it.
+func TestTwoCasesRunOneAtATimeMakeOneIteration(t *testing.T) {
+	s := qualityStore(t, `{"skill_name":"dummy","evals":[
+	  {"id":1,"slug":"d1","prompt":"Roll one.","expected_output":"a face","files":[],"assertions":["a"]},
+	  {"id":2,"slug":"d2","prompt":"Roll two.","expected_output":"two faces","files":[],"assertions":["a"]}]}`)
+	bin := filepath.Join(t.TempDir(), "fake-hermes")
+	script := "#!/bin/sh\nprintf '{\"type\":\"result\",\"text\":\"ok\",\"duration_ms\":5,\"tokens\":{\"total\":10}}\\n'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERMES_BIN", bin)
+	write(t, filepath.Join(s.Root, "contract.md"), "# contract\n")
+
+	r := New(s)
+	for _, id := range []int{1, 2} {
+		err := r.RunQuality(context.Background(), Options{Lane: store.LaneOutput, Skills: []string{"dummy"},
+			CaseIDs: []int{id}, Arms: AllArms, Isolate: true, NoVerify: true, Fill: true,
+			Budget: DefaultBudget, Log: ActivityFull})
+		if err != nil {
+			t.Fatalf("case %d: %v", id, err)
+		}
+	}
+
+	workspace := filepath.Join(s.Root, "dummy-workspace")
+	entries, _ := os.ReadDir(workspace)
+	var iters []string
+	for _, e := range entries {
+		if e.IsDir() {
+			iters = append(iters, e.Name())
+		}
+	}
+	if len(iters) != 1 || iters[0] != "iteration-1" {
+		t.Fatalf("two cases run one at a time made %v, want one iteration-1", iters)
+	}
+	for _, slug := range []string{"d1", "d2"} {
+		if _, err := os.Stat(filepath.Join(workspace, "iteration-1", slug, ArmWith)); err != nil {
+			t.Fatalf("%s is missing from iteration-1: %v", slug, err)
+		}
+	}
+	meta := metaQuality{}
+	if err := readJSONFile(filepath.Join(workspace, "iteration-1", "meta.json"), &meta); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(meta.Cases, ",") != "d1,d2" {
+		t.Fatalf("the iteration's record says %v — the join rewrote it instead of adding to it", meta.Cases)
+	}
+	lab, err := r.QualityLab("dummy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lab.Iterations) != 1 || !lab.Iterations[0].SetComplete {
+		t.Fatalf("the lab does not read one whole iteration: %+v", lab.Iterations)
 	}
 }

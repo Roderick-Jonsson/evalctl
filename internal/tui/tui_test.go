@@ -116,6 +116,12 @@ func press(m *Model, key string) tea.Cmd {
 		msg = tea.KeyMsg{Type: tea.KeyRight}
 	case "tab":
 		msg = tea.KeyMsg{Type: tea.KeyTab}
+	case "home":
+		msg = tea.KeyMsg{Type: tea.KeyHome}
+	case "end":
+		msg = tea.KeyMsg{Type: tea.KeyEnd}
+	case "backspace":
+		msg = tea.KeyMsg{Type: tea.KeyBackspace}
 	case "down":
 		msg = tea.KeyMsg{Type: tea.KeyDown}
 	case "up":

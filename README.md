@@ -512,19 +512,30 @@ view's own name is the bar path's last segment, and the row under the bar is onl
 `3 cases · 6 assertions · iteration #2 · best #2` — which no view counts for itself. No key changes
 view; `esc` is the way back to the menu, and `esc` again is the skills.
 
-**The loop starts closed**, and that is a state of the test cases view rather than a screen of its own:
-a band above the case list draws the four steps as chips — `✓ cases ● assertions ○ run` — and the one
-errand that opens the loop with the key that does it (`→ e an assertion for every case…`). A run over a
-case nothing can judge spends both arms on outputs nobody can score, so `R` is not offered there and
-refuses with the reason if pressed. The band goes when the first verdict lands, and comes back if a case
-is left unasserted later — it is the disk's reading, not a screen the lane is stuck on.
+**The loop starts closed**, and that is a state of the initialization view rather than a screen of its
+own: a band above the case list draws the entry's steps as chips — `✓ cases ● run ○ assertions` and, once
+a run exists, `○ grade` — with the one errand that opens the loop and the key that does it
+(`→ R run iteration 1 — 2 cases, both arms · nothing is judged yet`). The order is the guide's: the
+**first run comes before the first assertion**, because the assertions are written from what that run
+writes. A run over a set with no assertion is not a measurement — nothing is judged, and the outputs are
+the point — so it is offered, and the screen says *nothing is judged yet* before the spend. The band goes
+when the first verdict lands, and comes back if a case is left unasserted later — it is the disk's
+reading, not a screen the lane is stuck on.
 
 **While the loop is closed, the other two views are shut.** The menu draws them dim with
 `locked until the loop opens`, and the pane under the cursor says what opens them — there is no action
 line on a row that cannot open, and `enter` or its number refuses in the status row rather than
-opening a screen that would answer "nothing measured yet". The way in is the declaration: cases, an
-assertion on every one, the first run — the set is where the loop is opened, so the set is the only
-view a closed loop offers.
+opening a screen that would answer "nothing measured yet". The way in is the declaration and the first
+look: cases, a run, an assertion on every one, the grade — the set is where the loop is opened, so the
+set is the only view a closed loop offers.
+
+**The five steps of a case, from the view that holds it.** The pane's action line is the case's own
+ladder, one key at a time — **A** `S` writes the prompt and the expected output, **B** `r` runs the case
+for the first time, **C** `v` reads what the arms wrote and `e` writes the assertions from it, **D** `g`
+grades them into the first `grading.json`, **E** `f` writes the human review. The ladder is per case and
+not per set: five cases at five different steps are five different next moves, and the pane only ever
+shows the one under the cursor. `r` and `R` both run the judge with the run when the case declares an
+assertion, so B and D are one spend apart only when B had nothing to judge.
 
 **1 · test cases — declare the case.** The left column is the cases: one glyph and one number each — the
 glyph is the case's own reading (`✓` green measures the skill, `○` orange proves nothing, `✗` red holds
@@ -556,6 +567,23 @@ window loses the footnote before it loses the table. `CASE` is `prompt`, `expect
 as three labelled lines in the file's order, because a card per field turns four short facts into a
 page. A group goes whole or not at all; when `CASE` cannot fit beside a complete verdict the pane
 prints one line saying where those fields are (`S`), rather than half a record.
+
+**The set is made and unmade in this view.** `n` opens the two fields a case cannot be written
+without — `prompt` and `expected_output` — where the record is drawn; `ctrl+s` writes the row and
+leaves the cursor on it, and `esc` throws the draft away. The id is the next free one and the slug is
+the tool's (`new-case-N`, renamed in `evals.json` if it should say something else), because both are
+the names the fixture directory, the iteration directory and the grades are made from. A case with no
+prompt is refused where it is typed: it cannot be run, and the store refuses it too. `d` asks first,
+in the same dialog every destructive step uses, and the dialog says whether a fixture directory goes
+with the case — a case is its files as much as its lines.
+
+**And it is where a case is worked on.** `r` runs the case under the cursor — both arms, then the
+judge — and writes an iteration of that one case. It is a probe and never a measurement: a rate over
+part of the set is not comparable with a rate over the set, so the band says *iteration 3 ran 1 of 5*
+and the table never ranks it. That is the loop an assertion is written in: run the case, read what the
+arms did, sharpen the sentence, run it again. `R` runs every case and is always offered, because a
+fully declared set is measurable in one spend — the only thing it refuses is a set with a case nothing
+can judge.
 
 ```
  output optimization > dummy > test cases                                             evalctl v0.9.0
@@ -605,42 +633,63 @@ that passed every one, and the head counts the same over the iteration (`1/4 fai
 because `feedback.json` is keyed by slug and a case that passed every assertion is a case whose output
 you can still review — a list of failures, the older shape, hid exactly that one.
 
-The pane beside it is the guide's own table: one row per declared assertion, in the order the judge read
-them, `pass` / `fail` / `—` under `WITH` and `WITHOUT`. `tab` moves the keys into the table and `j k` walk
-its rows, passing rows included; the judge's evidence for the row under the cursor sits under it, and a
-row that passed in both arms says so rather than showing an empty block. Under the table is the case's
-verdict on itself — `1 of 2 pass with the skill and fail without it — the rest measure the model` — which
-is the loop's whole claim written per case rather than per rate. `[` and `]` walk the iterations without
-leaving the section; `v` opens the arm's whole `activity.log`; `f` opens the feedback for the case from
-whatever row the cursor is on, and `ctrl+s` writes it into that iteration's `feedback.json` (backed up
-first — it is a file in the workspace, not in the tree, and it is backed up like one); `p` asks for a
-revision and `E` hands `SKILL.md` to `$EDITOR`, because the revision is a document and a text field is
-not an editor.
+The pane beside it is the case's own record and three named blocks, in the order the guide asks for them.
+The record comes first, bare under the case's head — `prompt`, `expected_output`, `files`, the same three
+rows the initialization view draws — because a review is a judgement of an output against the expected
+output, and the screen that asks for one has no business hiding either; a window too short for it prints
+one line naming `S`, which opens the file it came from. The window gives up the record first, then the
+note, and never the table or the output. `ASSERTIONS` is the guide's own table: one row per declared
+assertion, in the order the judge read
+them, `pass` / `fail` / `—` under `WITH SKILL` and `WITHOUT SKILL`. `tab` moves the keys into the table
+and `j k` walk its rows, passing rows included; the judge's evidence for the row under the cursor hangs
+under that row — `without · the reply said so` — because evidence belongs to an assertion, and an
+*evidence* block under a table is a sentence about a row the reader has to find again. Under the table
+is the case's verdict on itself — `1 of 2 pass with the skill and fail without it — the rest measure the
+model` — the loop's whole claim written per case rather than per rate. `OUTPUT` is the reply those
+verdicts are about, capped at four lines, and `REVIEW` is the human's note.
+
+**The review is per case and not per assertion**, which is the guide's split: an assertion is a sentence
+*about* the output, and the output is what a person reviews. So `f` opens the same note from any row of
+the table, and the note names no assertion — the row under the cursor is where the reader's eye is, not
+what the note is written against. `ctrl+s` writes it into that iteration's `feedback.json` (backed up
+first — it is a file in the workspace, not in the tree, and it is backed up like one).
+
+**The set is editable here too**, with the initialization view's three keys: `e` opens the case's list
+under the verdicts it is read against — one bullet per assertion, the caret in the sentence, `enter` a
+new one, `ctrl+s` writes — `n` makes a case and `d` deletes one behind the same confirmation. Editing a
+sentence is a replacement and not a second assertion: the file holds the list, so a rewritten assertion
+is the same entry with new words, and the verdicts that were read against the old words no longer match
+it (`g` re-grades, and the row reads `—` until it does).
+
+The pane ends with one action line, the case's own next move: `g` while the iteration owes verdicts, then
+`f` for the review, then `p` for a revision. `v` opens both arms' outputs (the same key as in the
+initialization view); `enter` opens the arm's `activity.log` — how it got there, which is not drawn in
+the pane at all: eight dim lines of tool calls under a table is a wall in front of the three things this
+screen is for. `[` and `]` walk the iterations without leaving the section, `E` hands `SKILL.md` to
+`$EDITOR` (a revision is a document, and a text field is not an editor) and `r` opens `report.md`.
 
 ```
  output optimization > dummy > iteration                                              evalctl v0.9.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  2 cases · 4 assertions · iteration #1 · 1 on disk · best #1
                                   │ 
-  CASES               1/4 failed  │   dummy-2-three-dice                         #2 · 1 of 2 failed 
+  CASES               1/4 failed  │ ▌ dummy-2-three-dice                       #2 · 1 of 2 failed 
   ─────────────────────────────   │   ──────────────────────────────────────────────────────────────
-    CASE                   FAILED │ 
-  ✓ dummy-1-one-die           0/2 │   output · without
-▶ ✗ dummy-2-three-dice        1/2 │   roll
-                                  │ ▌ PATTERN     ASSERTION                           WITH WITHOUT
-                                  │   no signal   Three faces                         pass    pass
-                                  │ ▶ adds value  The total adds up                   pass    fail
-                                  │   1 of 2 pass with the skill and fail without it — the rest
-                                  │   measure the model
+    CASE                   FAILED │   PATTERN         ASSERTION            WITH SKILL  WITHOUT SKILL
+  ✓ dummy-1-one-die           0/2 │   ──────────────────────────────────────────────────────────────
+▶ ✗ dummy-2-three-dice        1/2 │   make it fail    Three faces          pass         pass ✗
+                                  │ ▶ adds value      The total adds up    pass         fail ✓
+                                  │     without · the reply said so
+                                  │   1 of 2 pass with the skill and fail without it — the rest measure the model
                                   │ 
-                                  │   evidence · without
-                                  │   the reply said so
+                                  │   output · without the skill
+                                  │   roll
                                   │ 
-                                  │   feedback · this case's review
+                                  │   REVIEW                                          one per case 
+                                  │   ──────────────────────────────────────────────────────────────
                                   │   the total was one off
                                   │ 
-                                  │   → f  the feedback · p a revision · v transcript · E SKILL.md
-                                  │        · R runs the next iteration
+                                  │   → p  a revision of SKILL.md — the failures and the review are what it reads
 ```
 
 That is the loop's middle, and it is the part that used to be a sentence in the guide: the failures and
@@ -688,7 +737,9 @@ then the benchmark and the report are re-aggregated.
 carry no verdicts — a run made with `--no-grade`, by a build older than the fold, or one whose grade
 failed — is graded by it, and an iteration that already has verdicts is re-graded by it **after asking**,
 because that is the one thing an assertion edit leaves behind: the verdicts on screen describe the old
-list. `evalctl run --no-grade` is the same trade from the shell. A finished run or grade lands on the
+list. It grades **only the cases that owe a verdict** — a list rewritten since the grade, an arm nobody
+judged, a case never graded at all — so one rewritten sentence is two judge calls and not two per case in
+the iteration. Nothing is re-run: the arms' outputs are the evidence and the judge re-reads them. `evalctl run --no-grade` is the same trade from the shell. A finished run or grade lands on the
 iteration view, because the next move after a spend is to read what failed.
 
 ### The frame
@@ -774,6 +825,7 @@ evalctl run --dry-run                       # plan + the exact hermes commands, 
 evalctl run --skill source-research         # one stage, next free iteration-N
 evalctl run --skill learning-path --case 1,3
 evalctl run --skill slide-builder --iteration 2 --resume   # add cases to an iteration
+evalctl run --skill slide-builder --fill --case 3          # add case 3 to the newest open iteration
 evalctl run --arms without_skill            # one side of the comparison only
 evalctl run --no-grade                      # arms only: no verdicts, so nothing enters the loop
 

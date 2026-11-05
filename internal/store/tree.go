@@ -29,6 +29,17 @@ import (
 // `.evalctl`'s backups) are skipped whole, and a `*-workspace` is read down to its iteration level —
 // the iteration dir and the report files in it — because a run's payload is tens of thousands of
 // case files and one new skill must not cost a walk of those.
+// workspaceStampFile is the files under a run's arm that a screen reads back: the verdicts, the reply,
+// the cost, the note a human wrote, and the iteration's own summaries. Everything else in a workspace
+// is the run's raw material.
+func workspaceStampFile(name string) bool {
+	switch name {
+	case "grading.json", "timing.json", "meta.json", "feedback.json", "benchmark.json", "report.md":
+		return true
+	}
+	return false
+}
+
 func TreeStamp(root string) (string, error) {
 	h := fnv.New64a()
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -61,12 +72,17 @@ func TreeStamp(root string) (string, error) {
 		}
 		parts := strings.Split(rel, "/")
 		if strings.HasSuffix(parts[0], "-workspace") {
-			// `<skill>-workspace/iteration-3` is recorded and its own files with it; the case
-			// directories under it are recorded but not descended into.
-			if d.IsDir() && len(parts) >= 3 {
+			switch {
+			case d.IsDir() && len(parts) >= 5:
+				// Under an arm: the run's raw material, and nothing a screen reads.
 				return fs.SkipDir
-			}
-			if !d.IsDir() && len(parts) >= 4 {
+			case d.IsDir() && len(parts) == 4:
+				// The arm's own directory is walked but not hashed: its mtime moves whenever the run
+				// adds a file to it, and a payload of 27k files must not cost a re-read per tick. A new
+				// arm still shows, because the case directory above it moves.
+				return nil
+			case !d.IsDir() && !workspaceStampFile(d.Name()):
+				// A log, a stream, an output: the run's own material, not a screen's reading.
 				return nil
 			}
 		}

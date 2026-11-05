@@ -119,7 +119,7 @@ func TestOutputLaneReadsTheLoop(t *testing.T) {
 	// The menu offers the three names the rest of the lane uses, and the cursor is on the view the
 	// disk is asking for: this iteration has a failure, so it is the iteration.
 	menu := stripMarks(strings.Join(m.qualityMenuBody(m.bodyHeight()), "\n"))
-	for _, want := range []string{"SECTIONS", "test cases", "iteration", "testing quality",
+	for _, want := range []string{"SECTIONS", "initialization", "iteration", "testing quality",
 		"2 cases · 4 assertions", "1 assertion failed", "iteration #1"} {
 		if !strings.Contains(menu, want) {
 			t.Fatalf("the menu is missing %q:\n%s", want, menu)
@@ -134,7 +134,7 @@ func TestOutputLaneReadsTheLoop(t *testing.T) {
 	}
 	body := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
 	for _, want := range []string{"FAILED", "without", "dummy-2-three-dice", "ASSERTION", "WITH",
-		"WITHOUT SKILL", "The total adds up", "evidence · without", "the reply said so", "the total was one off"} {
+		"WITHOUT SKILL", "The total adds up", "without · the reply said so", "REVIEW", "the total was one off"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the iteration view is missing %q:\n%s", want, body)
 		}
@@ -215,7 +215,7 @@ func TestOutputLaneSaysWhatIsMissing(t *testing.T) {
 	press(m, "1")
 	body := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
 	// Three moves, not four: the grade is part of the run, so it is not a step before the first run.
-	for _, want := range []string{"TEST CASES", "the loop is not open yet · 0 of 3", "cases", "assertions",
+	for _, want := range []string{"INITIALIZATION", "the loop is not open yet · 0 of 3", "cases", "assertions",
 		"write the cases — evals.json", "S", "NO CASE"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the band is missing %q:\n%s", want, body)
@@ -344,7 +344,7 @@ func TestFeedbackIsPossibleOnACaseThatPassed(t *testing.T) {
 	body := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
 	// The case's assertions are in the table with both arms' verdicts, and the line under them says
 	// what that pattern means: both arms pass, so this case measures the model and not the skill.
-	for _, want := range []string{"ASSERTION", "feedback", "no assertion passes with and fails without the skill"} {
+	for _, want := range []string{"ASSERTION", "REVIEW", "no assertion passes with and fails without the skill"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("a passing case has no feedback block: missing %q\n%s", want, body)
 		}
@@ -495,11 +495,14 @@ func TestTheAssertionListIsEditedUnderThePane(t *testing.T) {
 	if strings.Index(view, "CASES") > strings.Index(view, "ASSERTIONS") {
 		t.Fatalf("the strip must be drawn under the columns, not over them:\n%s", view)
 	}
-	// The field owns the keystrokes: q and j are characters, and nothing is written while typing.
+	// The list owns the keystrokes: q and j are characters, and nothing is written while typing. The
+	// caret opens at the end of the last assertion, so the letters land there.
+	last := m.assertEdit.cur
+	before := m.assertEdit.lines[last]
 	press(m, "q")
 	press(m, "j")
-	if m.assertEdit == nil || !strings.Contains(m.assertEdit.text, "qj") {
-		t.Fatalf("the list did not take the keystrokes: %+v", m.assertEdit)
+	if m.assertEdit == nil || !strings.Contains(m.assertEdit.lines[last], before+"qj") {
+		t.Fatalf("the list did not take the keystrokes: %+v", m.assertEdit.lines)
 	}
 	if m.status != "" {
 		t.Fatalf("typing ran a command: status = %q", m.status)
@@ -507,18 +510,29 @@ func TestTheAssertionListIsEditedUnderThePane(t *testing.T) {
 	if readEvals(t, root) != was {
 		t.Fatal("typing wrote the file; only ctrl+s does")
 	}
-	// Enter is a line in this field, not a submit: the list is lines, and a form that submitted on
-	// the first enter would save half an edit.
-	rows := strings.Count(m.assertEdit.text, "\n")
+	// Enter is the next assertion, and the second bullet is drawn by the pane and not typed into the
+	// text: the assertion above keeps its own sentence, and the new one starts empty.
+	rows := len(m.assertEdit.lines)
+	above := m.assertEdit.lines[last]
 	press(m, "enter")
-	if m.assertEdit == nil || strings.Count(m.assertEdit.text, "\n") != rows+1 {
-		t.Fatalf("enter must add a line to the list, not submit it: %+v", m.assertEdit)
+	if m.assertEdit == nil || len(m.assertEdit.lines) != rows+1 {
+		t.Fatalf("enter must add an assertion to the list: %+v", m.assertEdit.lines)
+	}
+	if m.assertEdit.lines[last] != above {
+		t.Fatalf("enter edited the assertion above it: %q", m.assertEdit.lines[last])
+	}
+	if m.assertEdit.cur != last+1 || m.assertEdit.lines[last+1] != "" {
+		t.Fatalf("enter did not open an empty assertion under the caret: cur=%d lines=%v",
+			m.assertEdit.cur, m.assertEdit.lines)
+	}
+	if strings.Contains(strings.Join(m.assertEdit.lines, "\n"), glyphs.Bullet) {
+		t.Fatalf("the bullet is part of the text: %v", m.assertEdit.lines)
 	}
 	if readEvals(t, root) != was {
 		t.Fatal("enter wrote the file")
 	}
 	// ctrl+s writes the list: one assertion per line, the blank line dropped.
-	m.assertEdit.text = "Three faces\n\nThe total adds up\nEvery face is a d20\n"
+	m.assertEdit.lines = []string{"Three faces", "", "The total adds up", "Every face is a d20", ""}
 	press(m, "ctrl+s")
 	if m.assertEdit != nil {
 		t.Fatal("the strip must close after the write")
@@ -549,7 +563,7 @@ func TestEscLeavesTheAssertionListAlone(t *testing.T) {
 	openView(m, "dummy", qSetup)
 	press(m, "j")
 	press(m, "e")
-	m.assertEdit.text = "something the file must not keep"
+	m.assertEdit.lines = []string{"something the file must not keep"}
 	press(m, "esc")
 	if m.assertEdit != nil {
 		t.Fatal("esc must close the strip")
@@ -569,7 +583,7 @@ func TestClearingTheListWritesACaseWithNoAssertionKey(t *testing.T) {
 	openView(m, "dummy", qSetup)
 	press(m, "j")
 	press(m, "e")
-	m.assertEdit.text = "\n  \n"
+	m.assertEdit.lines = []string{"", "  ", ""}
 	press(m, "ctrl+s")
 	var file struct {
 		Evals []map[string]any `json:"evals"`
@@ -674,7 +688,7 @@ func TestTheDojoReadsTheFailuresWithTheEvidence(t *testing.T) {
 	// sum over the iteration: one of four assertions failed, and the row that owns it says 1/2.
 	for _, want := range []string{"CASES", "1/4 failed", "0/2", "1/2", "#2 · 1 of 2 failed",
 		"dummy-2-three-dice", "ASSERTION", "WITH SKILL", "WITHOUT SKILL",
-		"The total adds up", "evidence · without", "the reply said so", "the total was one off", "feedback"} {
+		"The total adds up", "without · the reply said so", "the total was one off", "REVIEW"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the dojo is missing %q:\n%s", want, body)
 		}
@@ -690,14 +704,15 @@ func TestTheDojoReadsTheFailuresWithTheEvidence(t *testing.T) {
 	}
 }
 
-// v opens the selected arm's whole transcript, and esc comes back to the dojo — not to the run screen
-// it was opened from, which has not existed for hours.
+// enter opens the selected arm's whole transcript, and esc comes back to the dojo — not to the run
+// screen it was opened from, which has not existed for hours. `v` is the outputs, the same key as in
+// the initialization view.
 func TestTheTranscriptOpensAndComesBack(t *testing.T) {
 	m, root := qualityFixture(t)
 	write(t, filepath.Join(root, "dummy-workspace", "iteration-1", "dummy-2-three-dice",
 		"without_skill", "activity.log"), "first line\nsecond line\n")
 	openView(m, "dummy", qDojo)
-	press(m, "v")
+	press(m, "enter")
 	if m.mode != screenDoc || m.doc == nil {
 		t.Fatalf("mode = %v, want the transcript in the document reader", m.mode)
 	}

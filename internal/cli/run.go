@@ -30,6 +30,7 @@ type runCommand struct {
 	budget    int
 	resume    bool
 	force     bool
+	fill      bool
 	dryRun    bool
 	list      bool
 	iteration int
@@ -43,6 +44,8 @@ func (rc *runCommand) register(fs *flag.FlagSet) {
 	fs.IntVar(&rc.budget, "budget", 0, "wall-clock seconds per run (default 1200 output, 240 trigger)")
 	fs.BoolVar(&rc.resume, "resume", false, "skip arms/queries that already finished")
 	fs.BoolVar(&rc.force, "force", false, "with --resume: rerun anyway")
+	fs.BoolVar(&rc.fill, "fill", false,
+		"output lane: write into the newest iteration while it is still open, instead of starting a new number")
 	fs.BoolVar(&rc.dryRun, "dry-run", false, "print the plan and the commands, change nothing")
 	fs.BoolVar(&rc.list, "list", false, "list the selected cases and exit")
 	fs.IntVar(&rc.iteration, "iteration", 0, "iteration number (default: next free)")
@@ -99,7 +102,7 @@ func runRun(args []string) int {
 	opts := runner.Options{
 		Lane: rc.lane, Skills: rc.skillsList(), CaseIDs: ids(*cases), QueryIDs: ids(*queries),
 		Split: *split, Arms: strings.Split(*arms, ","), Model: rc.model, Resume: rc.resume,
-		Force: rc.force, NoVerify: *noVerify, Isolate: *isolate, DryRun: rc.dryRun, List: rc.list,
+		Force: rc.force, Fill: rc.fill, NoVerify: *noVerify, Isolate: *isolate, DryRun: rc.dryRun, List: rc.list,
 		Iteration: rc.iteration, Runs: *runs, Threshold: *threshold, MaxTurns: *maxTurns,
 		Grade: *grade && !*noGrade,
 	}

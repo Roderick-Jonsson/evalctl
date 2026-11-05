@@ -429,6 +429,9 @@ func (m *Model) finishRun() tea.Cmd {
 		}
 		if m.run.kind == runQuality {
 			m.run.live.summary = "iteration written — g grades it, 3 ranks the iterations"
+			if m.run.live.judging {
+				m.run.live.summary = "iteration written and graded — enter reads the failures, 3 ranks the iterations"
+			}
 		} else {
 			m.run.live.summary = "graded — 2 reads the failures, 3 the rates"
 		}
@@ -509,11 +512,18 @@ func (m *Model) leaveRun() tea.Cmd {
 	m.run = nil
 	if kind == runQuality || kind == runGrade {
 		// A finished run or grade lands on the dojo: the next move is to read what failed, and that
-		// evidence is one section away from anywhere else in the lane.
+		// evidence is one section away from anywhere else in the lane. A run that leaves the loop
+		// closed is the exception: a probe, or a run of a set with no assertion yet, has no verdicts
+		// to read, and the move it is waiting for is the set's own — so it lands there.
 		if m.quality != nil {
 			m.quality.feedback = nil
-			m.setQualitySection(qDojo)
-			m.quality.selectFirstFailed()
+			if m.quality.lab != nil && m.quality.lab.InitPending {
+				m.setQualitySection(qSetup)
+				m.setStatus("the run is on disk — v reads what the arms wrote, e writes the assertions, g grades them", false)
+			} else {
+				m.setQualitySection(qDojo)
+				m.quality.selectFirstFailed()
+			}
 		}
 		m.mode = screenQuality
 		return nil

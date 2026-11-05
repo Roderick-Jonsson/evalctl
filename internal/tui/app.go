@@ -45,7 +45,7 @@ const (
 	screenDoc                       // a scrollable document (failures, a report, a log)
 	screenRunLive                   // the run, while it runs
 	screenQualityMenu               // output lane: the skill's three views, chosen on one screen
-	screenQuality                   // output lane: test cases, iteration or testing quality
+	screenQuality                   // output lane: initialization, iteration or testing quality
 	screenRevision                  // the agent's proposal for SKILL.md, as a diff against the file
 	screenHelp
 )
@@ -85,10 +85,13 @@ type Model struct {
 	// assertEdit is the output lane's assertion strip: the case's grading list, open under the
 	// workbench's two columns. Nil when the list is not being written.
 	assertEdit *assertState
-	ask        *askState
-	doc        *docState
-	run        *runState
-	help       int
+	// caseNew is a case being made: two fields, drawn where the record of a case is drawn. Nil when
+	// nothing is being added.
+	caseNew *caseNewState
+	ask     *askState
+	doc     *docState
+	run     *runState
+	help    int
 
 	// backTo is where a screen opened off a step returns to, so a form or a document always hands
 	// the flow back the way it left it.
@@ -257,7 +260,7 @@ func (m *Model) syncTree() {
 	// the tick after the screen gives the keys back does the re-read.
 	// Only a field with the caret holds the re-read back: its draft is the one thing on screen the
 	// store cannot replace. Fields without it are seeded from the file and can be seeded again.
-	if m.runActive() || m.mode == screenAsk || m.formActive() || m.assertEditActive() || m.feedbackActive() {
+	if m.runActive() || m.mode == screenAsk || m.formActive() || m.assertEditActive() || m.caseNewActive() || m.feedbackActive() {
 		return
 	}
 	if m.reopen() {
@@ -334,6 +337,9 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.assertEditActive() {
 		return m, m.assertEdit.update(m, msg)
 	}
+	if m.caseNewActive() {
+		return m, m.caseNew.update(m, msg)
+	}
 	if m.feedbackActive() {
 		return m, m.quality.feedback.update(m, msg)
 	}
@@ -404,6 +410,9 @@ func (m *Model) passToForm(msg tea.Msg) tea.Cmd {
 	if m.assertEditActive() {
 		return m.assertEdit.updateMsg(msg)
 	}
+	if m.caseNewActive() {
+		return m.caseNew.updateMsg(msg)
+	}
 	if m.feedbackActive() {
 		return m.quality.feedback.updateMsg(msg)
 	}
@@ -430,6 +439,7 @@ func (m *Model) escUp() tea.Cmd {
 	case screenQuality:
 		// A view goes back to the menu the three were chosen on; esc is one level, every time.
 		m.mode = screenQualityMenu
+		m.caseNew = nil
 		m.setStatus("", false)
 	case screenSections:
 		// The run's block is inside the pane, so esc leaves it before it leaves the screen: one
@@ -659,7 +669,11 @@ func (m *Model) bodyLines(h int) []string {
 		}
 	case screenDoc:
 		if m.doc != nil {
-			m.doc.md(m.width)
+			// Three cells short of the frame: the document is drawn two cells in from the edge by its
+			// own indent, and glamour keeps a margin of its own. Rendered at the full width, the last
+			// two characters of every full line were cut by the frame — a report whose numbers run off
+			// the edge is a report whose numbers cannot be read.
+			m.doc.md(max(10, m.width-3))
 			return m.doc.body(h)
 		}
 	case screenRunLive:
@@ -825,7 +839,7 @@ func (m *Model) region() string {
 			return setRegionWord(false)
 		}
 	case screenQuality:
-		if m.assertEditActive() || m.feedbackActive() {
+		if m.assertEditActive() || m.caseNewActive() || m.feedbackActive() {
 			return "editor"
 		}
 		if q := m.quality; q != nil {
@@ -947,6 +961,11 @@ func (m *Model) position() string {
 	case screenQualityMenu:
 		return m.qualityMenuPosition()
 	case screenQuality:
+		// The corner names the case the caret is in, not the row the cursor stands on: while a case
+		// is being written, the cursor's row is not what the keys are touching.
+		if m.caseNewActive() {
+			return m.caseNew.slug
+		}
 		if q := m.quality; q != nil {
 			switch q.sec {
 			case qDojo:
@@ -1075,18 +1094,23 @@ func (m *Model) helpLines() []string {
 		head("output optimization — three views, chosen on one screen"),
 		[]string{
 			"  enter      the skill, then the view — the cursor is on the one its disk is asking for",
-			"  1 2 3      test cases, iteration, testing quality — on the menu, and nowhere else",
+			"  1 2 3      initialization, iteration, testing quality — on the menu, and nowhere else",
 			"  esc        one level back: a view to the menu, the menu to the skills",
 			"  —          a view has no key to another view; its name is the path's last segment",
-			"  —          the loop is closed until a graded run exists, and only test cases opens then",
-			"  S e        the cases in evals.json · a case's assertions, in the pane it is drawn in",
+			"  —          the loop is closed until a graded run exists, and only initialization opens then",
+			"  S e        the cases in evals.json · a case's assertions, one bullet each, in the pane",
 			"  R          run the next iteration: every case, both arms, then the judge — one spend",
 			"  g          grade an iteration with not graded (--no-grade, an older build); on a graded one",
 			"             it re-grades after an assertion edit, and asks first",
-			"  f          the feedback: what the output got wrong, in your words — empty means it looked fine",
+			"  f          the review: what the output got wrong, in your words — empty means it looked fine",
 			"  —          a run grades itself; the loop opens on the grades, never on the outputs",
 			"  j k        walk the cases; tab moves the keys into the assertion table, j k then walk its rows",
-			"  f E        the feedback for the case, from any row · SKILL.md, which is what a revision changes",
+			"  e n d      the case's assertions, one bullet each · a new case · delete the case under the cursor",
+			"  r R        run the case under the cursor, both arms and judged · run every case (a run of one",
+			"             case is a probe: it writes an iteration and never ranks)",
+			"  f E        the review of the case, from any row · SKILL.md, which is what a revision changes",
+			"  v enter    the two arms' outputs · the arm's activity log",
+			"  —          the review is per case, not per assertion: an assertion is a sentence about the output",
 			"  p          ask the revising agent for a new SKILL.md — the diff lands on its own screen,",
 			"             one hunk per change: space ticks a hunk off, n jumps to the next, a writes",
 			"  [ ]        the iteration the iteration view is reading",

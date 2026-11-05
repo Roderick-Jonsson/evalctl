@@ -85,24 +85,78 @@ func (r *Runner) RunQuality(ctx context.Context, o Options) error {
 	return nil
 }
 
+// IterationPlan is which iteration a run writes into, and what it would close.
+//
+// An iteration is the set measured once. A case run on its own therefore belongs to the iteration
+// being built — writing it into a fresh number every time left a workspace of one-case iterations that
+// could never add up to a set, and running three cases one at a time then never produced an iteration
+// of three. A run joins the newest iteration while that iteration is still open (it does not hold every
+// case the set declares) and the skill has not moved since; a complete iteration, or one measured
+// against a different skill, starts the next number.
+type IterationPlan struct {
+	Iter int
+	Join bool     // the iteration is already on disk
+	Open []string // declared cases it does not hold yet
+}
+
+func (r *Runner) PlanIteration(skill string, fill bool) (IterationPlan, error) {
+	next := r.NextIteration(r.WorkspaceDir(skill), "iteration")
+	if !fill {
+		return IterationPlan{Iter: next}, nil
+	}
+	last := next - 1
+	if last <= 0 {
+		return IterationPlan{Iter: next}, nil
+	}
+	dir := r.IterDir(r.WorkspaceDir(skill), last)
+	meta := metaQuality{}
+	if err := readJSONFile(filepath.Join(dir, "meta.json"), &meta); err != nil || len(meta.Cases) == 0 {
+		// An iteration with no record of its own is not one a run can be added to: what it holds is
+		// whatever a half-finished run left behind.
+		return IterationPlan{Iter: next}, nil
+	}
+	have := map[string]bool{}
+	for _, slug := range meta.Cases {
+		have[slug] = true
+	}
+	declared, err := LoadCases(r.Store, []string{skill}, nil)
+	if err != nil {
+		return IterationPlan{Iter: next}, nil
+	}
+	var open []string
+	for _, c := range declared {
+		if !have[c.Slug] {
+			open = append(open, c.Slug)
+		}
+	}
+	if len(open) == 0 {
+		return IterationPlan{Iter: next}, nil
+	}
+	return IterationPlan{Iter: last, Join: true, Open: open}, nil
+}
+
 // runSkillIteration writes one skill's cases into that skill's next iteration.
 func (r *Runner) runSkillIteration(ctx context.Context, cases []Case, o Options) error {
 	skill := cases[0].Skill
 	workspace := r.WorkspaceDir(skill)
 	iteration := o.Iteration
 	if iteration == 0 {
-		iteration = r.NextIteration(workspace, "iteration")
+		plan, err := r.PlanIteration(skill, o.Fill)
+		if err != nil {
+			return err
+		}
+		iteration = plan.Iter
 	}
 	iterDir := r.IterDir(workspace, iteration)
 	if fileExists(iterDir) && !o.DryRun && !o.Resume && !o.Force {
 		return fmt.Errorf("%s already exists — rerun with --resume, --force, or pick another --iteration",
 			r.relative(iterDir))
 	}
-	if !o.Resume {
-		for _, c := range cases {
-			if o.Force {
-				_ = os.RemoveAll(filepath.Join(iterDir, c.Slug))
-			}
+	for _, c := range cases {
+		if o.Force || o.Replace {
+			// RemoveAll on a case the iteration does not hold is a no-op, so Replace is safe on a case
+			// being added as well as on one being measured again.
+			_ = os.RemoveAll(filepath.Join(iterDir, c.Slug))
 		}
 	}
 
@@ -122,15 +176,17 @@ func (r *Runner) runSkillIteration(ctx context.Context, cases []Case, o Options)
 	for _, c := range cases {
 		r.emit(Event{Kind: EventCase, Lane: LaneOutput, Case: c.Slug,
 			Message: fmt.Sprintf("%s  ·  %s case %d", c.Slug, c.Skill, c.ID)})
-		if sha, err := r.Profiles.TreeHash(c.Skill); err == nil {
-			treeSHA[c.Slug] = sha
-		}
 		if !o.DryRun && contains(o.Arms, ArmWith) {
 			line, err := r.Profiles.SyncSkills(ArmProfiles[ArmWith], []string{c.Skill}, false)
 			if err != nil {
 				return err
 			}
 			r.message("%s", line)
+		}
+		// The hash is taken after the sync: it is the tree the arms are about to run, and a hash taken
+		// before it recorded the copy the sync was about to replace.
+		if sha, err := r.Profiles.TreeHash(c.Skill); err == nil {
+			treeSHA[c.Slug] = sha
 		}
 		caseDir := filepath.Join(iterDir, c.Slug)
 		if !o.DryRun {
@@ -162,9 +218,13 @@ func (r *Runner) runSkillIteration(ctx context.Context, cases []Case, o Options)
 
 	if o.DryRun {
 		// The plan says what the run would also spend: the judge is part of it, and a dry run that
-		// stopped at the arms would price the iteration wrong.
-		if o.Grade {
-			r.message("%s: then the judge — one call per arm of iteration %d, against the declared assertions", skill, iteration)
+		// stopped at the arms would price the iteration wrong. A set with no assertion spends nothing
+		// on the judge — it is the look the first assertions are written from — and the plan says so.
+		if o.Grade && assertedCases(cases) > 0 {
+			r.message("%s: then the judge — one call per case and arm that declares an assertion, "+
+				"on iteration %d", skill, iteration)
+		} else {
+			r.message("%s: no assertion is declared — nothing is judged, and the outputs are the point", skill)
 		}
 		r.emit(Event{Kind: EventDone, Lane: LaneOutput, Message: "Dry run: nothing was written. Drop --dry-run to execute."})
 		return nil
@@ -182,6 +242,11 @@ func (r *Runner) runSkillIteration(ctx context.Context, cases []Case, o Options)
 	if err != nil {
 		return err
 	}
+	// meta.json is the iteration's own record of what it holds. A run that joined an iteration adds its
+	// cases to that record rather than replacing it, or the next join would read the iteration as
+	// missing the cases this run did not touch and mint a number for a set that was already whole.
+	var prev metaQuality
+	joined := readJSONFile(filepath.Join(iterDir, "meta.json"), &prev) == nil && prev.Iteration == iteration
 	meta := metaQuality{Iteration: iteration, Skill: skill, Started: startedAt,
 		Model: orDefault(o.Model, "default"), Arms: o.Arms, BudgetS: int(o.Budget.Seconds()), Cases: []string{}}
 	for _, run := range collected {
@@ -206,6 +271,19 @@ func (r *Runner) runSkillIteration(ctx context.Context, cases []Case, o Options)
 		return err
 	}
 	meta.Provenance.Fixtures = fixtures
+	if joined {
+		meta.Cases = appendUnique(prev.Cases, meta.Cases)
+		for slug, sha := range prev.Provenance.SkillTreeSHA256 {
+			if _, ok := meta.Provenance.SkillTreeSHA256[slug]; !ok {
+				meta.Provenance.SkillTreeSHA256[slug] = sha
+			}
+		}
+		for slug, f := range prev.Provenance.Fixtures {
+			if _, ok := meta.Provenance.Fixtures[slug]; !ok {
+				meta.Provenance.Fixtures[slug] = f
+			}
+		}
+	}
 	if err := writeJSONFile(filepath.Join(iterDir, "meta.json"), meta); err != nil {
 		return err
 	}
@@ -383,4 +461,33 @@ func orDefault(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// assertedCases is how many of the cases being run declare at least one assertion: the count that
+// decides whether the judge has anything to read.
+func assertedCases(cases []Case) int {
+	n := 0
+	for _, c := range cases {
+		if len(c.Assertions) > 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// appendUnique is a ∪ b, keeping the order of a and then what of b is new: an iteration's case list
+// reads in the order the cases were measured.
+func appendUnique(a, b []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(a)+len(b))
+	for _, list := range [][]string{a, b} {
+		for _, s := range list {
+			if s == "" || seen[s] {
+				continue
+			}
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }

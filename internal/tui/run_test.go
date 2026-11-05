@@ -108,26 +108,52 @@ func TestTheJudgePassIsItsOwnPass(t *testing.T) {
 	}
 }
 
-// `g` on an iteration with not graded is still the way to finish it: a run made with --no-grade, by
-// an older build, or one whose grade failed. On a graded iteration the same key is a re-grade, and it
-// asks first — the verdicts on screen would be replaced by the ones it buys.
-func TestGOnAGradedIterationAsksBeforeSpending(t *testing.T) {
+// `g` grades what the judge has not read and nothing else: on a graded iteration with nothing stale
+// there is no spend to make, and after an edit it is the edited case's two judge calls, not the whole
+// iteration's. The verdicts on screen are replaced by the ones it buys, so it asks first.
+func TestGRegradesOnlyTheCasesThatOweAVerdict(t *testing.T) {
 	m, _ := qualityFixture(t)
 	m.openQualitySkill("dummy")
 	press(m, "2")
+
+	// Nothing is stale: every assertion of every case has a verdict, so there is nothing to buy.
+	press(m, "g")
+	if m.mode == screenAsk {
+		t.Fatalf("g asked to spend on an iteration with nothing owing: %+v", m.ask.lines)
+	}
+	if st := stripMarks(m.status); !strings.Contains(st, "nothing to grade") {
+		t.Fatalf("status = %q, want it to say there is nothing to grade", st)
+	}
+
+	// One assertion rewritten: the case that holds it owes a verdict, and the re-grade is scoped to it.
+	press(m, "e")
+	m.assertEdit.lines = []string{"Three faces, each 1 to 20", "The total adds up"}
+	press(m, "ctrl+s")
 	press(m, "g")
 	if m.mode != screenAsk || m.ask == nil {
-		t.Fatalf("g on a graded iteration = mode %v, want the question", m.mode)
+		t.Fatalf("g after an edit = mode %v, want the question", m.mode)
 	}
-	if !strings.Contains(stripMarks(strings.Join(m.ask.lines, "\n")), "judge call") {
-		t.Fatalf("the question does not say what it spends: %+v", m.ask.lines)
+	lines := stripMarks(strings.Join(m.ask.lines, "\n"))
+	if !strings.Contains(lines, "1 of 2 cases owe a verdict") {
+		t.Fatalf("the question does not say what owes a verdict:\n%s", lines)
+	}
+	if !strings.Contains(lines, "2 judge call(s)") {
+		t.Fatalf("the question does not price the re-grade by the case:\n%s", lines)
 	}
 	press(m, "y")
 	if m.mode != screenRunLive || m.run == nil || m.run.kind != runGrade {
 		t.Fatalf("y = mode %v, want the grading run", m.mode)
 	}
-	if !strings.Contains(m.run.scope, "re-grading") {
-		t.Fatalf("scope = %q, want the re-grade named", m.run.scope)
+	defer func() {
+		if m.run != nil && m.run.live != nil && m.run.live.cancel != nil {
+			m.run.live.cancel()
+		}
+	}()
+	if !strings.Contains(m.run.scope, "re-grading") || !strings.Contains(m.run.scope, "1 case") {
+		t.Fatalf("scope = %q, want the re-grade named and scoped", m.run.scope)
+	}
+	if n := len(m.run.live.cases); n != 1 {
+		t.Fatalf("the live grade shows %d cases, want the one that owes a verdict", n)
 	}
 }
 

@@ -132,13 +132,13 @@ func (m *Model) qualityMenuPane(w, h int) []string {
 		d.fact("fixtures", m.skill+"/evals/files/<slug>/")
 		block()
 	case qDojo:
-		d.para("The assertions that failed with the judge's evidence for each, the arm's reply and its transcript, and the feedback you write about the output. The revision is asked for from here, because this is where the failure is.")
+		d.para("The assertions that failed with the judge's evidence for each, the arm's reply and its transcript, and the review you write about the output. The revision is asked for from here, because this is where the failure is.")
 		block()
 		if locked {
 			break
 		}
 		d.card("The keys")
-		d.fact("f", "the feedback for the case under the cursor")
+		d.fact("f", "the review for the case under the cursor")
 		d.fact("p", "a revision of SKILL.md — the diff lands on its own screen")
 		d.fact("E", "SKILL.md, in $EDITOR")
 		block()
@@ -170,7 +170,7 @@ func (m *Model) qualityMenuPane(w, h int) []string {
 			act.action("enter", "the cases · S opens evals.json, e writes the assertions")
 		case qDojo:
 			if q.iter > 0 {
-				act.action("enter", fmt.Sprintf("iteration %d — read the failures, f the feedback, p a revision", q.iter))
+				act.action("enter", fmt.Sprintf("iteration %d — read the failures, f the review, p a revision", q.iter))
 			} else {
 				act.action("enter", "the iteration view · nothing has run yet, R runs iteration 1")
 			}
@@ -295,6 +295,10 @@ func (m *Model) openQualityView(sec int) {
 	m.quality.vcursor = sec
 	m.mode = screenQuality
 	m.setQualitySection(sec)
+	// Walking into a view re-reads the disk: a grade made from a shell, a run in another terminal, an
+	// agent that edited the set. The screens are the disk's reading, and a view opened on a reading
+	// taken minutes ago is a view that lies about the pattern it draws.
+	m.reloadQuality()
 	if sec == qDojo {
 		// The iteration view is read case by case, and it opens on the first case that failed: a
 		// view that opens on a passing case answers "what went wrong" with "nothing".

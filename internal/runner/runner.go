@@ -66,16 +66,25 @@ const (
 
 // Options is one invocation: which rows, which arms, how much time, and whether to write.
 type Options struct {
-	Lane      string
-	Skills    []string
-	CaseIDs   []int
-	QueryIDs  []int
-	Split     string
-	Arms      []string
-	Model     string
-	Budget    time.Duration
-	Resume    bool
-	Force     bool
+	Lane     string
+	Skills   []string
+	CaseIDs  []int
+	QueryIDs []int
+	Split    string
+	Arms     []string
+	Model    string
+	Budget   time.Duration
+	Resume   bool
+	Force    bool
+	// Fill writes the run into the newest iteration when that iteration is still open, instead of
+	// minting a number of its own. An iteration is the set measured once: a case run on its own
+	// belongs to the iteration being built, and a workspace of one-case iterations can never add up
+	// to a set. PlanIteration decides, and the screen asks it before anything spends.
+	Fill bool
+	// Replace measures the given cases into the iteration afresh: their directories are removed first,
+	// so re-running a case that the iteration already holds replaces its arms rather than sitting
+	// beside them. A case nobody asked to re-run keeps the run it had.
+	Replace   bool
 	NoVerify  bool
 	Isolate   bool
 	DryRun    bool

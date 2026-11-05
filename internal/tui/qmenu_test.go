@@ -26,7 +26,7 @@ func TestTheMenuCannotWalkIntoALockedView(t *testing.T) {
 	// The rows are still drawn, dim, with the fact that keeps them shut: the menu has to say what the
 	// loop will open, it just may not walk there.
 	body := stripMarks(strings.Join(m.qualityMenuBody(m.bodyHeight()), "\n"))
-	for _, want := range []string{"SECTIONS", "test cases", "iteration", "testing quality",
+	for _, want := range []string{"SECTIONS", "initialization", "iteration", "testing quality",
 		"locked until the loop opens"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the closed menu is missing %q:\n%s", want, body)

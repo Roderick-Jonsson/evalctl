@@ -58,45 +58,72 @@ func TestTheSetOpensOnItsBand(t *testing.T) {
 	}
 	// The status row says what the lane is waiting for before anything is pressed: the first key
 	// clears it, which is why it is read here.
-	if st := stripMarks(m.status); !strings.Contains(st, "assertion") {
-		t.Fatalf("status = %q, want the assertion the loop is asking for", st)
+	if st := stripMarks(m.status); !strings.Contains(st, "run iteration 1") {
+		t.Fatalf("status = %q, want the first run the loop is asking for", st)
 	}
 	press(m, "1")
 	if m.quality.sec != qSetup {
 		t.Fatalf("section = %d, want test cases", m.quality.sec)
 	}
-	if bar := stripMarks(m.barLeft()); !strings.HasSuffix(bar, "test cases") {
-		t.Fatalf("path = %q, want it to end at test cases", bar)
+	if bar := stripMarks(m.barLeft()); !strings.HasSuffix(bar, "initialization") {
+		t.Fatalf("path = %q, want it to end at initialization", bar)
 	}
 	body := stripMarks(strings.Join(m.bodyLines(m.bodyHeight()), "\n"))
 	// Three steps here, not four: the grade is part of the run, so it is not a step of its own before
 	// the first run. The cases are declared; the assertions are the first step that is not done.
-	for _, want := range []string{"TEST CASES", "the loop is not open yet · 1 of 3",
-		"cases", "assertions", "run",
-		"an assertion for every case", "CASES", "d-1", "d-2"} {
+	for _, want := range []string{"INITIALIZATION", "the loop is not open yet · 1 of 3",
+		"cases", "run", "assertions",
+		"nothing is judged yet", "CASES", "d-1", "d-2"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the band is missing %q:\n%s", want, body)
 		}
 	}
-	// R is the spend the band exists to prevent, so it is not even offered.
+	// R is the whole set in one spend, and it is always on offer: the run itself refuses a set with
+	// nothing to judge, which is where the refusal belongs — a hidden key is a key you look for.
+	found := false
 	for _, h := range m.hints() {
 		if h.key == "R" {
-			t.Fatalf("hints offer a run over a set with nothing to judge: %v", m.hints())
+			found = true
 		}
+	}
+	if !found {
+		t.Fatalf("R is not offered with a set on screen: %v", m.hints())
+	}
+	// r is the per-case probe the view exists for, and it is offered for the same reason.
+	if !strings.Contains(strings.Join(hintKeys(m.hints()), " "), "r") {
+		t.Fatalf("r is not offered: %v", m.hints())
 	}
 }
 
-// TestRRefusesAnUnassertedSet: the run key is global to the lane, so the guard has to be on the run
-// and not on the screen it was pressed from.
-func TestRRefusesAnUnassertedSet(t *testing.T) {
+// hintKeys is the band's keys as words, for the tests that read the band rather than the screen.
+func hintKeys(hs []hint) []string {
+	out := make([]string, 0, len(hs))
+	for _, h := range hs {
+		out = append(out, h.key)
+	}
+	return out
+}
+
+// TestRRunsTheSetBeforeTheAssertionsExist: the run key is global to the lane, and a set with no
+// assertion is exactly what the first run is for — it writes the outputs the sentences are written
+// from, so the guard is on having cases at all, not on having something to judge.
+func TestRRunsTheSetBeforeTheAssertionsExist(t *testing.T) {
 	m, _ := gateFixture(t, false)
 	press(m, "1")
 	press(m, "R")
-	if m.mode != screenQuality {
-		t.Fatalf("R started a run over an unasserted set: mode %v, status %q", m.mode, stripMarks(m.status))
+	if m.mode != screenRunLive {
+		t.Fatalf("R refused a set with no assertion: mode %v, status %q", m.mode, stripMarks(m.status))
 	}
-	if st := stripMarks(m.status); !strings.Contains(st, "carry no assertion") {
-		t.Fatalf("status = %q, want the assertions named", st)
+	defer func() {
+		if m.run != nil && m.run.live != nil && m.run.live.cancel != nil {
+			m.run.live.cancel()
+		}
+	}()
+	if !strings.Contains(m.run.hint, "no judge") {
+		t.Fatalf("the run screen says %q, want it to say nothing is judged", m.run.hint)
+	}
+	if n := len(m.run.live.cases); n != 2 {
+		t.Fatalf("the live run holds %d cases, want the whole set", n)
 	}
 }
 
@@ -150,7 +177,7 @@ func TestTheBandRidesAboveTheCases(t *testing.T) {
 	m.width, m.height = 120, 18
 	press(m, "1")
 	body := stripMarks(strings.Join(m.bodyLines(m.bodyHeight()), "\n"))
-	for _, want := range []string{"TEST CASES", "the loop is not open yet · 2 of 3", "cases", "d-1", "d-2"} {
+	for _, want := range []string{"INITIALIZATION", "the loop is not open yet · 2 of 3", "cases", "d-1", "d-2"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("a short window lost %q:\n%s", want, body)
 		}
@@ -179,7 +206,7 @@ func TestAClosedLoopLocksTheTwoViews(t *testing.T) {
 	if strings.Contains(locked, "→ enter") {
 		t.Fatalf("a locked row offers an action line it cannot honour:\n%s", locked)
 	}
-	if !strings.Contains(locked, "locked — ") || !strings.Contains(locked, "assertion for every case") {
+	if !strings.Contains(locked, "locked — ") || !strings.Contains(locked, "run iteration 1") {
 		t.Fatalf("a locked row's pane does not say what opens it:\n%s", locked)
 	}
 	m.quality.vcursor = qSetup

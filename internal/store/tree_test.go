@@ -87,3 +87,28 @@ func TestTreeStampNeedsAReadableTree(t *testing.T) {
 		t.Fatal("a missing root stamped cleanly")
 	}
 }
+
+// TestTheStampSeesAGradeWrittenFromAShell: the iteration screens draw verdicts that live in the
+// workspace, so a grade written by anything but this process has to move the stamp — while the run's
+// payload (logs, streams, outputs) must not, or every tick would re-read the tree.
+func TestTheStampSeesAGradeWrittenFromAShell(t *testing.T) {
+	root := t.TempDir()
+	arm := filepath.Join(root, "dummy-workspace", "iteration-1", "dummy-1", "with_skill")
+	mustWrite(t, filepath.Join(arm, "activity.log"), "a log line\n")
+	mustWrite(t, filepath.Join(arm, "grading.json"), `{"assertion_results":[]}`)
+
+	first, err := TreeStamp(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A log line is not a screen's reading: it must not move the stamp.
+	mustWrite(t, filepath.Join(arm, "activity.log"), "a log line\nand another\n")
+	if again, _ := TreeStamp(root); again != first {
+		t.Fatalf("a rewritten activity.log moved the stamp: %s → %s", first, again)
+	}
+	// A grade is.
+	mustWrite(t, filepath.Join(arm, "grading.json"), `{"assertion_results":[{"text":"x","passed":true}]}`)
+	if again, _ := TreeStamp(root); again == first {
+		t.Fatal("a rewritten grading.json did not move the stamp — a grade from a shell is invisible")
+	}
+}
