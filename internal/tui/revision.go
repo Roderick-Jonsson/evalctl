@@ -68,7 +68,7 @@ func (m *Model) startRevision() tea.Cmd {
 		m.setStatus("a revision answers a finished iteration — R runs one first", true)
 		return nil
 	}
-	if len(q.fails) == 0 && reviewedCases(q.cases) == 0 {
+	if failedAssertions(q.cases) == 0 && reviewedCases(q.cases) == 0 {
 		m.setStatus("nothing to revise from — no failed assertion and no feedback on this iteration", true)
 		return nil
 	}
@@ -82,7 +82,7 @@ func (m *Model) startRevision() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.run.live.cancel = cancel
 	ch <- runner.Event{Kind: runner.EventStart, Message: fmt.Sprintf("reading iteration %d: %s failed, %d with feedback, and SKILL.md",
-		iter, plural(len(q.fails), "assertion"), reviewedCases(q.cases))}
+		iter, plural(failedAssertions(q.cases), "assertion"), reviewedCases(q.cases))}
 
 	r := runner.New(m.store)
 	r.Emit = func(e runner.Event) {

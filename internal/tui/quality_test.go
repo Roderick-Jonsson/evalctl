@@ -133,8 +133,8 @@ func TestOutputLaneReadsTheLoop(t *testing.T) {
 		t.Fatalf("mode %v section %d, want the iteration view", m.mode, m.quality.sec)
 	}
 	body := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
-	for _, want := range []string{"FAILED", "without", "dummy-2-three-dice", "assertion",
-		"The total adds up", "the reply said so", "the total was one off"} {
+	for _, want := range []string{"FAILED", "without", "dummy-2-three-dice", "ASSERTION", "WITH",
+		"WITHOUT SKILL", "The total adds up", "evidence · without", "the reply said so", "the total was one off"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the iteration view is missing %q:\n%s", want, body)
 		}
@@ -161,9 +161,9 @@ func TestOutputLaneReadsTheLoop(t *testing.T) {
 	if !strings.Contains(stripMarks(m.View()), "iteration #1") {
 		t.Fatalf("the rail does not say which iteration is on screen:\n%s", stripMarks(m.View()))
 	}
-	for _, unwanted := range []string{"WITHOUT", "FAILED", "100%", "50%"} {
+	for _, unwanted := range []string{"FAILED", "100%", "50%"} {
 		if strings.Contains(setup, unwanted) {
-			t.Fatalf("the case list still carries %q:\n%s", unwanted, setup)
+			t.Fatalf("the case list still carries a rate or a failure count (%q):\n%s", unwanted, setup)
 		}
 	}
 	// 3: the trend, with the best complete iteration tagged and the delta's basis named.
@@ -342,7 +342,9 @@ func TestFeedbackIsPossibleOnACaseThatPassed(t *testing.T) {
 		t.Fatalf("the case under the cursor failed: %+v", c)
 	}
 	body := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
-	for _, want := range []string{"every assertion passed", "assertions", "feedback"} {
+	// The case's assertions are in the table with both arms' verdicts, and the line under them says
+	// what that pattern means: both arms pass, so this case measures the model and not the skill.
+	for _, want := range []string{"ASSERTION", "feedback", "no assertion passes with and fails without the skill"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("a passing case has no feedback block: missing %q\n%s", want, body)
 		}
@@ -380,9 +382,9 @@ func TestThePaneListsEveryAssertionWithBothVerdicts(t *testing.T) {
 	m, _ := qualityFixture(t)
 	openView(m, "dummy", qSetup)
 	press(m, "home") // the declaration opens on the first case
-	first := stripMarks(strings.Join(m.casePane(60, 34), "\n"))
-	for _, want := range []string{"assertions — 2", "✓ with", "✗ without",
-		"The reply reports one face", "Nothing was written", "✓ ✓",
+	first := stripMarks(strings.Join(m.casePane(80, 34), "\n"))
+	for _, want := range []string{"GRADING", "WITH SKILL", "WITHOUT SKILL", "PATTERN", "make it fail",
+		"The reply reports one", "Nothing was written",
 		"prompt", "expected_output", "files", "none — the run root starts empty"} {
 		if !strings.Contains(first, want) {
 			t.Fatalf("the pane is missing %q:\n%s", want, first)
@@ -391,13 +393,13 @@ func TestThePaneListsEveryAssertionWithBothVerdicts(t *testing.T) {
 	// The case with a failure: both marks, both assertions (the passing one is not dropped), and the
 	// evidence only under the one that failed.
 	press(m, "j")
-	second := stripMarks(strings.Join(m.casePane(60, 30), "\n"))
-	for _, want := range []string{"Three faces", "The total adds up", "✓ ✓", "✓ ✗", "without · the reply said so"} {
+	second := stripMarks(strings.Join(m.casePane(80, 30), "\n"))
+	for _, want := range []string{"Three faces", "The total adds up", "adds value", "without · the reply"} {
 		if !strings.Contains(second, want) {
 			t.Fatalf("the pane is missing %q:\n%s", want, second)
 		}
 	}
-	if n := strings.Count(second, "the reply said so"); n != 1 {
+	if n := strings.Count(second, "the reply"); n != 1 {
 		t.Fatalf("evidence appears %d times, want once — under the assertion that failed:\n%s", n, second)
 	}
 	// The record keeps the file's shape: prompt, expected_output, files, assertions — in that order,
@@ -411,7 +413,7 @@ func TestThePaneListsEveryAssertionWithBothVerdicts(t *testing.T) {
 func assertRecordOrder(t *testing.T, pane string) {
 	t.Helper()
 	last := -1
-	for _, key := range []string{"\n  prompt", "\n  expected_output", "\n  files", "\n  assertions"} {
+	for _, key := range []string{"\n  prompt", "\n  expected_output", "\n  files"} {
 		i := strings.Index(pane, key)
 		if i < 0 {
 			t.Fatalf("the pane does not show %q:\n%s", strings.TrimSpace(key), pane)
@@ -456,7 +458,7 @@ func TestAnAssertionNobodyJudgedIsADash(t *testing.T) {
 	m.width, m.height = 120, 34
 	openView(m, "dummy", qSetup)
 	press(m, "j")
-	pane := stripMarks(strings.Join(m.casePane(60, 30), "\n"))
+	pane := stripMarks(strings.Join(m.casePane(80, 30), "\n"))
 	if !strings.Contains(pane, "Every face is a d20") {
 		t.Fatalf("the new assertion is not on the pane:\n%s", pane)
 	}
@@ -467,7 +469,7 @@ func TestAnAssertionNobodyJudgedIsADash(t *testing.T) {
 			break
 		}
 	}
-	if !strings.Contains(row, "─ ─") {
+	if strings.Count(row, "\u2014") < 2 {
 		t.Fatalf("an ungraded assertion must carry two dashes, not a mark: %q", row)
 	}
 }
@@ -668,15 +670,23 @@ func TestTheDojoReadsTheFailuresWithTheEvidence(t *testing.T) {
 		t.Fatalf("the iteration view did not open: section %d", m.quality.sec)
 	}
 	body := stripMarks(strings.Join(m.qualityBody(m.bodyHeight()), "\n"))
-	for _, want := range []string{"CASES", "1 failed", "dummy-2-three-dice", "assertion · without",
-		"The total adds up", "the reply said so", "the total was one off", "wrote nothing", "feedback"} {
+	// The right column is the case's own arithmetic — failed of declared — and the head is the same
+	// sum over the iteration: one of four assertions failed, and the row that owns it says 1/2.
+	for _, want := range []string{"CASES", "1/4 failed", "0/2", "1/2", "#2 · 1 of 2 failed",
+		"dummy-2-three-dice", "ASSERTION", "WITH SKILL", "WITHOUT SKILL",
+		"The total adds up", "evidence · without", "the reply said so", "the total was one off", "feedback"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the dojo is missing %q:\n%s", want, body)
 		}
 	}
-	// The passing assertions are counted, not listed: the rail is the failures.
+	// The assertion that passed is a row of the table like the one that failed — the case's whole list
+	// is what a revision is judged against, and the row's own two verdicts are its record.
+	if !strings.Contains(body, "Three faces") || !strings.Contains(body, "1 of 2 pass with the skill") {
+		t.Fatalf("the table did not show the assertion that passed and what it means:\n%s", body)
+	}
+	// But it is not evidence: the other case's passing assertion is not this case's failure.
 	if strings.Contains(body, "Nothing was written") {
-		t.Fatalf("the failures rail listed an assertion both arms passed:\n%s", body)
+		t.Fatalf("the pane listed another case's assertion as this case's record:\n%s", body)
 	}
 }
 

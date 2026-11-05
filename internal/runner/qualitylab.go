@@ -407,7 +407,7 @@ func qualityNext(lab *QualityLab) LabNext {
 	if len(last.Failed) > 0 {
 		return LabNext{Key: "revise",
 			Line: fmt.Sprintf("revise SKILL.md against %d failed assertion(s), then run iteration %d",
-				len(last.Failed), last.N+1),
+				last.FailedAssertions(), last.N+1),
 			Detail: "fix the cause, not the case: the skill is used on prompts that are not in this set"}
 	}
 	if lab.Flat {
@@ -445,6 +445,30 @@ type QualityCase struct {
 	Rows           []QualityAssertion `json:"rows,omitempty"`
 	Failed         []QualityFailure   `json:"failed,omitempty"`
 	Feedback       string             `json:"feedback,omitempty"`
+}
+
+// FailedAssertions is how many of the case's declared assertions failed, each counted once. A failure
+// is recorded per assertion *and* arm, because the judge's evidence differs by arm, so an assertion
+// wrong in both arms is one failed assertion and two pieces of evidence. Anything printed beside an
+// assertion total counts assertions, never arm-pairs.
+func (c *QualityCase) FailedAssertions() int { return distinctAssertions(c.Failed) }
+
+// FailedAssertions is the same count over a whole iteration, keyed by case as well: two cases may
+// declare the same sentence, and that is two failures, not one.
+func (it *QualityIteration) FailedAssertions() int {
+	seen := make(map[string]bool, len(it.Failed))
+	for _, f := range it.Failed {
+		seen[f.Case+"\x00"+f.Text] = true
+	}
+	return len(seen)
+}
+
+func distinctAssertions(fails []QualityFailure) int {
+	seen := make(map[string]bool, len(fails))
+	for _, f := range fails {
+		seen[f.Text] = true
+	}
+	return len(seen)
 }
 
 // QualityAssertion is one declared assertion with each arm's verdict. A nil verdict is "no verdict",

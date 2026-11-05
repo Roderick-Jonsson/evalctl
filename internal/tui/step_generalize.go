@@ -397,7 +397,7 @@ func (m *Model) openIterationDoc(it iteration) tea.Cmd {
 		for _, row := range fails {
 			d.card(fmt.Sprintf("q%d · %s · fired %d of %d", row.ID, labelWord(row.ShouldTrigger), row.Triggers, row.Runs))
 			d.fact("the ask", clipText(row.Query, max(40, m.width-20)))
-			d.fact("verdict", verdictOf(row))
+			d.fact("grade", verdictOf(row))
 		}
 	}
 	d.card("the wording")

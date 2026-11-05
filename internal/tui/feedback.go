@@ -29,11 +29,16 @@ import (
 // them off the window is feedback about a memory.
 
 type feedbackState struct {
-	form   *huh.Form
-	slug   string
-	iter   int
-	text   string
-	path   string // <skill>-workspace/iteration-N/feedback.json, as the head names it
+	form *huh.Form
+	slug string
+	iter int
+	text string
+	path string // <skill>-workspace/iteration-N/feedback.json, as the head names it
+	// from is the assertion the cursor was on when `f` was pressed, when that was the table: the note
+	// belongs to the case, and this is the row it was written from — a person who selected a passing
+	// assertion and wrote "this passed in both arms, so the case measures nothing" should see which
+	// row they were reading when they said it.
+	from   string
 	errMsg string
 	// want is the field's height, fixed when it opens: a list that grows the strip while the
 	// operator types would move the line under their cursor with every enter.
@@ -63,6 +68,9 @@ func (fb *feedbackState) body(w, h int) []string {
 		"",
 		regionHead(w, "FEEDBACK · "+fb.slug, fb.path, true),
 		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, w-4)))),
+	}
+	if fb.from != "" {
+		lines = append(lines, "  "+dimStyle.Render(ellipsis(fb.from, max(10, min(96, w-4)))))
 	}
 	for _, line := range strings.Split(strings.TrimRight(fb.form.View(), "\n"), "\n") {
 		lines = append(lines, "  "+line)
@@ -132,7 +140,13 @@ func (m *Model) openFeedbackEditor() tea.Cmd {
 		m.setStatus("no case under the cursor — feedback is written against one case", true)
 		return nil
 	}
-	fb := &feedbackState{slug: c.Slug, iter: q.iter, text: c.Feedback,
+	var from string
+	if q.tbl && len(c.Rows) > 0 {
+		i := min(max(0, q.asel), len(c.Rows)-1)
+		from = fmt.Sprintf("on assertion %d of %d \u2014 %q", i+1, len(c.Rows),
+			strings.Join(strings.Fields(c.Rows[i].Text), " "))
+	}
+	fb := &feedbackState{slug: c.Slug, iter: q.iter, text: c.Feedback, from: from,
 		path: fmt.Sprintf("%s-workspace/iteration-%d/feedback.json", m.skill, q.iter)}
 	fb.build()
 	q.feedback = fb

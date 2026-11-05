@@ -544,7 +544,7 @@ func (r *runState) liveHints() []hint {
 		switch r.kind {
 		case runQuality:
 			// A run that graded its own iteration has nothing left to press g for: the next move is
-			// the failures. An iteration with no verdicts (--no-grade, an older build) still offers it.
+			// the failures. An iteration with not graded (--no-grade, an older build) still offers it.
 			if r.live.judging {
 				return []hint{{"enter", "the iteration"}, {"v", "activity log"}}
 			}
@@ -706,7 +706,7 @@ func (m *Model) outputRunBody(h int) []string {
 		if graded {
 			act.action("enter", "the iteration — the failed assertions with the judge's evidence")
 		} else {
-			act.action("g", "grade it — a run is outputs; the loop opens on the verdicts")
+			act.action("g", "grade it — a run is outputs; the loop opens on the grades")
 		}
 	}
 	logRows := 6

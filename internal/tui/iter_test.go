@@ -125,7 +125,7 @@ func TestTheSetSaysWhichRowsPassed(t *testing.T) {
 	if !strings.Contains(view, "pass") || !strings.Contains(view, "FAIL") {
 		t.Fatalf("one row passed and one failed, and the column must say so:\n%s", view)
 	}
-	// A candidate that has not been run has no verdicts to show, and the column says that too.
+	// A candidate that has not been run has not graded to show, and the column says that too.
 	m.flow.draft = nil
 	if _, err := runner.New(m.store).SaveDescriptionCandidate("slide-builder", "a new wording entirely", "testing", 1); err != nil {
 		t.Fatal(err)

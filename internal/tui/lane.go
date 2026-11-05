@@ -116,7 +116,7 @@ func (m *Model) lanePreview(w, h int) []string {
 		d.fact("the set", "<skill>/evals/evals.json")
 		d.fact("the fixtures", "<skill>/evals/files/<slug>/")
 		d.fact("the runs", "<skill>-workspace/iteration-N/")
-		d.fact("the verdicts", "each arm's grading.json — never a guessed pass")
+		d.fact("the grades", "each arm's grading.json — never a guessed pass")
 		block()
 	} else {
 		d.para("A skill only helps if it gets loaded, and the description is the whole of the input — an agent decides from that one paragraph. This lane measures the wording, revises it on what the train set failed, and generalizes on a split no revision could read.")

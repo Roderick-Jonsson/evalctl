@@ -108,7 +108,7 @@ func TestTheJudgePassIsItsOwnPass(t *testing.T) {
 	}
 }
 
-// `g` on an iteration with no verdicts is still the way to finish it: a run made with --no-grade, by
+// `g` on an iteration with not graded is still the way to finish it: a run made with --no-grade, by
 // an older build, or one whose grade failed. On a graded iteration the same key is a re-grade, and it
 // asks first — the verdicts on screen would be replaced by the ones it buys.
 func TestGOnAGradedIterationAsksBeforeSpending(t *testing.T) {
@@ -148,7 +148,7 @@ func TestGradeFinishShowsTheRates(t *testing.T) {
 	}
 }
 
-// An iteration with no verdicts is not a re-grade: there is nothing to replace, so `g` finishes it
+// An iteration with not graded is not a re-grade: there is nothing to replace, so `g` finishes it
 // without a question and the screen says which pass it is waiting on.
 func TestGFinishesAnUngradedIterationWithoutAsking(t *testing.T) {
 	m, root := qualityFixture(t)

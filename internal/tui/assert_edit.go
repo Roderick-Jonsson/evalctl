@@ -150,9 +150,9 @@ func (a *assertState) apply(m *Model) tea.Cmd {
 	case 0:
 		m.setStatus(a.slug+" declares no assertions now — nothing for the judge to grade", false)
 	case 1:
-		m.setStatus("wrote 1 assertion · the verdicts on screen were read against the old list — g re-grades", false)
+		m.setStatus("wrote 1 assertion · the grades on screen were read against the old list — g re-grades", false)
 	default:
-		m.setStatus(fmt.Sprintf("wrote %d assertions · the verdicts on screen were read against the old list — g re-grades", n), false)
+		m.setStatus(fmt.Sprintf("wrote %d assertions · the grades on screen were read against the old list — g re-grades", n), false)
 	}
 	return nil
 }

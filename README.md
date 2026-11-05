@@ -526,33 +526,61 @@ opening a screen that would answer "nothing measured yet". The way in is the dec
 assertion on every one, the first run — the set is where the loop is opened, so the set is the only
 view a closed loop offers.
 
-**1 · test cases — declare the case.** The left column is the cases, one slug and one declaration mark each
-(`✓` prompt and assertions, `○` prompt alone, `✗` nothing yet), and nothing else: the rates and the
-verdicts belong to the sections that read them. The pane beside it shows **the case as its own record
-writes it** — `prompt`, `expected_output`, `files` (the fixtures the run root is given, or `none — the
-run root starts empty`), `assertions` — the fields keeping the file's names and the file's order,
-because the pane is meant to be read as the case and not as a summary of it.
+**1 · test cases — declare the case.** The left column is the cases: one glyph and one number each — the
+glyph is the case's own reading (`✓` green measures the skill, `○` orange proves nothing, `✗` red holds
+an assertion the skill makes worse, quiet marks while nothing is graded) and the number is its
+`SIGNAL` count, the assertions that measure the skill over the assertions declared. The pane beside it is
+two groups, `GRADING` and `CASE`, and it shows **the case as its own record writes it** — `prompt`,
+`expected_output`, `files` (the fixtures the run root is given, or `none — the run root starts empty`) —
+the fields keeping the file's names and the file's order, because the pane is meant to be read as the case
+and not as a summary of it.
+
+The assertion table under `GRADING` has the two arms as columns, `WITH SKILL` and `WITHOUT SKILL`, and a
+`PATTERN` column written as the move each row asks for: `adds value` (nothing to do — pass with the skill,
+fail without), **`make it fail`** (the baseline passes it too: sharpen the assertion until the arm without
+the skill fails it), `fix or drop` (neither arm can do it), `fix the skill` (the baseline passes it and the
+skill makes it worse), `not graded`. The colours follow the meaning and not the word: in the `WITHOUT
+SKILL` column a **fail is the healthy outcome** — it is the baseline failing that proves the skill does
+anything — so the cell prints `fail ✓`, and a `pass` there prints `pass ✗` in the warning colour, because
+the model already does it. Two green ticks used to read as "all good" when the honest reading was
+"the skill changed nothing here", and a red fail in that column used to pull the eye to the assertion
+that was working. Two green ticks used to read as "all good" when the honest reading was
+"the skill changed nothing here", and a red fail in that column used to pull the eye to the assertion
+that was working. The tag marks a case, it does not retire one: an iteration still runs it, because a
+rate over a subset of the set is not comparable with a rate over the set.
+
+The pane is **two named groups**, and the one you came for is drawn first: `GRADING` once the case has
+grades, `CASE` while the loop is closed. `GRADING` runs in four registers — the arm rates, then the
+case's reading in one sentence, then the assertion table, then the key to the colours — so a short
+window loses the footnote before it loses the table. `CASE` is `prompt`, `expected_output` and `files`
+as three labelled lines in the file's order, because a card per field turns four short facts into a
+page. A group goes whole or not at all; when `CASE` cannot fit beside a complete verdict the pane
+prints one line saying where those fields are (`S`), rather than half a record.
 
 ```
- output optimization > dummy > test cases                                                    evalctl v0.9.0 · 11:06
- 3 cases · 6 assertions · iteration #2 · best #2
-                       │
-▌ CASES                │   dummy-1-one-die                                                       #1
-  ──────────────────   │   ─────────────────────────────────────────────────────────────────
-▶ ✓ dummy-1-one-die    │   with 3/3 · without 2/3
-  ○ dummy-2-three-dice │
-  ✓ dummy-3-no-writes  │   prompt
-                       │   Throw three twenty-sided dice and give me the faces and the total.
-                       │
-                       │   expected_output
-                       │   Three faces, each an integer from 1 to 20, and their sum as the total.
-                       │
-                       │   files
-                       │   none — the run root starts empty
-                       │
-                       │   assertions — 1 · ✓ with · ✗ without
-                       │   ✓ ✗  The total given is the sum of the faces
-                       │        without · the arm wrote out.txt
+ output optimization > dummy > test cases                                             evalctl v0.9.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 2 cases · 4 assertions · iteration #1 · 1 on disk · best #1
+                              │ 
+▌ CASES                       │   dummy-2-three-dice                                         #2 
+  ─────────────────────────   │ 
+    CASE               SIGNAL │   GRADING                                         1 of 2 failed 
+  ○ dummy-1-one-die       0/2 │   ────────────────────────────────────────────────
+▶ ○ dummy-2-three-dice    1/2 │ 
+                              │   adds value  the skill is what makes it pass — every assertion
+                              │               passes with it, and not every one without it
+                              │ 
+                              │   PATTERN          ASSERTION             WITH SKILL  WITHOUT SKILL
+                              │   ────────────────────────────────────────────────────────────────
+                              │   make it fail   Three faces                 pass         pass ✗
+                              │   adds value       The total adds up           pass         fail ✓
+                              │                    ↳ without · the reply said so
+                              │ 
+                              │   CASE
+                              │   ────────────────────────────────────────────────
+                              │   prompt           Roll three d20.
+                              │   expected_output  Three faces and a total.
+                              │   files            none — the run root starts empty
 ```
 
 `e` writes that list where it is drawn: the field takes the assertion block's place in the pane, one
@@ -571,40 +599,55 @@ judge reads them in that order, so what an expectation is checked against is wri
 expectation is: `every Sub-Topic appears exactly once — facts: ST-1 … ST-9, as in PS.md`. A second array
 of facts would have to be kept in step by position, which is the one join this tool already distrusts.
 
-**2 · iteration — work one iteration.** The left rail is the iteration's **failed** assertions, one row per
-case and arm; the passing ones are counted under it (`+ 4 passed in both arms`), because an assertion
-both arms pass measures the model and not the procedure. The pane works the one under the cursor: the
-sentence the judge graded, the judge's words for it, the end of that arm's execution transcript, and the
-human note. `[` and `]` walk the iterations without leaving the section; `v` (or `enter`) opens the whole
-`activity.log`; `n` writes the note into the iteration's `feedback.json` (backed up first — it is a file
-in the workspace, not in the tree, and it is backed up like one); `E` hands `SKILL.md` to `$EDITOR`,
-because the revision is a document and a text field is not an editor.
+**2 · iteration — work one iteration.** The left column is the iteration's **cases**, one row each, with
+the case's own arithmetic in the right cell: `1/2` is one of its two assertions failed, `0/2` is a case
+that passed every one, and the head counts the same over the iteration (`1/4 failed`). One row per case,
+because `feedback.json` is keyed by slug and a case that passed every assertion is a case whose output
+you can still review — a list of failures, the older shape, hid exactly that one.
+
+The pane beside it is the guide's own table: one row per declared assertion, in the order the judge read
+them, `pass` / `fail` / `—` under `WITH` and `WITHOUT`. `tab` moves the keys into the table and `j k` walk
+its rows, passing rows included; the judge's evidence for the row under the cursor sits under it, and a
+row that passed in both arms says so rather than showing an empty block. Under the table is the case's
+verdict on itself — `1 of 2 pass with the skill and fail without it — the rest measure the model` — which
+is the loop's whole claim written per case rather than per rate. `[` and `]` walk the iterations without
+leaving the section; `v` opens the arm's whole `activity.log`; `f` opens the feedback for the case from
+whatever row the cursor is on, and `ctrl+s` writes it into that iteration's `feedback.json` (backed up
+first — it is a file in the workspace, not in the tree, and it is backed up like one); `p` asks for a
+revision and `E` hands `SKILL.md` to `$EDITOR`, because the revision is a document and a text field is
+not an editor.
 
 ```
- output optimization > dummy > iteration                                                     evalctl v0.9.0 · 11:06
- 3 cases · 6 assertions · iteration #2 · best #2
-                             │
-▌ FAILED                  1  │   dummy-2-three-dice                                      #2 · without ✗
-  ────────────────────────   │   ─────────────────────────────────────────────────────────────────
-▶ without dummy-2-three-dice │
-                             │   assertion
-  + 4 passed in both arms    │   The total given is the sum of the faces
-                             │
-                             │   evidence
-                             │   the arm's out.txt totals 30, the reply says 27
-                             │
-                             │   transcript
-                             │   rolled 3d20 → 17 9 4
-                             │   wrote out.txt
-                             │   … v reads the whole log
-                             │
-                             │   note
-                             │   the total is the one that drifts — check the second roll
+ output optimization > dummy > iteration                                              evalctl v0.9.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 2 cases · 4 assertions · iteration #1 · 1 on disk · best #1
+                                  │ 
+  CASES               1/4 failed  │   dummy-2-three-dice                         #2 · 1 of 2 failed 
+  ─────────────────────────────   │   ──────────────────────────────────────────────────────────────
+    CASE                   FAILED │ 
+  ✓ dummy-1-one-die           0/2 │   output · without
+▶ ✗ dummy-2-three-dice        1/2 │   roll
+                                  │ ▌ PATTERN     ASSERTION                           WITH WITHOUT
+                                  │   no signal   Three faces                         pass    pass
+                                  │ ▶ adds value  The total adds up                   pass    fail
+                                  │   1 of 2 pass with the skill and fail without it — the rest
+                                  │   measure the model
+                                  │ 
+                                  │   evidence · without
+                                  │   the reply said so
+                                  │ 
+                                  │   feedback · this case's review
+                                  │   the total was one off
+                                  │ 
+                                  │   → f  the feedback · p a revision · v transcript · E SKILL.md
+                                  │        · R runs the next iteration
 ```
 
 That is the loop's middle, and it is the part that used to be a sentence in the guide: the failures and
-the note were read into a pane that had no way to answer them. `n` is the answer, and it lands in the
-same `feedback.json` the pane quotes.
+the review were read into a pane that had no way to answer them. `f` is the answer, and it lands in the
+same `feedback.json` the pane quotes. The assertions that passed are listed under the failures — the
+case's whole list is what a revision is judged against, and one failure shown alone would make a
+two-assertion case look like a one-assertion case.
 
 **3 · testing quality — judge the trend.** Every iteration's two rates, the difference between them, how much
 of the set ran, and how much of the grading list the judge saw. `enter` opens that iteration on the

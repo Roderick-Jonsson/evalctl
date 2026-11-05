@@ -143,7 +143,7 @@ func (m *Model) qualityMenuPane(w, h int) []string {
 		d.fact("E", "SKILL.md, in $EDITOR")
 		block()
 	default:
-		d.para("The delta between the two arms, and which complete iteration is the best. A rate exists only where the judge left verdicts, and a run that skipped part of the set never ranks.")
+		d.para("The delta between the two arms, and which complete iteration is the best. A rate exists only where the judge left grades, and a run that skipped part of the set never ranks.")
 		block()
 		if locked {
 			break
@@ -250,7 +250,7 @@ func (m *Model) viewState(sec int) string {
 		case len(last.Failed) > 0:
 			return fmt.Sprintf("iteration #%d · %s failed", last.N, plural(len(last.Failed), "assertion"))
 		case !last.Complete:
-			return fmt.Sprintf("iteration #%d owes verdicts", last.N)
+			return fmt.Sprintf("iteration #%d not fully graded", last.N)
 		}
 		return fmt.Sprintf("iteration #%d · every assertion passed", last.N)
 	case qQuality:

@@ -120,7 +120,7 @@ func TestTheBandClosesOnTheGrade(t *testing.T) {
 	if !strings.Contains(body, "the loop is not open yet · 3 of 4") {
 		t.Fatalf("an ungraded run must leave the loop closed at the grade:\n%s", body)
 	}
-	if !strings.Contains(body, "no verdicts") {
+	if !strings.Contains(body, "not graded") {
 		t.Fatalf("the band does not say why the grade is owed:\n%s", body)
 	}
 

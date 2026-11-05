@@ -32,7 +32,7 @@ func (m *Model) openFailures(it *iteration) tea.Cmd {
 			d.fact("why it is here", clipText(row.Why, max(40, m.width-20)))
 		}
 		d.fact("what loaded", loadedInstead(row))
-		d.fact("verdict", verdictOf(row))
+		d.fact("grade", verdictOf(row))
 	}
 	m.doc = &docState{scope: "failures", title: "train failures", lines: d.lines}
 	m.backTo = screenFlow
