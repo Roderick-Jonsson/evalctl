@@ -31,44 +31,36 @@ func TestOpensTheRealTree(t *testing.T) {
 	}
 	m := newModel(s)
 	m.width, m.height = 120, 34
-	for _, name := range m.skillNames() {
-		m.openSkill(name)
-		if m.flow == nil {
-			t.Fatalf("%s: no flow", name)
+
+	// The list first: one row per lane of work, and no frame wider than the window.
+	if len(m.pick.rows) == 0 {
+		t.Fatal("the work list is empty on a tree with skills")
+	}
+	fits := func(what string) {
+		t.Helper()
+		view := m.View()
+		if got := len(strings.Split(view, "\n")); got != m.height {
+			t.Fatalf("%s: %d rows in a %d-row frame", what, got, m.height)
 		}
-		// Both sections, every step of each, plus the section screen itself.
-		m.mode = screenSections
-		// The section screen draws the split beside the choice, and the real sets are longer than the
-		// fixture's: the pane has to scroll inside its own window without touching the frame.
-		for sec := secIteration; sec <= secGeneralization; sec++ {
-			m.sections.cursor = sec
-			m.loadSectionRows()
-			m.sections.focus = sectionFocusSet
-			view := m.View()
-			if got := len(strings.Split(view, "\n")); got != m.height {
-				t.Fatalf("%s section %d: the section screen is %d rows", name, sec, got)
-			}
-			for _, line := range strings.Split(view, "\n") {
-				if w := len([]rune(line)); w > m.width {
-					t.Fatalf("%s section %d: the pane is %d cells wide", name, sec, w)
-				}
-			}
-		}
-		for sec := secIteration; sec <= secGeneralization; sec++ {
-			for step := 1; step <= len(stepsOf(sec)); step++ {
-				m.mode = screenFlow
-				m.flow.sec, m.flow.step = sec, step
-				m.flow.forced = sec == secGeneralization && step >= 2
-				m.reload()
-				if got := len(strings.Split(m.View(), "\n")); got != m.height {
-					t.Fatalf("%s section %d step %d: %d rows", name, sec, step, got)
-				}
+		for _, line := range strings.Split(view, "\n") {
+			if w := len([]rune(line)); w > m.width {
+				t.Fatalf("%s: a line is %d cells in a %d-cell frame", what, w, m.width)
 			}
 		}
 	}
-	m.loadSkills()
-	if len(m.skills.rows) == 0 {
-		t.Fatal("the skill list is empty on a tree with skills")
+	fits("the work list")
+
+	// Then every lane, both halves of a set, and the state a closed loop opens on.
+	for _, r := range m.pick.rows {
+		m.openWork(r)
+		fits("work · " + r.skill + " · " + r.badge)
+		if r.lane == store.LaneTrigger && m.flow != nil {
+			for _, sec := range []int{secIteration, secGeneralization} {
+				m.flow.sec, m.flow.step = sec, 1
+				m.reload()
+				fits(fmt.Sprintf("work · %s · %s", r.skill, secNames[sec]))
+			}
+		}
 	}
 }
 

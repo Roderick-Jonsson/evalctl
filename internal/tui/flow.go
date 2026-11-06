@@ -82,6 +82,9 @@ type flowState struct {
 	// sentence half-typed is not a file yet.
 	focus int
 	draft *iterDraft
+	// discardArmed is the second esc on a workbench holding an unsaved sentence: the first one says
+	// it would be lost, the second one means it.
+	discardArmed bool
 	// dry is the run's one non-file setting: it prints the commands a run would issue and writes
 	// nothing, so it belongs to the session and not to the tree. It is set beside the set, where the
 	// other run knob lives, and it applies to the next run and no further.
@@ -517,55 +520,30 @@ func (f *flowState) anyIncomplete() bool {
 	return done < total
 }
 
+// body is the work surface, whichever half of the set is on it: the workbench holds the rows, the
+// wording and the wordings measured, and the split is which rows the first block is showing. The
+// step screens it used to hand off to are retired — a set editor that replaced the whole workbench
+// was a second screen for a toggle.
 func (f *flowState) body(m *Model, h int) []string {
-	if f.sec == secIteration {
-		return m.iterBody(h)
-	}
-	if f.step == 1 {
-		return m.setBody(h)
-	}
-	return m.rankingBody(h)
+	return m.iterBody(h)
 }
 
 func (f *flowState) hints(m *Model) []hint {
 	if m.formActive() {
 		return m.form.hints()
 	}
-	if f.sec == secIteration {
-		switch f.focus {
-		case focusWording:
-			return []hint{{"type", "the description"}, {"tab", "note"}, {"ctrl+s", "save"}, {"esc", "set"}}
-		case focusNote:
-			return []hint{{"type", "why this change"}, {"enter", "save & run"}, {"tab", "set"}, {"esc", "set"}}
-		}
-		act := "save & run"
-		if !f.draftChanged() {
-			act = "run the train set"
-		}
-		return []hint{{"enter", act}, {"tab", "the description"}, {"R", "run again"},
-			{"f", "the failures"}, {"esc", "sections"}}
+	switch f.focus {
+	case focusWording:
+		return []hint{{"type", "the description"}, {"tab", "note"}, {"ctrl+s", "save"}, {"esc", "the set"}}
+	case focusNote:
+		return []hint{{"type", "why this change"}, {"enter", "save & run"}, {"tab", "the set"}, {"esc", "the set"}}
 	}
-	if f.step == 1 {
-		return []hint{{"enter", "to the ranking"}, {"n", "new"}, {"e", "edit"}, {"d", "delete"},
-			{"space", "should trigger"}, {"esc", "sections"}}
+	act := "save & run"
+	if !f.draftChanged() {
+		act = "run the " + setRegionWord(f.sec == secIteration)
 	}
-	switch {
-	case f.lab != nil && f.lab.ValidationRows == 0:
-		return []hint{{"1", "validation set"}, {"esc", "sections"}}
-	case !f.gateOpen():
-		return []hint{{"ctrl+g", "validate early, unproven"}, {"esc", "sections"}}
-	case len(f.iters) == 0:
-		return []hint{{"esc", "sections"}}
-	}
-	hs := []hint{{"j k", "move"}}
-	if m.needsValidation() > 0 {
-		hs = append(hs, hint{"v", "validate the rest"})
-	}
-	// The holdout is not advertised here: it is the move after applying, and the status says so
-	// then. The band is the one row where a key nobody can use yet would push out the way back.
-	hs = append(hs, hint{"1", "validation set"}, hint{"enter", "apply"}, hint{"f", "failures"},
-		hint{"esc", "sections"})
-	return hs
+	return []hint{{"enter", act}, {"tab", "the description"}, {"s", "the other split"},
+		{"v", "validate"}, {"a", "apply"}, {"f", "the failures"}, {"esc", "the work"}}
 }
 
 // ---------------------------------------------------------------- update
@@ -576,21 +554,12 @@ func (m *Model) updateFlow(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	key := msg.String()
-	// The rail is also a jump: the number keys are this section's step numbers, and the gate is
-	// enforced here rather than only drawn.
-	if key >= "1" && key <= "9" {
-		return m.jumpStep(int(key[0] - '0'))
-	}
+	// ctrl+g is the one door the gate leaves open: generalizing before five wordings are measured is
+	// allowed, and it says so rather than refusing. Everything else is the workbench's.
 	if key == "ctrl+g" {
 		return m.forceGeneralization()
 	}
-	if f.sec == secIteration {
-		return m.updateIter(msg)
-	}
-	if f.step == 1 {
-		return m.updateSet(msg)
-	}
-	return m.updateRanking(msg)
+	return m.updateIter(msg)
 }
 
 // forceGeneralization is ctrl+g: the gate is a bar, not a wall, and using it says so.
@@ -604,33 +573,6 @@ func (m *Model) forceGeneralization() tea.Cmd {
 	m.setStatus(fmt.Sprintf("generalizing after %d of %d iterations — the validation rate is unproven",
 		len(f.iters), iterationsRequired), true)
 	f.sec, f.step = secGeneralization, 2
-	f.enterStep(m)
-	return nil
-}
-
-// jumpStep moves inside the section and refuses what the rules refuse: a step that needs a set it
-// does not have, and a generalization step behind a closed gate.
-func (m *Model) jumpStep(n int) tea.Cmd {
-	f := m.flow
-	if n < 1 || n > f.stepCount() || n == f.step {
-		return nil
-	}
-	if f.lab != nil {
-		switch {
-		case n >= 2 && f.sec == secIteration && f.lab.TrainRows == 0:
-			m.setStatus("the train set is empty — the iteration section's first step defines it", true)
-			return nil
-		case n >= 2 && f.sec == secGeneralization && f.lab.ValidationRows == 0:
-			m.setStatus("the validation set is empty — the section's first step defines it", true)
-			return nil
-		}
-	}
-	if f.sec == secGeneralization && n >= 2 && !f.gateOpen() {
-		m.setStatus(fmt.Sprintf("%d of %d iterations — ctrl+g validates early, with the warning",
-			len(f.iters), iterationsRequired), true)
-		return nil
-	}
-	f.step = n
 	f.enterStep(m)
 	return nil
 }

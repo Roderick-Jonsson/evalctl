@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,8 +52,9 @@ func gateFixture(t *testing.T, assertions bool) (*Model, string) {
 // and the one errand that opens it — above the cases the view is about.
 func TestTheSetOpensOnItsBand(t *testing.T) {
 	m, _ := gateFixture(t, false)
-	if m.mode != screenQualityMenu || m.quality.vcursor != qSetup {
-		t.Fatalf("lane opened at mode %v row %d, want the menu on the set", m.mode, m.quality.vcursor)
+	m.openQualitySkill("dummy")
+	if m.mode != screenQuality || m.quality.sec != qSetup {
+		t.Fatalf("lane opened at mode %v section %d, want the set", m.mode, m.quality.sec)
 	}
 	// The status row says what the lane is waiting for before anything is pressed: the first key
 	// clears it, which is why it is read here.
@@ -165,8 +165,8 @@ func TestTheBandClosesOnTheGrade(t *testing.T) {
 	}
 	// Reopening the lane puts the cursor on the iteration: its newest run has failures to read.
 	m.openQualitySkill("dummy")
-	if m.quality.vcursor != qDojo {
-		t.Fatalf("reopened at row %d, want the iteration the grade left failures in", m.quality.vcursor)
+	if m.quality.sec != qDojo {
+		t.Fatalf("reopened at section %d, want the iteration the grade left failures in", m.quality.sec)
 	}
 }
 
@@ -189,79 +189,47 @@ func TestTheBandRidesAboveTheCases(t *testing.T) {
 	}
 }
 
-// TestAClosedLoopLocksTheTwoViews: the loop starts closed, and the two views that would answer
-// "nothing measured yet" are shut until it opens — dim in the menu, with the errand that opens them
-// where it belongs, and a refusal (not a screen) if you try to walk into one. The cursor cannot get
-// onto them either (TestTheMenuCannotWalkIntoALockedView pins that move); the pane is drawn here for
-// a row the cursor cannot reach, because the shape it refuses in is what the guard exists to keep.
-func TestAClosedLoopLocksTheTwoViews(t *testing.T) {
+// TestAClosedLoopOpensOnTheSet: with the loop closed there is one place the work can start — the
+// declaration — so the surface opens there, and the band above the cases says what opens it. There is
+// no menu to lock a row on any more: a state you cannot reach is a state you cannot be lost in.
+func TestAClosedLoopOpensOnTheSet(t *testing.T) {
 	m, _ := gateFixture(t, false)
-	// The menu marks them, and only the set's row carries the action that opens one.
-	menu := stripMarks(strings.Join(m.qualityMenuBody(m.bodyHeight()), "\n"))
-	if !strings.Contains(menu, "locked until the loop opens") {
-		t.Fatalf("a closed loop's locked rows say nothing about it:\n%s", menu)
-	}
-	m.quality.vcursor = qDojo // a locked row, which no key would put the cursor on
-	locked := stripMarks(strings.Join(m.qualityMenuBody(m.bodyHeight()), "\n"))
-	if strings.Contains(locked, "→ enter") {
-		t.Fatalf("a locked row offers an action line it cannot honour:\n%s", locked)
-	}
-	if !strings.Contains(locked, "locked — ") || !strings.Contains(locked, "run iteration 1") {
-		t.Fatalf("a locked row's pane does not say what opens it:\n%s", locked)
-	}
-	m.quality.vcursor = qSetup
-	for _, sec := range []int{qDojo, qQuality} {
-		press(m, fmt.Sprint(sec+1))
-		if m.mode != screenQualityMenu {
-			t.Fatalf("%d walked into view %d from a closed loop", sec+1, m.quality.sec)
-		}
-		if st := stripMarks(m.status); !strings.Contains(st, "locked") {
-			t.Fatalf("%d was refused with %q, want the reason", sec+1, st)
-		}
-	}
-	// A move key cannot carry the cursor to a locked row, so the only `enter` this menu has is the
-	// set's — and it opens the set.
-	press(m, "j")
-	if m.quality.vcursor != qSetup {
-		t.Fatalf("j moved the cursor to row %d on a closed loop", m.quality.vcursor)
-	}
-	press(m, "enter")
+	m.openQualitySkill("dummy")
 	if m.mode != screenQuality || m.quality.sec != qSetup {
-		t.Fatalf("enter on the set = mode %v section %d, want test cases", m.mode, m.quality.sec)
+		t.Fatalf("a closed loop opened on mode %v section %d, want the set", m.mode, m.quality.sec)
 	}
-	// And once the grade lands, the same two rows open.
-	m2, root := gateFixture(t, true)
-	iter := filepath.Join(root, "dummy-workspace", "iteration-1")
-	write(t, filepath.Join(iter, "meta.json"), `{"iteration":1,"skill":"dummy","started":"2026-11-01T12:00:00+0100"}`)
-	writeGrading(t, iter, "d-1", "with_skill", []graded{{"a", true}})
-	writeGrading(t, iter, "d-1", "without_skill", []graded{{"a", false}})
-	m2.reloadQuality()
-	if m2.quality.lab.InitPending {
-		t.Skip("the fixture's grade did not open the loop")
+	body := stripMarks(strings.Join(m.bodyLines(m.bodyHeight()), "\n"))
+	if !strings.Contains(body, "the loop is not open yet") {
+		t.Fatalf("the set does not say what opens the loop:\n%s", body)
 	}
+	if st := stripMarks(m.status); !strings.Contains(st, "run iteration 1") {
+		t.Fatalf("status = %q, want the first run the loop is asking for", st)
+	}
+
+	// Once the grade lands, the same row opens on the iteration: what failed is the work.
+	m2, _ := qualityFixture(t)
 	m2.openQualitySkill("dummy")
-	press(m2, "2")
 	if m2.mode != screenQuality || m2.quality.sec != qDojo {
-		t.Fatalf("an open loop still locks the iteration: mode %v section %d (%q)",
-			m2.mode, m2.quality.sec, stripMarks(m2.status))
+		t.Fatalf("an open loop opened on section %d (%q), want the iteration",
+			m2.quality.sec, stripMarks(m2.status))
 	}
 }
 
-// TestAnOpenLoopHasNoBand: a skill already in the loop opens on the menu with the cursor on the
-// iteration, and its set's view draws the cases and nothing about a loop that is already open.
+// TestAnOpenLoopHasNoBand: a skill already in the loop opens on the iteration, and its declaration
+// draws the cases and nothing about a loop that is already open.
 func TestAnOpenLoopHasNoBand(t *testing.T) {
 	m, _ := qualityFixture(t)
 	m.lane = store.LaneOutput
 	m.openQualitySkill("dummy")
-	if m.quality.vcursor != qDojo {
-		t.Fatalf("row = %d, want the iteration", m.quality.vcursor)
+	if m.quality.sec != qDojo {
+		t.Fatalf("section = %d, want the iteration", m.quality.sec)
 	}
-	press(m, "1")
+	m.setQualitySection(qSetup)
 	body := stripMarks(strings.Join(m.bodyLines(m.bodyHeight()), "\n"))
 	if strings.Contains(body, "the loop is not open yet") {
-		t.Fatalf("a graded, asserted set was described as a closed loop:\n%s", body)
+		t.Fatalf("an open loop still draws its closed band:\n%s", body)
 	}
 	if !strings.Contains(body, "dummy-1-one-die") {
-		t.Fatalf("the set's view does not list the cases:\n%s", body)
+		t.Fatalf("the declaration does not list the cases:\n%s", body)
 	}
 }

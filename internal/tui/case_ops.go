@@ -354,40 +354,32 @@ func (m *Model) askDeleteCase() {
 	} else {
 		lines = append(lines, dimStyle.Render("it stages no fixture — nothing else on disk is touched"))
 	}
-	m.ask = &askState{
-		scope: qualitySections[qSetup].name,
-		back:  screenQuality,
-		title: fmt.Sprintf("delete #%d %s?", id, slug),
-		lines: lines,
-		yes:   "delete it",
-		then: func(m *Model) tea.Cmd {
-			// The row is found by slug and not by the cursor: the cursor is the screen's, and the
-			// dialog may have outlived a re-read of the file behind it.
-			index := -1
-			if sk := m.store.Skill(m.skill); sk != nil {
-				for i, cse := range sk.Output.Evals {
-					if cse.Slug == slug {
-						index = i
-						break
-					}
+	m.askNow(fmt.Sprintf("delete case #%d %s?", id, slug), "delete it", func(m *Model) tea.Cmd {
+		// The row is found by slug and not by the cursor: the cursor is the screen's, and the
+		// dialog may have outlived a re-read of the file behind it.
+		index := -1
+		if sk := m.store.Skill(m.skill); sk != nil {
+			for i, cse := range sk.Output.Evals {
+				if cse.Slug == slug {
+					index = i
+					break
 				}
 			}
-			if index < 0 {
-				m.setStatus(slug+" is no longer in "+path+" — nothing was deleted", true)
-				return nil
-			}
-			if _, err := m.store.DeleteRows([]store.RowRef{{Lane: store.LaneOutput, Skill: m.skill, Index: index}}, true); err != nil {
-				m.setStatus(err.Error(), true)
-				return nil
-			}
-			if err := m.store.SaveSkill(m.skill); err != nil {
-				m.setStatus("could not write "+path+": "+err.Error(), true)
-				return nil
-			}
-			m.reloadQuality()
-			m.setStatus(fmt.Sprintf("case #%d %s deleted", id, slug), false)
+		}
+		if index < 0 {
+			m.setStatus(slug+" is no longer in "+path+" — nothing was deleted", true)
 			return nil
-		},
-	}
-	m.mode = screenAsk
+		}
+		if _, err := m.store.DeleteRows([]store.RowRef{{Lane: store.LaneOutput, Skill: m.skill, Index: index}}, true); err != nil {
+			m.setStatus(err.Error(), true)
+			return nil
+		}
+		if err := m.store.SaveSkill(m.skill); err != nil {
+			m.setStatus("could not write "+path+": "+err.Error(), true)
+			return nil
+		}
+		m.reloadQuality()
+		m.setStatus(fmt.Sprintf("case #%d %s deleted", id, slug), false)
+		return nil
+	})
 }

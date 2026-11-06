@@ -36,12 +36,12 @@ import (
 type screen int
 
 const (
-	screenLane        screen = iota // the front door: the two optimizations
+	screenPick        screen = iota // the work list: every lane that has anything to do
+	screenLane                      // retired: the front door — the two optimizations
 	screenSkill                     // which skill, with where each one is in the loop
 	screenSections                  // iteration or generalization
 	screenFlow                      // the section's steps, one filling the body
 	screenDraft                     // the description being revised
-	screenAsk                       // a yes/no question
 	screenDoc                       // a scrollable document (failures, a report, a log)
 	screenRunLive                   // the run, while it runs
 	screenQualityMenu               // output lane: the skill's three views, chosen on one screen
@@ -68,17 +68,16 @@ type Model struct {
 	statusErr     bool
 	quitArmed     bool
 
-	lanes  laneState
-	skills skillState
+	// pick is the work list: one row per lane of work, which is the app's front door now.
+	pick pickState
 	// stamp is the tree as the store was last read from. Every screen here is a drawing of the
 	// disk, so the app asks once a second whether the disk is still the one it drew and re-reads
 	// when it is not — otherwise a skill added in another window stays invisible until a restart,
 	// which reads as the tool having lost it.
-	stamp    string
-	sections sectionState
-	flow     *flowState
-	quality  *qualityState
-	form     *formState
+	stamp   string
+	flow    *flowState
+	quality *qualityState
+	form    *formState
 	// revision is the proposal `p` asks for: the agent's whole SKILL.md, the text it was written
 	// against, and the diff between them.
 	revision *revisionState
@@ -117,17 +116,10 @@ func Run(s *store.Store, skill, lane, glyphProfile string) int {
 	setName(g)
 	m := newModel(s)
 	if lane == store.LaneOutput {
-		m.lanes.cursor = 1
-	}
-	if lane == store.LaneOutput {
 		m.lane = store.LaneOutput
 	}
 	if skill != "" {
-		if m.lane == store.LaneOutput {
-			m.openQualitySkill(skill)
-		} else {
-			m.openSkill(skill)
-		}
+		m.openWork(pickRow{skill: skill, lane: laneOrDefault(lane)})
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
@@ -139,10 +131,12 @@ func Run(s *store.Store, skill, lane, glyphProfile string) int {
 
 func newModel(s *store.Store) *Model {
 	info := version.Resolve()
-	m := &Model{store: s, ver: info.Short(), built: info.Clock(), mode: screenLane, lane: store.LaneTrigger}
+	m := &Model{store: s, ver: info.Short(), built: info.Clock(), mode: screenPick, lane: store.LaneTrigger}
 	// The stamp the store was opened at: a screen drawn from it is current until the tree says
 	// otherwise. A tree that cannot be stamped reads as changed, and the first tick re-reads it.
 	m.stamp, _ = store.TreeStamp(s.Root)
+
+	m.loadPick()
 	return m
 }
 
@@ -154,6 +148,12 @@ func (m *Model) Init() tea.Cmd { return watchEvery() }
 // split the current step is about. It is called after every write and every finished run, so no
 // screen shows a number that came from before the change.
 func (m *Model) reload() {
+	// The list is only the list while nothing is open: a screen that has just named a skill is
+	// already inside one, and reload's job there is that screen's reading.
+	if m.mode == screenPick && m.skill == "" {
+		m.loadPick()
+		return
+	}
 	if m.lane == store.LaneOutput {
 		m.reloadQuality()
 		return
@@ -170,11 +170,6 @@ func (m *Model) reload() {
 	m.flow.iters = iterationsOf(lab)
 	if s := m.flow.split(); s != "" {
 		m.flow.rows = m.store.Rows(store.LaneTrigger, store.Filter{Skill: m.skill, Split: s})
-	}
-	// The section screen keeps a table of the split its cursor stands on: a write from that pane has
-	// to show up there the same way a write from a step shows up in the step's own table.
-	if m.mode == screenSections {
-		m.loadSectionRows()
 	}
 	// The workbench's cursor stands on a failure: its pane is about one failing row, and a cursor
 	// resting on a passing row leaves the pane describing something the cursor is not on.
@@ -260,7 +255,7 @@ func (m *Model) syncTree() {
 	// the tick after the screen gives the keys back does the re-read.
 	// Only a field with the caret holds the re-read back: its draft is the one thing on screen the
 	// store cannot replace. Fields without it are seeded from the file and can be seeded again.
-	if m.runActive() || m.mode == screenAsk || m.formActive() || m.assertEditActive() || m.caseNewActive() || m.feedbackActive() {
+	if m.runActive() || m.ask != nil || m.formActive() || m.assertEditActive() || m.caseNewActive() || m.feedbackActive() {
 		return
 	}
 	if m.reopen() {
@@ -284,38 +279,17 @@ func (m *Model) reopen() bool {
 	m.store = s
 
 	// The skill being worked on may have left the tree. Its loop has no screens without its files,
-	// so the app goes back to the chooser rather than drawing a flow whose set is gone.
+	// so the app goes back to the list rather than drawing a flow whose set is gone.
 	if m.skill != "" && m.store.Skill(m.skill) == nil {
 		gone := m.skill
 		m.skill, m.flow = "", nil
-		m.sections, m.skills = sectionState{}, skillState{}
-		if m.mode != screenLane {
-			m.mode = screenSkill
-			m.loadSkills()
-		}
-		m.noteStatus(gone+" is no longer in the tree — the chooser has been re-read", true)
+		m.quality = nil
+		m.mode = screenPick
+		m.loadPick()
+		m.noteStatus(gone+" is no longer in the tree — the list has been re-read", true)
 		return true
 	}
-	switch m.mode {
-	case screenSkill:
-		sel := ""
-		if m.skills.cursor >= 0 && m.skills.cursor < len(m.skills.rows) {
-			sel = m.skills.rows[m.skills.cursor].name
-		}
-		top := m.skills.top
-		m.loadSkills()
-		m.skills.top = top
-		for i, r := range m.skills.rows {
-			if r.name == sel {
-				m.skills.cursor = i
-				return true
-			}
-		}
-	default:
-		// reload re-reads the ledger and the split the screen is about, including the section
-		// screen's pane, so one call covers every screen that shows a set.
-		m.reload()
-	}
+	m.reload()
 	return true
 }
 
@@ -345,6 +319,9 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.formActive() {
 		return m, m.form.update(m, msg)
+	}
+	if m.ask != nil {
+		return m, m.ask.update(m, msg)
 	}
 	// The description field owns its keystrokes: q, ? and the digits are characters first, and a
 	// "q" that quits while someone is writing a sentence is a bug, not a shortcut.
@@ -376,22 +353,14 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.escUp()
 	}
 	switch m.mode {
-	case screenLane:
-		return m, m.updateLane(msg)
-	case screenSkill:
-		return m, m.updateSkills(msg)
-	case screenSections:
-		return m, m.updateSections(msg)
+	case screenPick:
+		return m, m.updatePick(msg)
 	case screenFlow:
 		return m, m.updateFlow(msg)
-	case screenQualityMenu:
-		return m, m.updateQualityMenu(msg)
 	case screenQuality:
 		return m, m.updateQuality(msg)
 	case screenRevision:
 		return m, m.updateRevision(msg)
-	case screenAsk:
-		return m, m.ask.update(m, msg)
 	case screenDoc:
 		return m, m.doc.update(m, msg)
 	case screenRunLive:
@@ -426,33 +395,23 @@ func (m *Model) passToForm(msg tea.Msg) tea.Cmd {
 // the key is never a guess.
 func (m *Model) escUp() tea.Cmd {
 	switch m.mode {
-	case screenSkill:
-		m.skill, m.flow = "", nil
-		m.mode = screenLane
 	case screenFlow:
-		m.mode = screenSections
-	case screenQualityMenu:
-		// The lane's own levels: the menu is the skill's screen, and a view is one level in.
-		m.quality = nil
-		m.skill = ""
-		m.mode = screenSkill
-	case screenQuality:
-		// A view goes back to the menu the three were chosen on; esc is one level, every time.
-		m.mode = screenQualityMenu
-		m.caseNew = nil
-		m.setStatus("", false)
-	case screenSections:
-		// The run's block is inside the pane, so esc leaves it before it leaves the screen: one
-		// level up, every time, is the only promise the key has to keep.
-		if m.sections.runFocus {
-			m.sections.runFocus = false
-			m.setStatus("the run's settings are the set's — the table has the keys again", false)
+		// The workbench is a surface, not a step: esc leaves the work for the list it came from.
+		// A wording that was being typed is the one thing on that screen the file does not hold, so
+		// leaving it takes two escs — the first says what the second would cost.
+		if m.flow != nil && m.flow.draftChanged() && !m.flow.discardArmed {
+			m.flow.discardArmed = true
+			m.setStatus("a sentence is being written — ctrl+s saves it, esc again leaves it behind", true)
 			return nil
 		}
 		m.skill, m.flow = "", nil
-		m.mode = screenSkill
-	case screenAsk:
-		m.ask, m.mode = nil, screenFlow
+		m.mode = screenPick
+		m.loadPick()
+	case screenQuality:
+		m.quality = nil
+		m.skill = ""
+		m.mode = screenPick
+		m.loadPick()
 	case screenRevision:
 		m.revision = nil
 		m.setQualitySection(qDojo)
@@ -524,42 +483,39 @@ func (m *Model) headLines() []string {
 	return head
 }
 
-// pathSegments is where you are, as a path: the optimization, the skill, and then the step, the
-// form, the document or the run that is open. The bar draws it with `>` between the segments and
-// nothing else is allowed on that row, because a path with facts tacked onto its end stops reading
-// as a path — it reads as one more run-on line of separated words.
+// pathSegments is where you are, as a path. There are three surfaces now, so the path is short by
+// construction: the list is one word, and everything else is the row it opened — the skill, the
+// lane, and the document or the run on top of it. "Where am I" is a line you can read at a glance,
+// which is the whole point of having no menus.
 func (m *Model) pathSegments() []string {
-	switch m.mode {
-	case screenLane:
-		return []string{"what to optimize"}
-	case screenSkill:
-		if m.lane == store.LaneOutput {
-			return []string{"output optimization", "choose a skill"}
-		}
-		return []string{"trigger optimization", "choose a skill"}
+	if m.mode == screenPick || m.mode == screenLane {
+		return []string{"the work"}
 	}
-	segs := []string{"trigger optimization"}
-	if m.lane == store.LaneOutput {
-		segs = []string{"output optimization"}
+	if m.mode == screenSkill {
+		return []string{"choose a skill"}
 	}
+	var segs []string
 	if m.skill != "" {
 		segs = append(segs, m.skill)
 	}
+	if m.lane == store.LaneOutput {
+		segs = append(segs, "output")
+	} else {
+		segs = append(segs, "description")
+	}
 	switch m.mode {
-	case screenFlow:
-		if m.flow != nil {
-			segs = append(segs, m.flow.sectionName())
-			// A section that is one screen has no step to name: the path stops at the section.
-			if m.flow.stepCount() > 1 {
-				segs = append(segs, m.flow.stepName())
-			}
-		}
 	case screenQuality:
-		segs = append(segs, m.quality.sectionName())
-	case screenDraft:
-		segs = append(segs, "revise")
-	case screenRevision:
-		segs = append(segs, "revision")
+		// The lane has one work surface; its three sections are states of it, and a state that is
+		// not the default one says its name on the path rather than leaving it to the region head.
+		if m.quality != nil && m.quality.sec != qDojo {
+			segs = append(segs, m.quality.sectionName())
+		}
+	case screenFlow:
+		// Same rule on the other lane: the split is a toggle, so the path says when it is the half
+		// the loop may not learn from.
+		if m.flow != nil && m.flow.sec == secGeneralization {
+			segs = append(segs, "validation")
+		}
 	case screenDoc:
 		if m.doc != nil {
 			segs = append(segs, m.doc.scope)
@@ -568,10 +524,8 @@ func (m *Model) pathSegments() []string {
 		if m.run != nil {
 			segs = append(segs, m.run.scope)
 		}
-	case screenAsk:
-		if m.ask != nil {
-			segs = append(segs, m.ask.scope)
-		}
+	case screenRevision:
+		segs = append(segs, "revision")
 	}
 	return segs
 }
@@ -602,29 +556,17 @@ func (m *Model) barLeft() string {
 // contextLine is the second row under the bar. On a step screen it is the rail — which step you are
 // in, what is done, what is locked — and that rail is the only navigation this app has.
 func (m *Model) contextLine(w int) string {
-	// On a step screen the rail is the left half and the loop's numbers are the right half: the
-	// steps say where you are, the numbers say how far in. They are two registers of one row, and
-	// neither belongs on the path above.
+	// The work surface carries no rail: there is nothing to walk between. What the row holds is the
+	// split the table is showing and the rule that set works under — the two facts a revision must
+	// not get wrong — and, on the other lane, the loop's numbers.
 	if m.mode == screenFlow && m.flow != nil {
-		// The ranking is one table: its head says what ranks it and the line under it says what it
-		// still owes, so a rail above would be the flow restated at the top of a screen that is all
-		// table. It takes the row the way the workbench does.
-		if m.flow.sec == secGeneralization && m.flow.step == 2 {
-			return ""
+		// Two words and a count: the rule the set works under is the status row's sentence, and a
+		// row that says it twice costs the loop's counter its place on narrow windows.
+		lead := setRegionWord(m.flow.sec == secIteration) + " · " + plural(len(m.flow.rows), "row")
+		if facts := m.flow.stateLine(); facts != "" && lipgloss.Width(lead)+lipgloss.Width(facts)+6 <= w {
+			return endsLine("  "+dimStyle.Render(lead), statValue.Render(facts)+" ", w)
 		}
-		rail := m.flow.rail(m, w)
-		// A one-screen section has no chips to draw, so its rail row is already the numbers — or
-		// empty, where the workbench itself is drawing them.
-		if m.flow.stepCount() == 1 {
-			return rail
-		}
-		facts := m.flow.stateLine()
-		// The numbers are the secondary register: when the row cannot hold both with a gutter between
-		// them, they go — a rail cut in half loses the step you are in, and the body repeats them.
-		if facts != "" && lipgloss.Width(rail)+lipgloss.Width(facts)+4 <= w {
-			return endsLine(rail, statValue.Render(facts)+" ", w)
-		}
-		return rail
+		return ellipsis("  "+dimStyle.Render(lead), w)
 	}
 	// The output lane's three views are reached from the menu and nowhere else, so a view carries no
 	// rail of them: its path already ends in its own name, and the menu above is where the switch is.
@@ -633,15 +575,11 @@ func (m *Model) contextLine(w int) string {
 		return m.qualityFactsLine(w)
 	}
 	switch m.mode {
-	case screenLane:
-		return ""
-	case screenSkill:
-		return ""
 	case screenRunLive:
 		if m.run != nil {
 			return dimStyle.Render("  " + m.run.hint)
 		}
-	case screenSections, screenDoc, screenAsk:
+	case screenDoc:
 		return ""
 	}
 	return ""
@@ -649,24 +587,14 @@ func (m *Model) contextLine(w int) string {
 
 func (m *Model) bodyLines(h int) []string {
 	switch m.mode {
-	case screenLane:
-		return m.laneBody(h)
-	case screenSkill:
-		return m.skillBody(h)
-	case screenSections:
-		return m.sectionsBody(h)
+	case screenPick:
+		return m.pickBody(h)
 	case screenFlow:
 		if m.flow != nil {
 			return m.flow.body(m, h)
 		}
-	case screenQualityMenu:
-		return m.qualityMenuBody(h)
 	case screenQuality:
 		return m.qualityBody(h)
-	case screenAsk:
-		if m.ask != nil {
-			return m.ask.body(h)
-		}
 	case screenDoc:
 		if m.doc != nil {
 			// Three cells short of the frame: the document is drawn two cells in from the edge by its
@@ -709,6 +637,9 @@ func hintLine(hints []hint) string {
 }
 
 func (m *Model) keyBand() string {
+	if m.ask != nil {
+		return banded(footSeq, endsLine(hintLine(m.ask.hints()), helpChip.Render(" ? keys "), m.width), m.width)
+	}
 	line := hintLine(m.hints())
 	room := m.width - lipgloss.Width(helpChip.Render(" ? keys ")) - 1
 	if lipgloss.Width(line) > room {
@@ -721,46 +652,17 @@ func (m *Model) keyBand() string {
 
 func (m *Model) hints() []hint {
 	switch m.mode {
-	case screenLane:
-		return []hint{{"enter", "open"}, {"q", "quit"}}
-	case screenSkill:
-		return []hint{{"j k", "move"}, {"enter", "open the loop"}, {"esc", "lanes"}}
-	case screenSections:
-		if m.formActive() {
-			return m.form.hints()
-		}
-		if m.sections.focus == sectionFocusSet && m.sectionPaneWidth() > 0 {
-			// The run's block has the keys: two settings, and the keys a setting has.
-			if m.sections.runFocus {
-				return []hint{{"← →", "change"}, {"tab", "next knob"}, {"space", "on·off"}, {"enter", "the set"}}
-			}
-			// The pane has the keys: the set's own vocabulary, one line short of the step screen's —
-			// and tab, which walks into the run's block below the table.
-			return []hint{{"j k", "rows"}, {"tab", "the run"}, {"n e d", "new·edit·delete"},
-				{"space", "trigger"}, {"enter", "the workbench"}, {"shift+tab", "sections"}}
-		}
-		if m.sectionPaneWidth() == 0 {
-			if m.sections.runFocus {
-				return []hint{{"← →", "change"}, {"tab", "next knob"}, {"space", "on·off"}, {"esc", "the set"}}
-			}
-			return []hint{{"j k", "move"}, {"tab", "the run"}, {"enter", "open"}, {"esc", "skills"}}
-		}
-		return []hint{{"j k", "move"}, {"tab", "the set"}, {"enter", "open"}, {"esc", "skills"}}
+	case screenPick:
+		return []hint{{"j k", "move"}, {"enter", "the work"}, {"q", "quit"}}
 	case screenFlow:
 		if m.flow != nil {
 			return m.flow.hints(m)
 		}
-	case screenQualityMenu:
-		return m.qualityMenuHints()
 	case screenQuality:
 		return qualityHints(m)
 	case screenRevision:
 		return []hint{{"j k space", "walk · tick a hunk"}, {"n N", "next change"}, {"a", "apply"},
 			{"e", "edit"}, {"esc", "discard"}}
-	case screenAsk:
-		if m.ask != nil {
-			return m.ask.hints()
-		}
 	case screenDoc:
 		return []hint{{"j k", "scroll"}, {"g G", "ends"}, {"esc", "back"}}
 	case screenRunLive:
@@ -776,6 +678,11 @@ func (m *Model) hints() []hint {
 // statusRow is the last row of the window, always: what just happened on the left, where you are on
 // the right. It is the one row that must not move, so every screen draws it the same way.
 func (m *Model) statusRow() string {
+	// A question takes the row: it is the one thing on screen that wants an answer, and putting it
+	// anywhere but where the keys are named would be a second place to look.
+	if m.ask != nil {
+		return m.ask.line(m.width)
+	}
 	left := m.status
 	style := statusOk
 	if m.statusErr {
@@ -808,17 +715,8 @@ func (m *Model) hereLine() string {
 // area return "": naming a region there would say the obvious and cost the position its room.
 func (m *Model) region() string {
 	switch m.mode {
-	case screenSections:
-		if m.formActive() {
-			return "editor"
-		}
-		if m.sections.runFocus {
-			return "the run"
-		}
-		if m.sections.focus == sectionFocusList || m.sectionPaneWidth() == 0 {
-			return "sections"
-		}
-		return setRegionWord(sectionRows[m.sections.cursor].sec == secIteration)
+	case screenPick:
+		return "the work"
 	case screenFlow:
 		if m.formActive() {
 			return "editor"
@@ -859,25 +757,12 @@ func (m *Model) region() string {
 // where you are, which is cheaper to read than the rail.
 func (m *Model) stateText() string {
 	switch m.mode {
-	case screenLane:
-		// Nothing has happened yet: the status row is for what just happened, and the door has not
-		// done anything. The pane beside the list is where the explanation lives.
-		return ""
-	case screenSkill:
-		if m.lane == store.LaneOutput {
-			return plural(len(m.skillNames()), "skill") + " with cases to grade"
+	case screenPick:
+		if len(m.pick.rows) == 0 {
+			return ""
 		}
-		return plural(len(m.skillNames()), "skill") + " with a description to tune"
-	case screenSections:
-		if m.formActive() {
-			return m.form.facts()
-		}
-		// The rule the section works under, where the pane used to spend a paragraph on it. What is
-		// on screen is the set; what belongs on the status row is what that set is for.
-		if sectionRows[m.sections.cursor].sec == secGeneralization {
-			return "these rows judge the wording; they are never used to write one"
-		}
-		return "the wording may learn from these rows — nothing else shapes a revision"
+		return fmt.Sprintf("%s to work · the row under the cursor says what the disk is waiting for",
+			plural(len(m.pick.rows), "lane"))
 	case screenFlow:
 		if m.formActive() {
 			return m.form.facts()
@@ -905,6 +790,8 @@ func (m *Model) stateText() string {
 
 func (m *Model) position() string {
 	switch m.mode {
+	case screenPick:
+		return fmt.Sprintf("%d / %d", m.pick.cursor+1, max(1, len(m.pick.rows)))
 	case screenFlow:
 		if m.formActive() {
 			return fmt.Sprintf("q%d", m.form.id)
@@ -914,9 +801,6 @@ func (m *Model) position() string {
 			return ""
 		}
 		// The area names the region (see region); this says where the cursor stands inside it.
-		if f.stepCount() > 1 {
-			return fmt.Sprintf("step %d of %d", f.step, f.stepCount())
-		}
 		var parts []string
 		if f.focus == focusSet && len(f.rows) > 0 {
 			// The set is walked by its failures, so this counts failures: "row 3 of 3" would promise
@@ -937,29 +821,6 @@ func (m *Model) position() string {
 			parts = append(parts, "unsaved")
 		}
 		return strings.Join(parts, " · ")
-	case screenSections:
-		if m.formActive() {
-			return fmt.Sprintf("q%d", m.form.id)
-		}
-		if m.sections.runFocus {
-			// The block names the setting the arrows will change: the status row's corner is where
-			// that fact belongs, not the knob's own line.
-			if m.sections.runSel == knobDry {
-				return "dry run"
-			}
-			return "runs per query"
-		}
-		if m.sections.focus == sectionFocusSet && m.sectionPaneWidth() > 0 {
-			if len(m.sections.rows) == 0 {
-				return "no rows"
-			}
-			return fmt.Sprintf("row %d of %d", m.sections.sel+1, len(m.sections.rows))
-		}
-		return fmt.Sprintf("%d / 2", m.sections.cursor+1)
-	case screenSkill:
-		return fmt.Sprintf("%d / %d", m.skills.cursor+1, max(1, len(m.skillNames())))
-	case screenQualityMenu:
-		return m.qualityMenuPosition()
 	case screenQuality:
 		// The corner names the case the caret is in, not the row the cursor stands on: while a case
 		// is being written, the cursor's row is not what the keys are touching.
@@ -983,8 +844,6 @@ func (m *Model) position() string {
 				}
 			}
 		}
-	case screenLane:
-		return fmt.Sprintf("%d / 2", m.lanes.cursor+1)
 	case screenDoc:
 		if m.doc != nil {
 			return m.doc.position()

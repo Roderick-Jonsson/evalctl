@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -34,91 +33,6 @@ const (
 	valCol   = 16
 	colTrain = 16
 )
-
-// rankingBody is the generalization section's second step: the gate, the empty set, the empty loop,
-// or the ranking with whatever it still owes.
-func (m *Model) rankingBody(h int) []string {
-	f := m.flow
-	if !f.gateOpen() {
-		return m.lockedBody(h)
-	}
-	if f.lab == nil || f.lab.ValidationRows == 0 {
-		return m.emptyValidationBody(h)
-	}
-	if len(f.iters) == 0 {
-		d := &docWriter{w: max(28, m.width-4)}
-		d.title("Nothing measured yet")
-		d.lead("The ranking is the loop's own history — it is empty until a wording has been run on the train set.")
-		d.rule()
-		d.fact("iterations", "none measured")
-		d.blank()
-		d.para("Iteration is the other half of the loop: a wording has to be written and measured before the validation set has anything to judge.")
-		d.action("esc", "back to the sections")
-		return fitRows(d.lines, h)
-	}
-
-	f.res = min(max(f.res, 0), len(f.iters)-1)
-	best := bestIteration(f)
-	pending := m.needsValidation()
-	// The wordings the ledger holds and no train run ever measured are not rows here — they are not
-	// iterations yet — but they are the answer to "why does this table have fewer rows than the
-	// ledger", so the tail names them instead of leaving the count to be guessed.
-	draft, live := f.draftOf()
-
-	// The head says what the table is ranked by, and says it as a fact rather than as an intention:
-	// with no rate measured yet there is nothing here to rank.
-	right := "ranked by the validation set"
-	if best == nil {
-		right = "nothing validated yet"
-	}
-	lines := []string{
-		"",
-		regionHead(m.width, rankingName, right, true),
-		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4)))),
-		"  " + dimStyle.Render(fitTo("ITERATION", 10)) + " " + dimStyle.Render(fitTo("TRAIN", colTrain)) + "  " +
-			dimStyle.Render(fitTo("VALIDATION", valCol)) + " " + dimStyle.Render(fitTo("GAP", 6)) + " " +
-			dimStyle.Render(fitTo("CHARS", 6)) + "  " + dimStyle.Render("NOTE"),
-	}
-	headRows := len(lines)
-
-	// The tail is what the table still owes, and a legend only where a cell uses its mark. The pick
-	// is not restated here: it is a tag on its own row, and the columns are named by their own head
-	// — under a table that already says both, a paragraph saying them again is the screen reading
-	// itself out loud.
-	var tail []string
-	tail = append(tail, "  "+dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, m.width-4)))))
-	if pending > 0 {
-		// The missing rates are the screen's one forward move, so the line that offers it says what
-		// it costs: the validation queries, the runs, and the calls that multiplies out to.
-		cost := f.lab.ValidationRows * f.lab.Runs * pending
-		tail = append(tail, "  "+cursorMark.Render(glyphs.Arrow)+" "+titleStyle.Render("v")+"  "+
-			ellipsis(fmt.Sprintf("validate %s · %d queries × %d runs = %d agent calls",
-				plural(pending, "iteration"), f.lab.ValidationRows, f.lab.Runs, cost),
-				max(20, m.width-8)))
-	}
-	if draft != nil {
-		word := "the workbench's run measures it"
-		if !live {
-			word = "a later revision stepped over it"
-		}
-		tail = append(tail, "  "+dimStyle.Render(ellipsis(fmt.Sprintf(
-			"#%d is in the ledger but not this table — %s", draft.ID, word), max(30, m.width-4))))
-	}
-	if m.anyPartial() {
-		tail = append(tail, "  "+dimStyle.Render(ellipsis(
-			"of N — judged of the split; a stopped batch never ranks", max(30, m.width-4))))
-	}
-
-	room := max(1, h-len(lines)-len(tail))
-	top := max(0, f.res-room+1)
-	for i := top; i < len(f.iters) && len(lines) < headRows+room; i++ {
-		lines = append(lines, m.rankingRow(f.iters[i], i == f.res, best != nil && best.Cand.ID == f.iters[i].Cand.ID))
-	}
-	for len(lines) < headRows+room {
-		lines = append(lines, "")
-	}
-	return fitRows(append(lines, tail...), h)
-}
 
 func (m *Model) rankingRow(it iteration, focused, best bool) string {
 	mark := "  "
@@ -271,72 +185,28 @@ func trainSummary(f *flowState) string {
 	return "nothing measured"
 }
 
-// updateRanking is the ranking's keys: pick a row, run the rates it is missing, read why a wording
-// failed, apply the pick, or run the fresh queries once one is in.
-func (m *Model) updateRanking(msg tea.KeyMsg) tea.Cmd {
-	f := m.flow
-	switch msg.String() {
-	case "j", "down":
-		f.res = min(f.res+1, max(0, len(f.iters)-1))
-	case "k", "up":
-		f.res = max(0, f.res-1)
-	case "g", "home":
-		f.res = 0
-	case "G", "end":
-		f.res = max(0, len(f.iters)-1)
-	case "enter", "a":
-		// The selection is the write: choose the wording, confirm, and SKILL.md carries it.
-		if len(f.iters) > 0 {
-			m.askApply(f.iters[f.res])
-		}
-	case "f":
-		if len(f.iters) > 0 {
-			return m.openIterationDoc(f.iters[f.res])
-		}
-	case "v":
-		if !f.gateOpen() || f.lab == nil || f.lab.ValidationRows == 0 {
-			return nil
-		}
-		return m.startGeneralization()
-	case "h":
-		return m.openHoldout()
-	}
-	return nil
-}
-
 // askApply is the write into SKILL.md, confirmed: it is the one action in the loop that changes what
 // ships, and the ledger records it beside the measurement that earned it.
 func (m *Model) askApply(it iteration) {
-	validTxt := "— (not measured on the validation set)"
+	validTxt := "not validated"
 	if v := it.valid(); v != nil {
 		validTxt = pct(v.Passed, v.Judged)
 		if !m.flow.complete(v) && m.flow.lab != nil {
-			validTxt += fmt.Sprintf(" over %d of %d queries — a stopped batch", v.Judged, m.flow.lab.ValidationRows)
+			validTxt += fmt.Sprintf(" over %d of %d — a stopped batch", v.Judged, m.flow.lab.ValidationRows)
 		}
 	}
-	m.ask = &askState{
-		scope: "apply",
-		title: fmt.Sprintf("apply candidate #%d to %s/SKILL.md?", it.Cand.ID, m.skill),
-		lines: []string{
-			fmt.Sprintf("train %s · validation %s", pct(it.Train.Train.Passed, it.Train.Train.Judged), validTxt),
-			"",
-			dimStyle.Render(clipText(it.Cand.Text, min(88, max(30, m.width-6)))),
-			"",
-			dimStyle.Render("the frontmatter description is rewritten and the old file backed up; nothing else in SKILL.md changes"),
-		},
-		yes: "apply it",
-		then: func(m *Model) tea.Cmd {
-			msg, err := runner.New(m.store).ApplyDescription(m.skill, it.Cand.ID)
-			if err != nil {
-				m.setStatus(err.Error(), true)
-				return nil
-			}
-			m.reload()
-			m.setStatus(msg+" — h runs the fresh queries once", false)
+	title := fmt.Sprintf("apply #%d to %s/SKILL.md?  train %s · validation %s — the file is backed up first",
+		it.Cand.ID, m.skill, pct(it.Train.Train.Passed, it.Train.Train.Judged), validTxt)
+	m.askNow(title, "apply it", func(m *Model) tea.Cmd {
+		msg, err := runner.New(m.store).ApplyDescription(m.skill, it.Cand.ID)
+		if err != nil {
+			m.setStatus(err.Error(), true)
 			return nil
-		},
-	}
-	m.mode = screenAsk
+		}
+		m.reload()
+		m.setStatus(msg+" — h runs the fresh queries once", false)
+		return nil
+	})
 }
 
 // openHoldout is the guide's last move: 5–10 fresh queries, measured once, reported apart from the

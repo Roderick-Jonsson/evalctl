@@ -160,10 +160,9 @@ func (q *qualityState) sectionName() string {
 	return qualitySections[qSetup].name
 }
 
-// openQualitySkill opens one skill's output loop where the disk is asking for it: the menu, with the
-// cursor on the view that is asking for work. The lane opens on the choice and not inside a section,
-// because the three views are three jobs and which one you want is not something a directory name
-// can decide for you — the cursor is the part the disk gets to choose.
+// openQualitySkill opens one skill's output loop on the work surface: the cases, what failed, and the
+// iteration being worked. The view is chosen by the disk, not by a menu — a loop still closed opens on
+// its declaration, because the assertion nobody wrote is the thing standing in the way.
 func (m *Model) openQualitySkill(name string) {
 	if m.store.Skill(name) == nil {
 		m.setStatus("unknown skill "+name, true)
@@ -173,17 +172,21 @@ func (m *Model) openQualitySkill(name string) {
 	m.lane = store.LaneOutput
 	m.quality = &qualityState{}
 	m.reload()
-	m.mode = screenQualityMenu
+	m.mode = screenQuality
 	if m.quality.lab == nil {
 		return
 	}
-	m.quality.vcursor = menuRowFor(m.quality.lab)
 	if m.quality.lab.InitPending {
+		m.setQualitySection(qSetup)
 		if _, text := gateNext(m.quality.lab); text != "" {
 			m.setStatus(name+" · initialization — "+text, false)
 		}
 		return
 	}
+	m.setQualitySection(qDojo)
+	// The surface opens on a failing case: what failed is the work, and a cursor on a case that passed
+	// makes the reader hunt for the failure the run left.
+	m.quality.selectFirstFailed()
 	if n := len(m.quality.lab.Iterations); n > 0 {
 		last := m.quality.lab.Iterations[n-1]
 		switch {
@@ -2103,22 +2106,9 @@ func (m *Model) askRegrade(it *runner.QualityIteration, owing []runner.QualityCa
 	calls := 2 * len(owing)
 	// The count that matters is the cases, not the arms: a sentence edited in one case is two judge
 	// calls, and the rest of the iteration is verdicts about words nobody touched.
-	lines := []string{
-		fmt.Sprintf("      %d of %s owe a verdict.", len(owing), pluralOf(it.Cases, "case", "cases")),
-		fmt.Sprintf("      That is %d judge call(s), and the rates it produces replace the ones on screen.", calls),
-		"",
-		"      Do it when an assertion changed after the grade: the grades describe the old list,",
-		"      and the iteration view draws an ungraded assertion as a dash.",
-	}
-	m.mode = screenAsk
-	m.ask = &askState{
-		scope: fmt.Sprintf("re-grade iteration %d", it.N),
-		title: fmt.Sprintf("GRADE ITERATION %d AGAIN?", it.N),
-		lines: lines,
-		yes:   "re-grade it",
-		back:  screenQuality,
-		then:  func(m *Model) tea.Cmd { return m.startGradeRun(true, owing) },
-	}
+	title := fmt.Sprintf("grade iteration %d again? %d of %s owe a verdict — %d judge call(s)",
+		it.N, len(owing), pluralOf(it.Cases, "case", "cases"), calls)
+	m.askNow(title, "re-grade it", func(m *Model) tea.Cmd { return m.startGradeRun(true, owing) })
 	return nil
 }
 
@@ -2410,7 +2400,7 @@ func qualityHints(m *Model) []hint {
 	}
 	// A key is offered only where it can do its job — R over a set with nothing to judge is the
 	// spend the lane exists to prevent — and the way out names the level it goes to.
-	trail := []hint{{"esc", "the three views"}}
+	trail := []hint{{"esc", "the work list"}}
 	switch q.sec {
 	case qDojo:
 		// The band carries the case's next move and the two human keys, and not the six others this
@@ -2531,163 +2521,11 @@ func (m *Model) qualityFacts() string {
 	return strings.Join(parts, " · ")
 }
 
-// ---------------------------------------------------------------- the chooser's output rows
-
-// loadQualitySkills fills the skill table for the output lane: one row per skill with its cases,
-// the last iteration's two rates, and how many iterations it has measured.
-func (m *Model) loadQualitySkills() {
-	m.skills.rows = nil
-	bySkill := map[string][]store.Issue{}
-	for _, issue := range m.store.Validate() {
-		bySkill[issue.Skill] = append(bySkill[issue.Skill], issue)
-	}
-	r := runner.New(m.store)
-	for _, name := range m.skillNames() {
-		row := skillRow{name: name, issues: bySkill[name], qWith: "—", qWithout: "—"}
-		lab, err := r.QualityLab(name)
-		if err == nil {
-			row.onDisk = true
-			row.qCases = lab.Cases
-			row.qAssert = lab.Assertions
-			row.qIters = len(lab.Iterations)
-			row.qBest = lab.Best
-			row.qState = qualityRowState(lab)
-			if n := len(lab.Iterations); n > 0 {
-				last := lab.Iterations[n-1]
-				row.qWith, row.qWithout = qRateText(last.With), qRateText(last.Without)
-				row.qFail = len(last.Failed)
-			}
-		} else {
-			row.qState = "cannot read"
-		}
-		m.skills.rows = append(m.skills.rows, row)
-	}
-	m.skills.cursor = min(m.skills.cursor, max(0, len(m.skills.rows)-1))
-}
-
+// qRateText is one arm's rate as the screens print it: a dash where nothing was judged, because an
+// ungraded arm has no rate and a zero would read as one.
 func qRateText(a runner.QualityArm) string {
 	if !a.Graded() {
 		return "—"
 	}
 	return fmt.Sprintf("%.0f%%", a.Rate*100)
-}
-
-// qualityRowState is one phrase per skill: what the output loop would do next with it.
-func qualityRowState(lab *runner.QualityLab) string {
-	switch {
-	case lab.Cases == 0:
-		return "no cases — write evals.json"
-	case len(lab.Iterations) == 0:
-		return "cases ready — nothing run yet"
-	case lab.Assertions == 0:
-		return "add assertions after the first run"
-	case lab.Best == 0:
-		return "grade the last iteration"
-	}
-	last := lab.Iterations[len(lab.Iterations)-1]
-	if !last.Complete {
-		return fmt.Sprintf("iteration %d ungraded", last.N)
-	}
-	if len(last.Failed) > 0 {
-		return fmt.Sprintf("%s failing — revise", plural(len(last.Failed), "assertion"))
-	}
-	if lab.Flat {
-		return "flat — stop or sharpen"
-	}
-	return "clean · best #" + fmt.Sprint(lab.Best)
-}
-
-// skillQualityPane is the chooser's pane for the output lane: the cases, the loop's state, and
-// what the last iteration failed — the same three facts the trigger pane gives, in this lane's
-// terms.
-func (m *Model) skillQualityPane(w, h int) []string {
-	if len(m.skills.rows) == 0 {
-		return nil
-	}
-	r := m.skills.rows[m.skills.cursor]
-	d := &docWriter{w: w, label: 12}
-	var blocks [][]string
-	from := len(d.lines)
-	block := func() {
-		blocks = append(blocks, append([]string(nil), d.lines[from:]...))
-		from = len(d.lines)
-	}
-	d.head(strings.ToUpper(r.name), false)
-	d.rule()
-	d.lead(r.qState)
-	block()
-
-	d.card("The set")
-	d.fact("cases", plural(r.qCases, "case"))
-	d.fact("assertions", plural(r.qAssert, "assertion"))
-	d.fact("fixtures", r.name+"/evals/files/<slug>/")
-	block()
-
-	d.card("The loop")
-	with, without := r.qWith, r.qWithout
-	if with == "" {
-		with, without = "—", "—"
-	}
-	d.fact("with skill", with)
-	d.fact("without", without)
-	d.fact("iterations", fmt.Sprint(r.qIters))
-	best := "none complete"
-	if r.qBest > 0 {
-		best = "#" + fmt.Sprint(r.qBest)
-	}
-	d.fact("best", best)
-	block()
-
-	if r.qFail > 0 {
-		d.card("Findings")
-		d.fact("failing", plural(r.qFail, "assertion")+" in the last iteration")
-		block()
-	}
-	if len(r.issues) > 0 {
-		d.card("The tree")
-		for i, issue := range r.issues {
-			if i == 2 {
-				d.fact("more", plural(len(r.issues)-2, "finding"))
-				break
-			}
-			d.fact(severityWord(issue.Severity), issue.Msg)
-		}
-		block()
-	}
-
-	actDoc := &docWriter{w: w}
-	actDoc.action("enter", "open the loop at the section its disk is asking for")
-	room := h - len(actDoc.lines)
-	var out []string
-	for _, b := range blocks {
-		if len(out)+len(b) > room {
-			break
-		}
-		out = append(out, b...)
-	}
-	return fitRows(append(out, actDoc.lines...), h)
-}
-
-// skillQualityBlock is the narrow chooser's version of the output pane: the row under the cursor,
-// said out loud under the table, where four skills already fill the window.
-func (m *Model) skillQualityBlock() []string {
-	r := m.skills.rows[m.skills.cursor]
-	rule := func(n int) string { return dimStyle.Render(strings.Repeat(glyphs.Rule, max(4, n))) }
-	lines := []string{
-		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, 2)) + " " + titleStyle.Render(r.name) + " " +
-			rule(min(64, max(8, m.width-8-lipgloss.Width(r.name)))),
-	}
-	facts := strings.Join([]string{
-		plural(r.qCases, "case"),
-		plural(r.qAssert, "assertion"),
-		fmt.Sprintf("%s with · %s without", r.qWith, r.qWithout),
-		fmt.Sprintf("%s measured", plural(r.qIters, "iteration")),
-	}, " · ")
-	for _, line := range wrapPlain(facts, max(20, m.width-4)) {
-		lines = append(lines, "  "+dimStyle.Render(line))
-	}
-	for _, line := range wrapPlain(r.qState, max(20, m.width-4)) {
-		lines = append(lines, "  "+dimStyle.Render(line))
-	}
-	return lines
 }

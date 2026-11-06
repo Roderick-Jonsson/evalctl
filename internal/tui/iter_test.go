@@ -79,7 +79,7 @@ func at(t *testing.T, view, name string) (row, col int) {
 // one thing a revision is, so it is the one thing this screen writes. The set is drawn with the run's
 // verdicts and no fields, and the keys that write a row — n, e, d, space — are the step screens' and
 // the section pane's, not this one's.
-func TestTheWorkbenchReportsTheSetAndEditsNothing(t *testing.T) {
+func TestTheWorkbenchReportsTheSetAndEditsItInPlace(t *testing.T) {
 	m, root := measured(t, []runner.ScoreRow{
 		row(1, "train", true, true), row(2, "train", false, false),
 	})
@@ -88,7 +88,7 @@ func TestTheWorkbenchReportsTheSetAndEditsNothing(t *testing.T) {
 	if m.form != nil {
 		t.Fatalf("the workbench seeded an editor for the set: %+v", m.form)
 	}
-	for _, unwanted := range []string{"should the skill load?", "split", "EDITOR", "edit q1"} {
+	for _, unwanted := range []string{"should the skill load?", "EDITOR", "edit q1"} {
 		if strings.Contains(view, unwanted) {
 			t.Fatalf("the set is not edited on this screen, and %q says it is:\n%s", unwanted, view)
 		}
@@ -99,16 +99,19 @@ func TestTheWorkbenchReportsTheSetAndEditsNothing(t *testing.T) {
 			t.Fatalf("the workbench is missing %q:\n%s", want, view)
 		}
 	}
-	// The row commands do nothing here: no form, and the label is the file's.
+	// The set is edited here, and nowhere else: `e` writes the row under the cursor in the block it is
+	// read in, and esc puts the table back without touching the file.
 	before := triggerFile(t, root)
-	for _, key := range []string{"e", "n", "d", "space"} {
-		press(m, key)
-		if m.form != nil || m.mode != screenFlow {
-			t.Fatalf("%q opened an editor on the workbench: mode = %d form = %+v", key, m.mode, m.form)
-		}
+	press(m, "e")
+	if m.form == nil || !m.form.active {
+		t.Fatalf("e must put the caret in the row's fields: mode = %d", m.mode)
 	}
+	if !strings.Contains(stripMarks(strings.Join(m.bodyLines(m.bodyHeight()), "\n")), "q2") {
+		t.Fatalf("the editor is not drawn in the set's own block:\n%s", m.View())
+	}
+	press(m, "esc")
 	if got := triggerFile(t, root); got != before {
-		t.Fatalf("a row command wrote the file from the workbench:\n%s", got)
+		t.Fatalf("leaving the editor wrote the file:\n%s", got)
 	}
 }
 
@@ -215,7 +218,7 @@ func TestTypingEditsTheDescription(t *testing.T) {
 	_ = before
 }
 
-func TestEscLeavesTheFieldBeforeItLeavesTheSection(t *testing.T) {
+func TestEscLeavesTheFieldBeforeItLeavesTheWork(t *testing.T) {
 	m, _ := measured(t, []runner.ScoreRow{row(1, "train", true, true)})
 	enterSection(m, secIteration)
 	press(m, "tab")
@@ -227,8 +230,8 @@ func TestEscLeavesTheFieldBeforeItLeavesTheSection(t *testing.T) {
 		t.Fatalf("esc in a field stays in the section, mode = %d", m.mode)
 	}
 	press(m, "esc")
-	if m.mode != screenSections {
-		t.Fatalf("esc on the set leaves the section, mode = %d", m.mode)
+	if m.mode != screenPick {
+		t.Fatalf("esc on the set leaves the work for the list, mode = %d", m.mode)
 	}
 }
 
@@ -347,19 +350,22 @@ func TestTheWorkbenchCursorWalksTheFailures(t *testing.T) {
 	}
 }
 
-func TestTheDraftSurvivesLeavingTheSection(t *testing.T) {
+func TestTheDraftCostsASecondEsc(t *testing.T) {
 	m, _ := measured(t, []runner.ScoreRow{row(1, "train", true, true)})
 	enterSection(m, secIteration)
 	press(m, "tab")
 	press(m, "x")
-	press(m, "esc")
-	press(m, "esc")
-	if m.mode != screenSections {
-		t.Fatalf("mode = %d, want the sections", m.mode)
+	press(m, "esc") // the field gives the keys back
+	press(m, "esc") // the first one says what leaving would cost
+	if m.mode != screenFlow || !strings.Contains(m.status, "sentence is being written") {
+		t.Fatalf("mode = %d status = %q, want the work held with the loss named", m.mode, m.status)
 	}
-	enterSection(m, secIteration)
 	if !strings.HasSuffix(m.flow.draft.text.Value(), "x") {
-		t.Fatalf("a half-typed sentence must survive the section screen: %q", m.flow.draft.text.Value())
+		t.Fatalf("a half-typed sentence must survive the first esc: %q", m.flow.draft.text.Value())
+	}
+	press(m, "esc")
+	if m.mode != screenPick {
+		t.Fatalf("the second esc leaves the work: mode = %d", m.mode)
 	}
 }
 

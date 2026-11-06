@@ -94,14 +94,20 @@ func TestInitializationMakesACaseAndDeletesIt(t *testing.T) {
 	write(t, filepath.Join(fixture, "input.txt"), "a die\n")
 
 	press(m, "d")
-	if m.mode != screenAsk || m.ask == nil {
-		t.Fatalf("mode %v, want the confirmation", m.mode)
+	if m.ask == nil {
+		t.Fatalf("d must ask before deleting: %q", stripMarks(m.status))
 	}
-	dialog := stripMarks(strings.Join(m.ask.body(m.bodyHeight()), "\n"))
-	for _, want := range []string{"delete #3 new-case-1?", "fixture dir goes with it"} {
-		if !strings.Contains(dialog, want) {
-			t.Fatalf("the dialog is missing %q:\n%s", want, dialog)
-		}
+	// The question is a row, not a screen: the work stays drawn under it.
+	if m.mode != screenQuality {
+		t.Fatalf("mode %v while asking, want the view it was asked from", m.mode)
+	}
+	question := stripMarks(m.ask.line(m.width))
+	if !strings.Contains(question, "delete case #3 new-case-1?") {
+		t.Fatalf("the question does not say what it deletes:\n%s", question)
+	}
+	// The keys are the band's, in the same place every other key is named.
+	if band := stripMarks(m.keyBand()); !strings.Contains(band, "y delete it") {
+		t.Fatalf("the key band does not offer the answer:\n%s", band)
 	}
 
 	press(m, "y")
@@ -173,14 +179,14 @@ func TestTheNewCaseFormGivesTheKeysBack(t *testing.T) {
 // measured on, so esc has to leave the file exactly as it was.
 func TestDeletingACaseCanBeCalledOff(t *testing.T) {
 	m, root := gateFixture(t, false)
-	press(m, "1")
+	m.openQualitySkill("dummy")
 	press(m, "d")
-	if m.mode != screenAsk {
-		t.Fatalf("mode %v, want the confirmation", m.mode)
+	if m.ask == nil {
+		t.Fatalf("d must ask before deleting: %q", stripMarks(m.status))
 	}
 	press(m, "n")
-	if m.mode != screenQuality {
-		t.Fatalf("mode %v after the cancel, want the view it was asked from", m.mode)
+	if m.mode != screenQuality || m.ask != nil {
+		t.Fatalf("mode %v ask %v after the cancel, want the view it was asked from", m.mode, m.ask != nil)
 	}
 	if slugs := evalsSlugs(t, root); len(slugs) != 2 {
 		t.Fatalf("evals.json holds %v, want the two cases untouched", slugs)

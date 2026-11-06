@@ -98,6 +98,12 @@ func (r *Runner) QualityLab(skill string) (*QualityLab, error) {
 	if sk == nil {
 		return nil, fmt.Errorf("unknown skill %q", skill)
 	}
+	// A skill with a SKILL.md and no eval file yet has no set: that is a place to start, not an
+	// error, and the screens need a lab to say so.
+	if !sk.OnDisk {
+		return &QualityLab{Skill: skill, InitPending: true,
+			Checks: qualityChecks(&QualityLab{Skill: skill}), Next: qualityNext(&QualityLab{Skill: skill})}, nil
+	}
 	cases, err := LoadCases(r.Store, []string{skill}, nil)
 	if err != nil {
 		return nil, err

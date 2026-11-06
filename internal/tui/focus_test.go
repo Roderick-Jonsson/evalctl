@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"evalctl/internal/runner"
+	"evalctl/internal/store"
 )
 
 // One cursor, one region.
@@ -22,7 +24,7 @@ func marks(m *Model) (cursor, block int) {
 	return strings.Count(view, glyphs.Cursor), strings.Count(view, glyphs.Block)
 }
 
-// regionsOf is the focus rule as a table: the screen, how to put the keys somewhere, and whether a
+// regionsOf is the focus rule as a table: the surface, how to put the keys somewhere, and whether a
 // cursor row is expected there. A field with the caret has no cursor mark of its own — the caret is
 // the mark — so those cases expect zero.
 func TestOneRegionHasTheKeys(t *testing.T) {
@@ -30,7 +32,6 @@ func TestOneRegionHasTheKeys(t *testing.T) {
 		row(1, "train", true, true), row(2, "train", false, false),
 		row(3, "validation", true, true), row(4, "validation", false, false),
 	})
-	m.openSkill("slide-builder")
 
 	check := func(name string, wantCursor int) {
 		t.Helper()
@@ -45,29 +46,13 @@ func TestOneRegionHasTheKeys(t *testing.T) {
 		}
 	}
 
-	// The two screens before the loop, and the one after it: a list with a head of its own.
-	m.mode = screenLane
-	check("the door", 1)
-	m.mode = screenSkill
-	m.loadSkills()
-	check("the chooser", 1)
-	m.mode = screenFlow
-	m.flow.sec, m.flow.step, m.flow.forced = secGeneralization, 3, true
-	m.reload()
-	check("the results", 1)
-
-	// The section screen: the list, then the pane beside it.
-	m.openSkill("slide-builder")
-	m.mode = screenSections
-	m.sections.focus = sectionFocusList
-	m.loadSectionRows()
-	check("sections · list", 1)
-	m.sections.focus = sectionFocusSet
-	check("sections · pane", 1)
+	// The list is one region, with one cursor on the row the keys would open.
+	m.mode = screenPick
+	m.loadPick()
+	check("the work list", 1)
 
 	// The workbench: the set, the description, the note, and the fields under the set.
-	m.mode = screenFlow
-	m.flow.sec, m.flow.step = secIteration, 1
+	m.openWork(pickRow{skill: "slide-builder", lane: store.LaneTrigger})
 	m.reload()
 	m.ensureDraft()
 	for _, c := range []struct {
@@ -84,35 +69,29 @@ func TestOneRegionHasTheKeys(t *testing.T) {
 		check(c.name, c.cursor)
 	}
 
-	// With the caret in a set's fields — the pane beside the two sections, the one place a row is
-	// written when the workbench is on screen — the set is not the region with the keys.
-	m.mode = screenSections
-	m.sections.focus = sectionFocusSet
-	m.loadSectionRows()
-	m.focusForm()
-	check("sections · the row's fields", 0)
+	// The split is a toggle on the same screen: the other half of the set, the same one cursor.
+	m.flow.focus = focusSet
+	press(m, "s")
+	if m.flow.sec != secGeneralization {
+		t.Fatalf("s = section %d, want the validation half", m.flow.sec)
+	}
+	check("workbench · the validation half", 1)
 }
 
 // statusHere is the status row's own answer to "where am I", which must agree with the frame.
 func TestTheStatusRowNamesTheRegionWithTheKeys(t *testing.T) {
 	m, _ := measured(t, []runner.ScoreRow{row(1, "train", true, true)})
-	m.openSkill("slide-builder")
-	m.mode = screenSections
 
-	m.sections.focus = sectionFocusList
-	if got, want := stripMarks(m.hereLine()), "sections · 1 / 2 "; got != want {
-		t.Fatalf("here = %q, want %q", got, want)
+	m.mode = screenPick
+	m.loadPick()
+	if got := stripMarks(m.hereLine()); !strings.HasPrefix(got, fmt.Sprintf("the work · 1 / %d", len(m.pick.rows))) {
+		t.Fatalf("here = %q, want the list and its row", got)
 	}
-	m.sections.focus = sectionFocusSet
-	if got := stripMarks(m.hereLine()); !strings.HasPrefix(got, "train set · row 1 of 2") {
-		t.Fatalf("here = %q, want the train set's row", got)
-	}
-	if got := m.region(); got != "train set" {
+	if got := m.region(); got != "the work" {
 		t.Fatalf("region = %q", got)
 	}
 
-	m.mode = screenFlow
-	m.flow.sec, m.flow.step = secIteration, 1
+	m.openWork(pickRow{skill: "slide-builder", lane: store.LaneTrigger})
 	m.reload()
 	m.ensureDraft()
 	m.flow.focus = focusNote
@@ -131,8 +110,7 @@ func TestTheStatusRowNamesTheRegionWithTheKeys(t *testing.T) {
 // a key that did nothing. The fields live in the set beside the two sections.
 func TestTheCaretSurvivesAFrame(t *testing.T) {
 	m, _ := measured(t, []runner.ScoreRow{row(1, "train", true, true)})
-	press(m, "tab") // the pane beside the two sections
-	press(m, "e")
+	press(m, "e") // the row under the cursor, edited in the block that reads it
 	if m.form == nil || !m.form.active {
 		t.Fatal("e must put the caret in the fields")
 	}

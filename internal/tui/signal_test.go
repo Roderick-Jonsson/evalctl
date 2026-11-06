@@ -25,6 +25,8 @@ func TestTheCaseListMarksWhatEachCaseMeasures(t *testing.T) {
 		t.Fatalf("a case name was cut to make room for its tag:\n%s", list)
 	}
 	// And the pane says the same thing in a sentence: what the pattern means, and what to do about it.
+	// The case that measures nothing is the first one, whatever the cursor opened on.
+	m.quality.sel = 0
 	pane := stripMarks(strings.Join(m.casePane(70, m.bodyHeight()), "\n"))
 	if !strings.Contains(pane, "make it fail") || !strings.Contains(pane, "the baseline passes every assertion") {
 		t.Fatalf("the pane does not say what `no signal` means:\n%s", pane)

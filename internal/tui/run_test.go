@@ -118,8 +118,8 @@ func TestGRegradesOnlyTheCasesThatOweAVerdict(t *testing.T) {
 
 	// Nothing is stale: every assertion of every case has a verdict, so there is nothing to buy.
 	press(m, "g")
-	if m.mode == screenAsk {
-		t.Fatalf("g asked to spend on an iteration with nothing owing: %+v", m.ask.lines)
+	if m.ask != nil {
+		t.Fatalf("g asked to spend on an iteration with nothing owing: %s", stripMarks(m.ask.title))
 	}
 	if st := stripMarks(m.status); !strings.Contains(st, "nothing to grade") {
 		t.Fatalf("status = %q, want it to say there is nothing to grade", st)
@@ -130,15 +130,15 @@ func TestGRegradesOnlyTheCasesThatOweAVerdict(t *testing.T) {
 	m.assertEdit.lines = []string{"Three faces, each 1 to 20", "The total adds up"}
 	press(m, "ctrl+s")
 	press(m, "g")
-	if m.mode != screenAsk || m.ask == nil {
+	if m.ask == nil {
 		t.Fatalf("g after an edit = mode %v, want the question", m.mode)
 	}
-	lines := stripMarks(strings.Join(m.ask.lines, "\n"))
-	if !strings.Contains(lines, "1 of 2 cases owe a verdict") {
-		t.Fatalf("the question does not say what owes a verdict:\n%s", lines)
+	question := stripMarks(m.ask.line(m.width))
+	if !strings.Contains(question, "1 of 2 cases owe a verdict") {
+		t.Fatalf("the question does not say what owes a verdict:\n%s", question)
 	}
-	if !strings.Contains(lines, "2 judge call(s)") {
-		t.Fatalf("the question does not price the re-grade by the case:\n%s", lines)
+	if !strings.Contains(question, "2 judge call(s)") {
+		t.Fatalf("the question does not price the re-grade by the case:\n%s", question)
 	}
 	press(m, "y")
 	if m.mode != screenRunLive || m.run == nil || m.run.kind != runGrade {

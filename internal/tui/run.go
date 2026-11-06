@@ -142,6 +142,11 @@ func (m *Model) startTrainingRun() tea.Cmd {
 	if f == nil || f.lab == nil {
 		return nil
 	}
+	// The split on screen is the split the run measures: with the sections screen gone, `R` on the
+	// validation set has to be the validation run, or the title above the table would be a lie.
+	if f.sec == secGeneralization {
+		return m.startGeneralization()
+	}
 	if f.lab.TrainRows == 0 {
 		m.setStatus("the train set is empty — the section's first step defines it", true)
 		return nil
@@ -517,6 +522,8 @@ func (m *Model) leaveRun() tea.Cmd {
 		// to read, and the move it is waiting for is the set's own — so it lands there.
 		if m.quality != nil {
 			m.quality.feedback = nil
+			// The work surface is one screen; which of its states a finished run lands on is decided
+			// by what the run left: verdicts to read, or a set still waiting for its assertions.
 			if m.quality.lab != nil && m.quality.lab.InitPending {
 				m.setQualitySection(qSetup)
 				m.setStatus("the run is on disk — v reads what the arms wrote, e writes the assertions, g grades them", false)

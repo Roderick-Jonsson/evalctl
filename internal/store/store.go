@@ -74,6 +74,14 @@ func Open(dir string) (*Store, error) {
 		}
 		path := filepath.Join(root, e.Name(), "evals", "evals.json")
 		if _, err := os.Stat(path); err != nil {
+			// A dir with a SKILL.md and no eval file yet is a skill somebody has just made. Hiding it
+			// until a case exists hides the two things the tool is for — a description to tune and a
+			// set to declare — and a skill you cannot see is a skill you cannot start.
+			if _, skillErr := os.Stat(filepath.Join(root, e.Name(), "SKILL.md")); skillErr == nil {
+				sk := &Skill{Name: e.Name(), Dir: filepath.Join(root, e.Name()), FilePath: path}
+				sk.Output.SkillName = e.Name()
+				s.Skills = append(s.Skills, sk)
+			}
 			continue
 		}
 		sk := &Skill{Name: e.Name(), Dir: filepath.Join(root, e.Name()), FilePath: path}

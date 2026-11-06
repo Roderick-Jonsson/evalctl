@@ -106,6 +106,8 @@ func (m *Model) quadFailure(w, h int) []string {
 		d.head("FAILED QUERY", false)
 		d.rule()
 		switch {
+		case len(f.rows) == 0:
+			d.lead("the " + setRegionWord(f.sec == secIteration) + " is empty — n writes the first query here, and it lands in the file")
 		case f.pending() != nil:
 			d.lead(fmt.Sprintf("candidate #%d has not been run yet — run the train set", f.pending().ID))
 		case f.latest() != nil:
@@ -331,6 +333,11 @@ func (m *Model) ensureDraft() {
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
 	ta.SetValue(text)
+	if strings.TrimSpace(text) == "" {
+		// A skill with no description opens on an empty field, and an empty field with no sentence
+		// about itself is a blank pane. The placeholder is that sentence, and it is not text.
+		ta.Placeholder = "type the description that makes the router pick this skill"
+	}
 	ta.SetWidth(max(20, m.width-6))
 	ta.SetHeight(6)
 
@@ -502,6 +509,56 @@ func (m *Model) updateIter(msg tea.KeyMsg) tea.Cmd {
 	case "R":
 		// Run again: the same wording, another measurement. No screen between the key and the spend.
 		return m.startTrainingRun()
+	case "+", "=":
+		// The knobs that were the section pane's: how many times each query is run, and whether the
+		// next run spends anything. They live on this screen because the run does.
+		if f.lab != nil {
+			n := min(9, f.lab.Runs+1)
+			if err := m.store.SetTriggerRuns(n); err != nil {
+				m.setStatus(err.Error(), true)
+			} else {
+				m.reload()
+				m.setStatus(fmt.Sprintf("runs per query = %d — written into trigger/trigger-evals.json", n), false)
+			}
+		}
+	case "-":
+		if f.lab != nil {
+			n := max(1, f.lab.Runs-1)
+			if err := m.store.SetTriggerRuns(n); err != nil {
+				m.setStatus(err.Error(), true)
+			} else {
+				m.reload()
+				m.setStatus(fmt.Sprintf("runs per query = %d", n), false)
+			}
+		}
+	case "x":
+		f.dry = !f.dry
+		if f.dry {
+			m.setStatus("dry run — R prints the commands and writes nothing", false)
+		} else {
+			m.setStatus("dry run off — R spends", false)
+		}
+	case "s":
+		// The split is a toggle on this screen now, not a screen in front of it: the same set, the
+		// other half. The cursor stays on the row it was on where the row still exists.
+		if f.sec == secIteration {
+			f.sec = secGeneralization
+		} else {
+			f.sec = secIteration
+		}
+		m.reload()
+		m.setStatus("the "+setRegionWord(f.sec == secIteration)+" — the wording may only learn from the train set", false)
+	case "v":
+		// The validation half's run: every measured wording, measured again on the rows held back.
+		return m.startGeneralization()
+	case "a":
+		// The pick, which the deleted ranking screen used to own: the best validation rate wins, and
+		// the confirm is the same one question.
+		if best := bestIteration(f); best != nil {
+			m.askApply(*best)
+		} else {
+			m.setStatus("nothing ranked yet — v measures the wordings on the validation set", true)
+		}
 	case "f":
 		if it := f.latest(); it != nil && f.pending() == nil && len(it.Cand.FailedTrain()) > 0 {
 			return m.openFailures(it)
@@ -509,6 +566,27 @@ func (m *Model) updateIter(msg tea.KeyMsg) tea.Cmd {
 	case "enter":
 		// The loop in one key: save the wording being written (if it changed), then measure it.
 		return m.runOrSave()
+	case "n":
+		// The set is edited here: the block is the table, and a row is written in it. It used to be a
+		// step screen of its own, which made the set you were looking at and the set you could write
+		// two different readings of one file.
+		if f.focus == focusSet {
+			m.openForm(nil)
+		}
+	case "e":
+		if f.focus == focusSet && len(f.rows) > 0 {
+			e := f.rows[min(f.sel, len(f.rows)-1)]
+			m.openForm(&e)
+			return m.focusForm()
+		}
+	case " ":
+		if f.focus == focusSet && len(f.rows) > 0 {
+			return m.toggleLabel()
+		}
+	case "d":
+		if f.focus == focusSet && len(f.rows) > 0 {
+			m.askDeleteRow()
+		}
 	}
 	return nil
 }
@@ -521,6 +599,12 @@ func (m *Model) typingKey(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		f.blur()
 		f.focus = focusSet
+		return nil
+	case "ctrl+d":
+		// The discarding key, spelled out: a half-typed sentence is not lost by a keystroke that
+		// also means "up".
+		f.draft, f.discardArmed = nil, false
+		m.setStatus("the draft is gone — the wording is SKILL.md's again", false)
 		return nil
 	case "tab":
 		return m.cycleFocus(1)

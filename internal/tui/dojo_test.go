@@ -247,11 +247,11 @@ func TestTheIterationViewEditsTheSetItIsReading(t *testing.T) {
 	}
 	press(m, "esc")
 	press(m, "d")
-	if m.mode != screenAsk {
-		t.Fatalf("d did not ask before deleting: mode %v", m.mode)
+	if m.ask == nil {
+		t.Fatalf("d did not ask before deleting: %q", stripMarks(m.status))
 	}
 	press(m, "n")
-	if m.mode != screenQuality {
+	if m.mode != screenQuality || m.ask != nil {
 		t.Fatalf("the cancel left the view: mode %v", m.mode)
 	}
 }
