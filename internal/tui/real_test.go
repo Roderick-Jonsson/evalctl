@@ -60,6 +60,11 @@ func TestOpensTheRealTree(t *testing.T) {
 				m.reload()
 				fits(fmt.Sprintf("work · %s · %s", r.skill, secNames[sec]))
 			}
+			// The ranking is the only screen that prints the validation half's numbers, and it is a
+			// table: a row wider than the frame is the failure this loop exists to catch.
+			m.openRanking()
+			fits("ranking · " + r.skill)
+			m.doc, m.mode = nil, screenFlow
 		}
 	}
 }
@@ -71,6 +76,12 @@ func copyTree(t *testing.T, src string) string {
 	t.Helper()
 	dst := t.TempDir()
 	copyFile(t, filepath.Join(src, "trigger", "trigger-evals.json"), filepath.Join(dst, "trigger", "trigger-evals.json"))
+	// The ledger too: the rankings are a join of these candidates against the iterations' own records,
+	// so a copy without it draws a tree where nothing has ever been measured.
+	ledgers, _ := filepath.Glob(filepath.Join(src, "trigger", "descriptions", "*.json"))
+	for _, f := range ledgers {
+		copyFile(t, f, filepath.Join(dst, "trigger", "descriptions", filepath.Base(f)))
+	}
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		t.Fatal(err)

@@ -14,7 +14,8 @@ import (
 //
 // They are all the same screen — a title, a body, a scroll position — because they are all things
 // you read rather than act on, and a reader that behaves differently per document is a reader you
-// relearn three times.
+// relearn three times. The ranking is the one document that is also a decision, and it says so with
+// its own act and hints; the reader keeps the frame, the scroll and the way out.
 
 type docState struct {
 	scope string // what the bar calls it: "failures", "report", "activity"
@@ -28,6 +29,13 @@ type docState struct {
 	// laid out for the window the reader used to have.
 	src   string
 	width int // the pane width lines were rendered at; 0 until the first draw
+	// A document is usually read and nothing else. Two exceptions earn a field each: the ranking is
+	// a table you walk and act on (act, hints, table), and a record opened from it returns to it
+	// (back) rather than to the screen the table itself returns to.
+	act   func(key string) tea.Cmd
+	hints []hint
+	table bool
+	back  *docState
 }
 
 // md renders src through glamour at the pane's width. It is idempotent, so a document is rendered

@@ -82,6 +82,10 @@ type flowState struct {
 	// sentence half-typed is not a file yet.
 	focus int
 	draft *iterDraft
+	// proposal is a description the model wrote for this iteration, waiting in the pane it will be
+	// edited in. It is not a candidate and not a file: y puts it into the draft, and the draft is
+	// what gets saved and run.
+	proposal *describeState
 	// discardArmed is the second esc on a workbench holding an unsaved sentence: the first one says
 	// it would be lost, the second one means it.
 	discardArmed bool
@@ -463,6 +467,10 @@ func boolInt(b bool) int {
 // stateText is the status row's own line: the constraint the step is working under, which is the
 // thing a person forgets between sessions.
 func (f *flowState) stateText() string {
+	// A proposal is a decision waiting to be made, so it is the only thing the row has to say.
+	if f.proposal != nil {
+		return "a proposal — y keeps it in the field, p asks again, esc drops it"
+	}
 	// A dry run is the one setting that changes what a keystroke costs, so while it is on it is the
 	// only thing the status row has to say.
 	if f.dry && f.sec == secIteration && f.focus == focusSet {
@@ -483,7 +491,7 @@ func (f *flowState) stateText() string {
 		}
 		if it := f.latest(); it != nil {
 			return "train " + pct(it.Train.Train.Passed, it.Train.Train.Judged) +
-				" · the validation set stays withheld until generalization"
+				" · validation is measured in generalization, never here"
 		}
 		return "nothing measured yet — enter runs the train set"
 	}
@@ -532,6 +540,11 @@ func (f *flowState) hints(m *Model) []hint {
 	if m.formActive() {
 		return m.form.hints()
 	}
+	// A proposal has the keys: the field is not being typed into, the set is not being walked, and
+	// the only three moves are the ones that decide what happens to a paragraph somebody paid for.
+	if f.proposal != nil {
+		return []hint{{"y", "keep it in the field"}, {"p", "another"}, {"j k", "scroll"}, {"esc", "discard"}}
+	}
 	switch f.focus {
 	case focusWording:
 		return []hint{{"type", "the description"}, {"tab", "note"}, {"ctrl+s", "save"}, {"esc", "the set"}}
@@ -542,8 +555,17 @@ func (f *flowState) hints(m *Model) []hint {
 	if !f.draftChanged() {
 		act = "run the " + setRegionWord(f.sec == secIteration)
 	}
-	return []hint{{"enter", act}, {"tab", "the description"}, {"s", "the other split"},
-		{"v", "validate"}, {"a", "apply"}, {"f", "the failures"}, {"esc", "the work"}}
+	// The band offers the ladder key, the new action, and the keys that are legal in any state. `f`
+	// is not in the iteration half of it: the failure pane is already on screen, and a band that
+	// names every reader ends up cutting the way out — `?` still has it, and so does the pane's own
+	// head. In the generalization half `f` is the only door onto one wording in full, and `h` the
+	// only door onto the holdout, so those two are named there and the model's proposal is not.
+	if f.sec == secGeneralization {
+		return []hint{{"v", "validate"}, {"a", "apply"}, {"f", "in full"}, {"h", "holdout"},
+			{"s", "the other half"}, {"esc", "the work"}}
+	}
+	return []hint{{"enter", act}, {"tab", "the description"}, {"p", "a model"}, {"s", "the other half"},
+		{"v", "validate"}, {"a", "apply"}, {"esc", "the work"}}
 }
 
 // ---------------------------------------------------------------- update

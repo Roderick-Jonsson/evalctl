@@ -55,7 +55,14 @@ func (m *Model) iterBody(h int) []string {
 	// The top row takes the larger half: the failure pane has to fit a wrapped ask, the two labelled
 	// facts and three hints, while the description and the iteration list below pad with blanks when
 	// they have room to spare. A row given to the top is a row the bottom does not miss.
+	//
+	// A proposal in the description pane turns that around: a 600-character paragraph wrapped to this
+	// column is fifteen lines, and a diff whose end cannot be read cannot be decided on. The bottom
+	// row takes two thirds while one is up, and gives them back when it is kept or dropped.
 	topH := max(8, h/2)
+	if m.flow != nil && m.flow.proposal != nil {
+		topH = max(8, h/3)
+	}
 	botH := max(6, h-topH-1)
 
 	// Two rows of two: what went wrong beside how much of the set it cost, and — under them — where
@@ -229,8 +236,12 @@ func (m *Model) quadSetRow(i, idW, trigW, resW, queryW int) string {
 }
 
 // quadWording is the description, editable in place: the loop ends here, with a caret, because a
-// revision is an edit and not a screen you navigate to.
+// revision is an edit and not a screen you navigate to. While a proposal is waiting it is that
+// proposal instead: the paragraph as it would read, with what left and what arrived marked.
 func (m *Model) quadWording(w, h int) []string {
+	if m.flow.proposal != nil {
+		return m.quadProposal(w, h)
+	}
 	f := m.flow
 	d := f.draft
 	d.text.SetWidth(max(20, w-4))
@@ -261,29 +272,41 @@ func (m *Model) quadWording(w, h int) []string {
 	return fitRows(lines, h)
 }
 
-// quadIterations is the loop's own history: every run, and what it scored on the train set. It is
-// the only place you can see whether the last four revisions bought anything.
+// quadIterations is the loop's own history: every wording, what it scored on the train set, what the
+// validation set made of it, and the gap between the two. It is the only place the loop's numbers are
+// visible beside the wording they are about, in either half of the work.
+//
+// The validation column is not optional here. With it gone, a tree whose every wording had been
+// validated showed nothing at all on the screen — the rates were on disk, ranked, and drawn nowhere —
+// so what gives way as the pane narrows is the gap and then the note, never the two rates.
 //
 // It takes no keys, so its name says so: no block, no accent, and no band on the newest row. A band
 // here used to mark "the wording you are revising", and beside the set's own cursor it made two
 // rows on one screen look selected.
 func (m *Model) quadIterations(w, h int) []string {
 	f := m.flow
-	head := "  " + dimStyle.Render(padCell("ITER", 5, true)) + " " +
-		dimStyle.Render(padCell("TRAIN", 12, true)) + " " +
-		dimStyle.Render(padCell("CHARS", 6, true)) + "  " + dimStyle.Render("NOTE")
-	lines := []string{"", regionHead(w, "ITERATIONS", fmt.Sprintf("%d of %d", len(f.iters), iterationsRequired), false),
+	c, note := blockColsFor(w)
+	head := "  " + dimStyle.Render(padCell("ITER", c.iter, true)) + " " +
+		dimStyle.Render(padCell("TRAIN", c.train, true)) + " " +
+		dimStyle.Render(padCell("VALID", c.valid, true))
+	if c.showGap {
+		head += " " + dimStyle.Render(padCell("GAP", c.gap, true))
+	}
+	head += "  " + dimStyle.Render("NOTE")
+	// The head's right corner answers the question the table raises when every row carries the same
+	// rate: why the recommendation is the oldest wording. The sentence behind it is in the ranking.
+	right := fmt.Sprintf("%d of %d", len(f.iters), iterationsRequired)
+	if rate, n, tied := tieOf(f); tied {
+		right = fmt.Sprintf("%d tied at %d%%", n, rate)
+	}
+	lines := []string{"", regionHead(w, "ITERATIONS", right, false),
 		"  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, w-4))), head}
 	room := max(1, h-len(lines)-2)
 	start := max(0, len(f.iters)-room)
+	best := bestIteration(f)
 	for i := start; i < len(f.iters); i++ {
 		it := f.iters[i]
-		rate := pct(it.Train.Train.Passed, it.Train.Train.Judged)
-		row := "  " + colID.Render(padCell(fmt.Sprint(it.N), 5, true)) + " " +
-			colText.Render(padCell(rate, 12, true)) + " " +
-			colSplit.Render(padCell(fmt.Sprint(it.Cand.Chars), 6, true)) + "  " +
-			colText.Render(ellipsis(oneLine(it.Cand.Note), max(6, w-32)))
-		lines = append(lines, row)
+		lines = append(lines, m.iterBlockRow(it, c, note, best != nil && best.Cand.ID == it.Cand.ID))
 	}
 	if len(f.iters) == 0 {
 		lines = append(lines, "  "+dimStyle.Render("nothing measured yet"))
@@ -294,6 +317,64 @@ func (m *Model) quadIterations(w, h int) []string {
 			plural(max(0, iterationsRequired-len(f.iters)), "iteration"))))
 	}
 	return fitRows(lines, h)
+}
+
+// blockCols is the ITERATIONS block's budget: the two rates always, the gap when the pane can hold
+// it, and the note with whatever is left.
+type blockCols struct {
+	iter, train, valid, gap int
+	showGap                 bool
+}
+
+func blockColsFor(w int) (c blockCols, note int) {
+	c = blockCols{iter: 4, train: 9, valid: 9}
+	switch {
+	case w >= 58:
+		// "1/2 50% of 4" is twelve cells: a partial cell is worth the extra two, because it is the
+		// difference between a rank and a rounding of one.
+		c.train, c.valid, c.gap, c.showGap = 13, 13, 6, true
+	case w >= 46:
+		c.train, c.valid = 11, 11
+	}
+	used := 2 + c.iter + 1 + c.train + 1 + c.valid + 2
+	if c.showGap {
+		used += 1 + c.gap
+	}
+	return c, max(4, w-used)
+}
+
+// iterBlockRow is one wording in the block: the rates, the gap, and the note that says why it was
+// written — with the recommendation tagged on the line's right edge, where the eye lands last.
+func (m *Model) iterBlockRow(it iteration, c blockCols, note int, best bool) string {
+	f := m.flow
+	train := fmt.Sprintf("%d/%d %s", it.Train.Train.Passed, it.Train.Train.Judged,
+		pct(it.Train.Train.Passed, it.Train.Train.Judged))
+	if !it.Train.TrainFull && f.lab != nil {
+		train += fmt.Sprintf(" of %d", f.lab.TrainRows)
+	}
+	valid := "—"
+	if v := it.valid(); v != nil {
+		valid = fmt.Sprintf("%d/%d %s", v.Passed, v.Judged, pct(v.Passed, v.Judged))
+		if !f.complete(v) && f.lab != nil {
+			valid += fmt.Sprintf(" of %d", f.lab.ValidationRows)
+		}
+	}
+	row := "  " + colID.Render(padCell(fmt.Sprint(it.N), c.iter, true)) + " " +
+		colText.Render(padCell(train, c.train, true)) + " " +
+		colText.Render(padCell(valid, c.valid, true))
+	if c.showGap {
+		row += " " + colSplit.Render(padCell(gapOf(&it.Train.Train, it.valid()), c.gap, true))
+	}
+	mark := ""
+	if best {
+		mark = " " + tagRecommend.Render("Recommended")
+	}
+	text := oneLine(it.Cand.Note)
+	if text == "" {
+		text = "—"
+	}
+	room := max(4, note-lipgloss.Width(mark))
+	return row + "  " + colText.Render(padCell(ellipsis(text, room), room, false)) + mark
 }
 
 // ---------------------------------------------------------------- the narrow fallback
@@ -477,9 +558,13 @@ func (f *flowState) stepFail(dir int) {
 	}
 }
 
-// typing reports whether the iteration screen's keystrokes belong to a text field.
+// typing reports whether the iteration screen's keystrokes belong to a text field. A proposal owns
+// the keys without owning a caret: it is read, kept or dropped, never typed into.
 func (m *Model) typing() bool {
-	return m.mode == screenFlow && m.flow != nil && m.flow.sec == secIteration && m.flow.focus != focusSet
+	if m.mode != screenFlow || m.flow == nil || m.flow.sec != secIteration {
+		return false
+	}
+	return m.flow.focus != focusSet && m.flow.proposal == nil
 }
 
 // ---------------------------------------------------------------- keys
@@ -489,6 +574,11 @@ func (m *Model) typing() bool {
 // a second editor on the screen whose one editable thing is the description cost the loop its focus.
 func (m *Model) updateIter(msg tea.KeyMsg) tea.Cmd {
 	f := m.flow
+	// A proposal owns the pane it arrived in: it is kept, asked again, or scrolled, and every other
+	// key belongs to it rather than to the set behind it.
+	if f.proposal != nil {
+		return m.updateProposal(msg)
+	}
 	switch msg.String() {
 	case "tab":
 		return m.cycleFocus(1)
@@ -550,6 +640,7 @@ func (m *Model) updateIter(msg tea.KeyMsg) tea.Cmd {
 		m.setStatus("the "+setRegionWord(f.sec == secIteration)+" — the wording may only learn from the train set", false)
 	case "v":
 		// The validation half's run: every measured wording, measured again on the rows held back.
+		// With nothing owed it opens the ranking, because the rates are what the key is for.
 		return m.startGeneralization()
 	case "a":
 		// The pick, which the deleted ranking screen used to own: the best validation rate wins, and
@@ -559,9 +650,20 @@ func (m *Model) updateIter(msg tea.KeyMsg) tea.Cmd {
 		} else {
 			m.setStatus("nothing ranked yet — v measures the wordings on the validation set", true)
 		}
+	case "h":
+		// The guide's last move: the fresh queries, measured once, before the wording is believed.
+		return m.openHoldout()
 	case "f":
-		if it := f.latest(); it != nil && f.pending() == nil && len(it.Cand.FailedTrain()) > 0 {
-			return m.openFailures(it)
+		// One wording in full: both rates, the gap, what the revision before it fixed and broke, and
+		// every train row it failed. It is the same reading the ranking's rows abbreviate.
+		if it := f.latest(); it != nil {
+			return m.openIterationRecord(*it)
+		}
+	case "p":
+		// The guide's step 3 with the model doing the writing: one call, the failures as its only
+		// evidence, and the paragraph lands in the pane beside the failures it was written from.
+		if f.focus == focusSet {
+			return m.startDescribe()
 		}
 	case "enter":
 		// The loop in one key: save the wording being written (if it changed), then measure it.
@@ -628,9 +730,14 @@ func (m *Model) typingKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 // cycleFocus walks the three panes. The set takes letters as commands, so a field that has the keys
-// has to say so: the footer changes, and the note's label turns into the caret.
+// has to say so: the footer changes, and the note's label turns into the caret. A proposal has the
+// keys without having a caret, so tab waits: there is nothing to type into until it is kept.
 func (m *Model) cycleFocus(dir int) tea.Cmd {
 	f := m.flow
+	if f.proposal != nil {
+		m.setStatus("a proposal is on the pane — y keeps it in the field first, or esc drops it", true)
+		return nil
+	}
 	m.ensureDraft()
 	if f.draft == nil {
 		return nil

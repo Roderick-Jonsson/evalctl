@@ -100,6 +100,14 @@ var (
 	colCases = lipgloss.NewStyle()
 	colAsr   = lipgloss.NewStyle()
 
+	// goneStyle and newStyle are the description diff's two marks: a word leaving is red AND struck
+	// through, a word arriving is green. The strike is not decoration — an inline diff puts the old
+	// text and the new text next to each other, so "dont" against "do" leaves "dont" and "do" touching
+	// and a colour alone cannot say which of the two is the one that stays. SGR 9 is supported
+	// everywhere this tool is run; where it is not, the colour still carries the meaning.
+	goneStyle = lipgloss.NewStyle()
+	newStyle  = lipgloss.NewStyle()
+
 	// promoNote is colDupe without its fixed width: the table's column style would reflow a
 	// sentence into four-character fragments inside the form's box.
 	promoNote = lipgloss.NewStyle()
@@ -179,6 +187,11 @@ func applyStyles(p theme.Palette) {
 
 	colCases = lipgloss.NewStyle().Foreground(p.Color(p.Text))
 	colAsr = lipgloss.NewStyle().Foreground(p.Color(p.OK))
+
+	// A removal is the error colour struck through; an addition is the pass colour, plainly. The
+	// strike is what separates two runs that sit side by side with no space between them.
+	goneStyle = lipgloss.NewStyle().Foreground(p.Color(p.Err)).Strikethrough(true)
+	newStyle = lipgloss.NewStyle().Foreground(p.Color(p.OK))
 
 	promoNote = lipgloss.NewStyle().Foreground(p.Color(p.Warn))
 }

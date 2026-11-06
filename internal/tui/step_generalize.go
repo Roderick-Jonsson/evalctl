@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -16,13 +17,12 @@ import (
 // description is often not the last one written, and a loop that keeps revising until the train set
 // passes will have learned the train set.
 //
-// So the ranking is one screen and one table. It used to be two — a batch screen that listed the
-// wordings still to run, and a result list you were sent to afterwards — and that was the same table
-// twice with a keypress between them: the batch screen had to draw every iteration's state to say
-// what it was about to do, and the result list had to draw the same rows again to show what it did.
-// Now the table is the whole of it. A wording with no validation rate sits in its row with a dash in
-// that column, the rows that are missing a rate are run from the same screen (`v`), the table fills
-// itself in when the batch lands, and the row the rule recommends is already under the cursor.
+// The ranking is one table: every measured wording with its train rate, its validation rate and the
+// gap between them, the rows that are missing a rate still drawn with a dash, the recommended row
+// tagged, and the tail saying what the table still owes. It is a document with a cursor rather than a
+// screen with a rail, and the keys that act on it — apply, validate, the record of one iteration, the
+// holdout — are in its band. The workbench's ITERATIONS block draws the same two rates in its own
+// columns, so the numbers are readable without leaving the wording they are about.
 
 const rankingName = "RANKING"
 
@@ -34,15 +34,82 @@ const (
 	colTrain = 16
 )
 
-func (m *Model) rankingRow(it iteration, focused, best bool) string {
+var rankingHints = []hint{
+	{"j k", "move"}, {"enter a", "apply"}, {"f", "in full"},
+	{"v", "validate"}, {"h", "holdout"}, {"esc", "back"},
+}
+
+// openRanking is the generalization half's reading. It is where `v` goes when there is nothing left
+// to validate: the key used to answer with a status line, so a loop with every rate measured had no
+// screen that showed the rates — which reads as a blank result, not as a finished job.
+func (m *Model) openRanking() tea.Cmd {
+	f := m.flow
+	if f == nil || f.lab == nil {
+		return nil
+	}
+	doc := &docState{scope: "ranking", title: "ranking · ranked by the validation set", act: m.rankingKey}
+	switch {
+	case f.lab.ValidationRows == 0:
+		doc.title, doc.lines = "the validation set is empty", m.emptyValidationBody(m.bodyHeight())
+		doc.hints = []hint{{"1", "the validation set"}, {"esc", "back"}}
+	case !f.gateOpen():
+		doc.title, doc.lines = "validation is locked until the loop has run", m.lockedBody(m.bodyHeight())
+		doc.hints = []hint{{"ctrl+g", "validate anyway"}, {"esc", "back"}}
+	case len(f.iters) == 0:
+		doc.title = "nothing measured yet"
+		doc.lines = []string{
+			"",
+			"  " + dimStyle.Render("The ranking is the loop's own history: a wording has to be written"),
+			"  " + dimStyle.Render("and run on the train set before there is anything to rank."),
+			"",
+			"  " + dimStyle.Render("Iteration is the other half — a wording, a run, a revision from what failed."),
+		}
+		doc.hints = []hint{{"esc", "back"}}
+	default:
+		// A finished validation batch lands here, so the recommendation is where the reader was
+		// already looking: the point of the table is that the pick is made, not that it is offered.
+		f.res = f.recommended()
+		doc.lines = m.rankingLines()
+		doc.hints = rankingHints
+		doc.table = true
+	}
+	m.doc = doc
+	m.backTo = screenFlow
+	m.mode = screenDoc
+	return nil
+}
+
+// rankingLines is the table at the cursor's position. It is rebuilt whenever the cursor moves: the
+// rows are the reading, and a document whose selected row never changes is a list with a lie on it.
+func (m *Model) rankingLines() []string {
+	f := m.flow
+	w := max(40, m.width-2)
+	head := "  " + dimStyle.Render(fitTo("ITERATION", 10)) + " " + dimStyle.Render(fitTo("TRAIN", colTrain)) + "  " +
+		dimStyle.Render(fitTo("VALIDATION", valCol)) + " " + dimStyle.Render(fitTo("GAP", 6)) + " " +
+		dimStyle.Render(fitTo("CHARS", 6)) + "  " + dimStyle.Render("NOTE")
+	rule := "  " + dimStyle.Render(strings.Repeat(glyphs.Rule, max(10, min(96, w-2))))
+	lines := []string{"", head, rule}
+	best := bestIteration(f)
+	f.res = min(max(f.res, 0), max(0, len(f.iters)-1))
+	for i := range f.iters {
+		lines = append(lines, m.rankingRow(f.iters[i], w, i == f.res, best != nil && best.Cand.ID == f.iters[i].Cand.ID))
+	}
+	lines = append(lines, rule)
+	return append(lines, m.rankingTail(w)...)
+}
+
+// rankingRow is one wording: the two rates it was measured at, what it cost in characters, and why it
+// was written. The marks go last and the note takes what is left — a note that ate the row's
+// evidence would be the one thing on this line that could not be cut.
+func (m *Model) rankingRow(it iteration, w int, focused, best bool) string {
 	mark := "  "
 	if focused {
 		mark = cursorMark.Render(glyphs.Cursor)
 	}
 	trainTxt := fmt.Sprintf("%d/%d %s", it.Train.Train.Passed, it.Train.Train.Judged,
 		pct(it.Train.Train.Passed, it.Train.Train.Judged))
-	// The train column is marked the same way: a run whose later queries died judges fewer rows than
-	// the set holds, and 1/1 100% beside 4/4 100% would read as the better wording.
+	// A run whose later queries died judges fewer rows than the set holds, and 1/1 100% beside
+	// 4/4 100% would read as the better wording.
 	if !it.Train.TrainFull && m.flow.lab != nil {
 		trainTxt += fmt.Sprintf(" of %d", m.flow.lab.TrainRows)
 	}
@@ -51,11 +118,9 @@ func (m *Model) rankingRow(it iteration, focused, best bool) string {
 	// the table is still unranked. A rate over part of the set is drawn as a rate and marked, because
 	// it is the one number on this screen that can look better than it is.
 	validTxt := "—"
-	partial := false
 	if v := it.valid(); v != nil {
 		validTxt = fmt.Sprintf("%d/%d %s", v.Passed, v.Judged, pct(v.Passed, v.Judged))
-		partial = !m.flow.complete(v)
-		if partial && m.flow.lab != nil {
+		if !m.flow.complete(v) && m.flow.lab != nil {
 			validTxt += fmt.Sprintf(" of %d", m.flow.lab.ValidationRows)
 		}
 	}
@@ -71,20 +136,18 @@ func (m *Model) rankingRow(it iteration, focused, best bool) string {
 		colText.Render(fitTo(validTxt, valCol)) + " " +
 		colSplit.Render(fitTo(gapOf(&it.Train.Train, it.valid()), 6)) + " " +
 		colSplit.Render(fitTo(fmt.Sprint(it.Cand.Chars), 6)) + "  "
-	// The marks go last and the note takes what is left: a note that ate the row's evidence would
-	// be the one thing on this line that could not be cut. The recommendation is a word in amber
-	// and not a tick: the tick read as the rate's own pass mark, and the row it sits on is the
-	// one row on the table that is a decision.
+	// "in file" is a quiet fact and the recommendation is the loud one, so the recommendation goes
+	// last: the right edge of the row is where the eye lands when it is scanning for what to do. The
+	// recommendation is a word in amber and not a tick — a tick reads as the rate's own pass mark, and
+	// the row it sits on is the one row on the table that is a decision.
 	marks := ""
-	// "in file" is a quiet fact and the tag is the loud one, so the tag goes last: the right edge
-	// of the row is where the eye lands when it is scanning for what to do.
 	if it.Cand.InFile {
 		marks += dimStyle.Render(" in file")
 	}
 	if best {
 		marks += " " + tagRecommend.Render("Recommended")
 	}
-	room := m.width - lipgloss.Width(prefix) - lipgloss.Width(marks) - 1
+	room := w - lipgloss.Width(prefix) - lipgloss.Width(marks) - 1
 	note := oneLine(it.Cand.Note)
 	if note == "" {
 		note = "—"
@@ -94,6 +157,127 @@ func (m *Model) rankingRow(it iteration, focused, best bool) string {
 		line = selected(line)
 	}
 	return line
+}
+
+// rankingTail is what the table still owes, said under it: the batch that would fill the dashes and
+// what it costs, a tie the set cannot break, the draft the ledger holds that is not a row here, and
+// the legend for a partial cell — each only when it applies.
+func (m *Model) rankingTail(w int) []string {
+	f := m.flow
+	room := max(20, w-2)
+	var out []string
+	say := func(text string) {
+		out = append(out, "  "+dimStyle.Render(ellipsis(text, room)))
+	}
+	if pending := m.needsValidation(); pending > 0 {
+		cost := f.lab.ValidationRows * f.lab.Runs * pending
+		out = append(out, "  "+cursorMark.Render(glyphs.Arrow)+" "+titleStyle.Render("v")+"  "+
+			ellipsis(fmt.Sprintf("validate %s · %d queries × %d runs = %d agent calls",
+				plural(pending, "iteration"), f.lab.ValidationRows, f.lab.Runs, cost), max(20, room-6)))
+	}
+	if rate, n, tied := tieOf(f); tied {
+		// The fact and its consequence on two lines: a tie sentence long enough to be true is longer
+		// than the pane, and the ellipsis would eat the one number a tie produces — the pick.
+		say(fmt.Sprintf("all %d validated wordings tie at %d%% of %d — the validation set does not separate them",
+			n, rate, f.lab.ValidationRows))
+		if best := bestIteration(f); best != nil {
+			say(fmt.Sprintf("a tie goes to the earliest wording: #%d, %d chars", best.Cand.ID, best.Cand.Chars))
+		}
+	} else if best := bestIteration(f); best != nil {
+		if v := best.valid(); v != nil {
+			say(fmt.Sprintf("the pick is #%d — validation %d of %d, train %d of %d",
+				best.Cand.ID, v.Passed, v.Judged, best.Train.Train.Passed, best.Train.Train.Judged))
+		}
+	}
+	if draft, live := f.draftOf(); draft != nil {
+		word := "the workbench's run measures it"
+		if !live {
+			word = "a later revision stepped over it"
+		}
+		say(fmt.Sprintf("#%d is in the ledger but not this table — %s", draft.ID, word))
+	}
+	if m.anyPartial() {
+		say("of N — judged of the split; a stopped batch never ranks")
+	}
+	return out
+}
+
+// tieOf reports the best validation rate and how many wordings hold it, when more than one does.
+// A table where every row carries the same rate ranks nothing, and the recommendation then falls to
+// the earliest wording — a fact the reader must be told, not left to infer from a tag on row one.
+func tieOf(f *flowState) (rate, n int, tied bool) {
+	seen := 0
+	for _, it := range f.iters {
+		v := it.valid()
+		if !f.complete(v) {
+			continue
+		}
+		seen++
+		r := pctInt(v.Passed, v.Judged)
+		switch {
+		case seen == 1 || r > rate:
+			rate, n = r, 1
+		case r == rate:
+			n++
+		}
+	}
+	return rate, n, n > 1
+}
+
+// rankingKey is the ranking document's own keys. A reader that offers `a` and does nothing with it
+// is the same lie as a help page describing a screen that was deleted.
+func (m *Model) rankingKey(key string) tea.Cmd {
+	f := m.flow
+	if f == nil {
+		return nil
+	}
+	rows := len(f.iters)
+	switch key {
+	case "j", "down":
+		f.res = min(f.res+1, max(0, rows-1))
+	case "k", "up":
+		f.res = max(0, f.res-1)
+	case "g", "home":
+		f.res = 0
+	case "G", "end":
+		f.res = max(0, rows-1)
+	case "ctrl+d", " ":
+		m.doc.top = min(m.doc.top+max(1, m.doc.view/2), max(0, len(m.doc.lines)-1))
+	case "ctrl+u":
+		m.doc.top = max(0, m.doc.top-max(1, m.doc.view/2))
+	case "enter", "a":
+		if rows == 0 {
+			return nil
+		}
+		m.askApply(f.iters[min(f.res, rows-1)])
+	case "f":
+		if rows == 0 {
+			return nil
+		}
+		return m.openIterationRecord(f.iters[min(f.res, rows-1)])
+	case "v":
+		if len(m.unvalidatedIDs()) == 0 {
+			m.setStatus("every measured wording has a full validation rate — there is nothing to run", false)
+			return nil
+		}
+		return m.startValidationBatch()
+	case "h":
+		return m.openHoldout()
+	case "1":
+		f.sec, f.step = secGeneralization, 1
+		f.enterStep(m)
+		m.doc, m.mode = nil, screenFlow
+		return nil
+	case "ctrl+g":
+		m.forceGeneralization()
+		return m.openRanking()
+	}
+	// Every other key redraws the table where the cursor stands: a row mark that does not follow the
+	// keys is worse than no mark at all.
+	if m.doc != nil && m.doc.table {
+		m.doc.lines = m.rankingLines()
+	}
+	return nil
 }
 
 // anyPartial reports whether some row in the table carries a rate over part of its split, so the
@@ -148,7 +332,6 @@ func (m *Model) emptyValidationBody(h int) []string {
 		rows = m.flow.lab.TrainRows
 	}
 	d := &docWriter{w: max(28, m.width-4)}
-	d.title("The validation set is empty")
 	d.lead("Generalization runs the validation queries against every wording the loop produced. With none defined there is nothing to run, and a wording chosen without them is chosen on the train set alone — which is the thing the loop exists to avoid.")
 	d.rule()
 	d.fact("train", plural(rows, "row")+" of this skill's queries")
@@ -164,11 +347,10 @@ func (m *Model) emptyValidationBody(h int) []string {
 func (m *Model) lockedBody(h int) []string {
 	f := m.flow
 	d := &docWriter{w: max(28, m.width-4)}
-	d.title("Validation is locked until the loop has run")
 	d.lead("Five measured iterations is the guide's bar: below that the validation rate is a coin, and the difference between two iterations is noise. The gate exists so that a wording does not get picked because it was the third one tried.")
 	d.rule()
 	d.fact("measured", fmt.Sprintf("%d of %d iterations", len(f.iters), iterationsRequired))
-	d.fact("train", fmt.Sprintf("%s", trainSummary(f)))
+	d.fact("train", trainSummary(f))
 	if f.lab != nil {
 		d.fact("validation", fmt.Sprintf("%s held back, never read", pluralOf(f.lab.ValidationRows, "query", "queries")))
 	}
@@ -185,59 +367,14 @@ func trainSummary(f *flowState) string {
 	return "nothing measured"
 }
 
-// askApply is the write into SKILL.md, confirmed: it is the one action in the loop that changes what
-// ships, and the ledger records it beside the measurement that earned it.
-func (m *Model) askApply(it iteration) {
-	validTxt := "not validated"
-	if v := it.valid(); v != nil {
-		validTxt = pct(v.Passed, v.Judged)
-		if !m.flow.complete(v) && m.flow.lab != nil {
-			validTxt += fmt.Sprintf(" over %d of %d — a stopped batch", v.Judged, m.flow.lab.ValidationRows)
-		}
-	}
-	title := fmt.Sprintf("apply #%d to %s/SKILL.md?  train %s · validation %s — the file is backed up first",
-		it.Cand.ID, m.skill, pct(it.Train.Train.Passed, it.Train.Train.Judged), validTxt)
-	m.askNow(title, "apply it", func(m *Model) tea.Cmd {
-		msg, err := runner.New(m.store).ApplyDescription(m.skill, it.Cand.ID)
-		if err != nil {
-			m.setStatus(err.Error(), true)
-			return nil
-		}
-		m.reload()
-		m.setStatus(msg+" — h runs the fresh queries once", false)
-		return nil
-	})
-}
-
-// openHoldout is the guide's last move: 5–10 fresh queries, measured once, reported apart from the
-// rates the loop tuned. They are not a second validation set.
-func (m *Model) openHoldout() tea.Cmd {
-	f := m.flow
-	if f.lab.HoldoutRows == 0 {
-		m.setStatus("no holdout queries — add a few fresh ones to trigger/trigger-evals.json with split holdout", true)
-		return nil
-	}
-	if f.lab.Applied == nil {
-		m.setStatus("apply a candidate first — the holdout measures what ships", true)
-		return nil
-	}
-	m.run = &runState{
-		kind:  runHoldout,
-		runs:  f.lab.Runs,
-		dry:   f.dry,
-		scope: "holdout run",
-		hint:  "the fresh queries are measured once and never folded into the loop's rates",
-	}
-	return m.startRun()
-}
-
-// openIterationDoc is one iteration in full: what it failed on the train set, and what the revision
-// fixed or broke against its parent.
-func (m *Model) openIterationDoc(it iteration) tea.Cmd {
+// openIterationRecord is one wording in full: what it was measured at on both sets, what the revision
+// before it fixed and broke, and every train row it failed, with what loaded instead. It is where the
+// ranking's one-line row and the workbench's failure pane both point.
+func (m *Model) openIterationRecord(it iteration) tea.Cmd {
 	d := &docWriter{w: max(28, m.width-6)}
 	valid := it.valid()
-	// The reader's head carries which iteration and which candidate; the body opens with what the
-	// two rates mean, so the title is not said twice.
+	// The reader's head carries the iteration and the candidate; the body opens with what the two
+	// rates mean, so the title is not said twice.
 	d.lead("Train is what the wording was revised against; validation is what it was measured on. The gap is the part of the train rate that did not carry over.")
 	d.rule()
 	d.fact("train", fmt.Sprintf("%s (%d of %d)", pct(it.Train.Train.Passed, it.Train.Train.Judged),
@@ -263,20 +400,86 @@ func (m *Model) openIterationDoc(it iteration) tea.Cmd {
 	if len(it.Train.Fixed) > 0 || len(it.Train.Broke) > 0 {
 		d.fact("diff", fmt.Sprintf("fixed %s · broke %s", idListOf(it.Train.Fixed), idListOf(it.Train.Broke)))
 	}
-	if fails := it.Cand.FailedTrain(); len(fails) > 0 {
-		for _, row := range fails {
-			d.card(fmt.Sprintf("q%d · %s · fired %d of %d", row.ID, labelWord(row.ShouldTrigger), row.Triggers, row.Runs))
-			d.fact("the ask", clipText(row.Query, max(40, m.width-20)))
-			d.fact("grade", verdictOf(row))
+	fails := it.Cand.FailedTrain()
+	if len(fails) == 0 {
+		d.card("the train set")
+		d.para("nothing failed — every train row passed this wording.")
+	}
+	for _, row := range fails {
+		d.card(fmt.Sprintf("q%d · %s · fired %d of %d", row.ID, labelWord(row.ShouldTrigger), row.Triggers, row.Runs))
+		d.fact("the ask", clipText(row.Query, max(40, m.width-20)))
+		if row.Why != "" {
+			d.fact("why it is here", clipText(row.Why, max(40, m.width-20)))
 		}
+		d.fact("what loaded", loadedInstead(row))
+		d.fact("grade", verdictOf(row))
 	}
-	d.card("the wording")
-	for _, line := range wrapPlain(oneLine(it.Cand.Text), max(30, m.width-8)) {
-		d.lines = append(d.lines, "    "+line)
-	}
-	m.doc = &docState{scope: "iteration", title: fmt.Sprintf("iteration %d · candidate #%d", it.N, it.Cand.ID),
+	d.action("esc", "back")
+	doc := &docState{scope: "iteration", title: fmt.Sprintf("iteration %d · candidate #%d", it.N, it.Cand.ID),
 		lines: d.lines}
+	// One level back to where the reader was standing: a record opened from the table returns to the
+	// table, with the cursor still on the row it describes.
+	if m.mode == screenDoc && m.doc != nil && m.doc.scope == "ranking" {
+		doc.back = m.doc
+	}
+	m.doc = doc
 	m.backTo = screenFlow
 	m.mode = screenDoc
 	return nil
+}
+
+// askApply is the write into SKILL.md, confirmed: it is the one action in the loop that changes what
+// ships, and the ledger records it beside the measurement that earned it.
+func (m *Model) askApply(it iteration) {
+	validTxt := "not validated"
+	if v := it.valid(); v != nil {
+		validTxt = pct(v.Passed, v.Judged)
+		if !m.flow.complete(v) && m.flow.lab != nil {
+			validTxt += fmt.Sprintf(" over %d of %d — a stopped batch", v.Judged, m.flow.lab.ValidationRows)
+		}
+	}
+	title := fmt.Sprintf("apply #%d to %s/SKILL.md?  train %s · validation %s — the file is backed up first",
+		it.Cand.ID, m.skill, pct(it.Train.Train.Passed, it.Train.Train.Judged), validTxt)
+	m.askNow(title, "apply it", func(m *Model) tea.Cmd {
+		msg, err := runner.New(m.store).ApplyDescription(m.skill, it.Cand.ID)
+		if err != nil {
+			m.setStatus(err.Error(), true)
+			return nil
+		}
+		m.reload()
+		if m.mode == screenDoc {
+			// The table the reader is standing on just changed under them: the applied row is "in
+			// file" now, and a document that still says otherwise is reading a file that moved.
+			if m.doc != nil && m.doc.scope == "ranking" {
+				m.doc.lines = m.rankingLines()
+			}
+		}
+		m.setStatus(msg+" — h runs the fresh queries once", false)
+		return nil
+	})
+}
+
+// openHoldout is the guide's last move: 5–10 fresh queries, measured once, reported apart from the
+// rates the loop tuned. They are not a second validation set.
+func (m *Model) openHoldout() tea.Cmd {
+	f := m.flow
+	if f == nil || f.lab == nil {
+		return nil
+	}
+	if f.lab.HoldoutRows == 0 {
+		m.setStatus("no holdout queries — add a few fresh ones to trigger/trigger-evals.json with split holdout", true)
+		return nil
+	}
+	if f.lab.Applied == nil {
+		m.setStatus("apply a candidate first — the holdout measures what ships", true)
+		return nil
+	}
+	m.run = &runState{
+		kind:  runHoldout,
+		runs:  f.lab.Runs,
+		dry:   f.dry,
+		scope: "holdout run",
+		hint:  "the fresh queries are measured once and never folded into the loop's rates",
+	}
+	return m.startRun()
 }

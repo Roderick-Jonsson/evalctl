@@ -362,6 +362,9 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case screenRevision:
 		return m, m.updateRevision(msg)
 	case screenDoc:
+		if m.doc != nil && m.doc.act != nil {
+			return m, m.doc.act(key)
+		}
 		return m, m.doc.update(m, msg)
 	case screenRunLive:
 		return m, m.updateRunLive(msg)
@@ -396,6 +399,12 @@ func (m *Model) passToForm(msg tea.Msg) tea.Cmd {
 func (m *Model) escUp() tea.Cmd {
 	switch m.mode {
 	case screenFlow:
+		// A proposal in the description pane is the thing on screen that esc means: it costs one key
+		// to drop and one `p` to get back, and nothing else on this screen is lost with it.
+		if m.flow != nil && m.flow.proposal != nil {
+			m.discardDescription()
+			return nil
+		}
 		// The workbench is a surface, not a step: esc leaves the work for the list it came from.
 		// A wording that was being typed is the one thing on that screen the file does not hold, so
 		// leaving it takes two escs — the first says what the second would cost.
@@ -418,6 +427,12 @@ func (m *Model) escUp() tea.Cmd {
 		m.mode = screenQuality
 		m.setStatus("the proposal is still on disk — p opens it again, and SKILL.md is untouched", false)
 	case screenDoc:
+		if m.doc != nil && m.doc.back != nil {
+			// A record opened from the ranking goes back to the ranking: the table is where the
+			// reader was reading, and one esc should not cost them their place in it.
+			m.doc = m.doc.back
+			return nil
+		}
 		m.doc, m.mode = nil, m.backTo
 	case screenHelp:
 		m.mode = m.backTo
@@ -611,6 +626,8 @@ func (m *Model) bodyLines(h int) []string {
 				return m.outputRunBody(h)
 			case runRevise:
 				return m.revisionRunBody(h)
+			case runDescribe:
+				return m.describeRunBody(h)
 			}
 			return m.run.liveBody(m, h)
 		}
@@ -664,6 +681,9 @@ func (m *Model) hints() []hint {
 		return []hint{{"j k space", "walk · tick a hunk"}, {"n N", "next change"}, {"a", "apply"},
 			{"e", "edit"}, {"esc", "discard"}}
 	case screenDoc:
+		if m.doc != nil && len(m.doc.hints) > 0 {
+			return m.doc.hints
+		}
 		return []hint{{"j k", "scroll"}, {"g G", "ends"}, {"esc", "back"}}
 	case screenRunLive:
 		if m.run != nil {
@@ -930,17 +950,25 @@ func (m *Model) helpLines() []string {
 			"  j k g G    walk the failures; the passing rows are drawn, not walked",
 			"  enter      the loop's next thing: save the wording you typed, then measure it",
 			"  R          run the train set again against the same wording",
-			"  f          the failures as full cards",
-			"  —          the set is written beside the two sections; the workbench only reads it",
+			"  f          one wording in full: train, validation, the gap, what changed, what failed",
+			"  p          ask a model for a new description, from the train failures",
+			"               the pane shows the paragraph as a character diff — red is gone, green is new;",
+			"               y keeps it in the field (then edit, ctrl+s, enter), p asks again, esc drops it",
+			"  + -        runs per query, written into trigger/trigger-evals.json",
+			"  x          dry run: R prints the commands and spends nothing",
+			"  —          the key is never in the tree: $OLLAMA_API_KEY, or ~/.config/evalctl/env",
 		},
 		head("generalization — validate, rank, apply"),
 		[]string{
-			"  v          run the validation set for every wording that has no rate yet",
-			"  j k g G    walk the table; it opens on the wording the rates recommend",
-			"  enter / a  apply the wording under the cursor to SKILL.md",
-			"  f          one iteration in full: what it failed and what changed",
+			"  s          the other half of the set: the same workbench, the validation rows",
+			"  v          run the validation set for every wording that has no full rate;",
+			"               with nothing owed it opens the ranking",
+			"  j k g G    in the ranking: walk the table; it opens on the wording the rates recommend",
+			"  enter / a  apply the wording under the cursor to SKILL.md (a on the workbench: the pick)",
+			"  f          one wording in full: both rates, the gap, what it fixed and broke, its failures",
 			"  h          run the fresh queries (holdout) once, after applying",
 			"  ctrl+g     validate before five iterations, with the warning",
+			"  —          a tie goes to the earliest wording, and the ranking says so when it happens",
 		},
 		head("a run"),
 		[]string{

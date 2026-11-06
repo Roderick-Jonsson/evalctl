@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-
 	"evalctl/internal/runner"
 )
 
@@ -13,32 +11,9 @@ import (
 // the pane. The pane shows the verdict; this shows the ask, the why it is in the set, what loaded
 // instead, and the rule that a failure here is a fact about the wording and not a row to reword.
 
-// openFailures is the evidence screen: one card per failing train row, and the rule that says a
-// failure here is a fact about the wording and not a row to reword.
-func (m *Model) openFailures(it *iteration) tea.Cmd {
-	d := &docWriter{w: max(28, m.width-6)}
-	// A document's head is drawn by the reader above the rule; the body opens with the sentence
-	// that belongs to it. Two titles stacked is the one place this screen had a register of its
-	// own.
-	d.lead(fmt.Sprintf("candidate #%d · %s", it.Cand.ID,
-		fmt.Sprintf("train %s · %d of %d pass", pct(it.Train.Train.Passed, it.Train.Train.Judged),
-			it.Train.Train.Passed, it.Train.Train.Judged)))
-	d.lead("A query that fails here is evidence about the description, not a query to reword. Validation is not shown: it judges the revision, so it must stay unread.")
-	for _, row := range it.Cand.FailedTrain() {
-		d.card(fmt.Sprintf("q%d · %s · fired %d of %d", row.ID,
-			labelWord(row.ShouldTrigger), row.Triggers, row.Runs))
-		d.fact("the ask", clipText(row.Query, max(40, m.width-20)))
-		if row.Why != "" {
-			d.fact("why it is here", clipText(row.Why, max(40, m.width-20)))
-		}
-		d.fact("what loaded", loadedInstead(row))
-		d.fact("grade", verdictOf(row))
-	}
-	m.doc = &docState{scope: "failures", title: "train failures", lines: d.lines}
-	m.backTo = screenFlow
-	m.mode = screenDoc
-	return nil
-}
+// openFailures was the train failures as full cards. It is superseded by openIterationRecord, which
+// is the same rows beside both rates, the gap and the revision's own diff — one screen for one
+// wording instead of two half-reports of it.
 
 // loadedInstead says what the agent reached for when the row failed: the other skills that loaded,
 // or nothing at all when the wording did not reach anything.

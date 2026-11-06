@@ -28,9 +28,10 @@ const (
 	runTrain runKind = iota
 	runValidation
 	runHoldout
-	runQuality // the output lane's iteration: every case, both arms
-	runGrade   // the output lane's judge, over one finished iteration
-	runRevise  // the agent's proposal for the next SKILL.md
+	runQuality  // the output lane's iteration: every case, both arms
+	runGrade    // the output lane's judge, over one finished iteration
+	runRevise   // the agent's proposal for the next SKILL.md
+	runDescribe // the model's proposal for the next description
 )
 
 func (k runKind) String() string {
@@ -45,6 +46,8 @@ func (k runKind) String() string {
 		return "grading run"
 	case runRevise:
 		return "revision"
+	case runDescribe:
+		return "description proposal"
 	}
 	return "training run"
 }
@@ -57,7 +60,10 @@ type runState struct {
 	scope string
 	hint  string
 	gen   bool // this run is one step of the generalization queue
-	live  *liveRun
+	// describeIter is the trigger iteration a description proposal answers: its failures are what the
+	// prompt is built from, and the proposal is written beside it.
+	describeIter int
+	live         *liveRun
 }
 
 // liveRun is the run in flight: what has happened to each query, and the newest lines of the arm's
@@ -427,6 +433,28 @@ func (m *Model) finishRun() tea.Cmd {
 		m.openProposal(*rev, inputs)
 		return nil
 	}
+	if m.run.kind == runDescribe {
+		if m.run.live.err != nil {
+			m.setStatus(m.run.live.err.Error(), true)
+			return nil
+		}
+		if m.run.live.cancelled {
+			m.setStatus("the call was cancelled — the description is untouched", false)
+			return nil
+		}
+		// The proposal is read back from beside the iteration, the same way a SKILL.md revision is:
+		// it survives the call, the screen and the process, and asking again is the only way to
+		// spend a second time.
+		prop, err := runner.New(m.store).DescriptionProposalAt(m.skill, m.run.describeIter)
+		m.run = nil
+		if err != nil || prop == nil {
+			m.setStatus("the call finished but no proposal is on disk", true)
+			return nil
+		}
+		m.mode = screenFlow
+		m.openDescriptionProposal(*prop)
+		return nil
+	}
 	if m.run.kind == runQuality || m.run.kind == runGrade {
 		if m.run.live.err != nil {
 			m.setStatus(m.run.live.err.Error(), true)
@@ -537,9 +565,17 @@ func (m *Model) leaveRun() tea.Cmd {
 	}
 	m.mode = screenFlow
 	switch {
+	case kind == runDescribe:
+		// A proposal belongs to the iteration it answers: a finished call lands where the paragraph
+		// is edited, not on the ranking step.
+		m.flow.sec, m.flow.step = secIteration, 1
+		m.flow.enterStep(m)
 	case gen:
+		// A finished validation batch lands on the ranking it just filled in: the rates were the
+		// spend, and the table is what the spend was for.
 		m.flow.sec, m.flow.step = secGeneralization, 2
 		m.flow.enterStep(m)
+		return m.openRanking()
 	case kind == runTrain:
 		m.flow.sec, m.flow.step = secIteration, 1
 	default:
@@ -550,7 +586,7 @@ func (m *Model) leaveRun() tea.Cmd {
 }
 
 func (r *runState) liveHints() []hint {
-	if r.kind == runRevise {
+	if r.kind == runRevise || r.kind == runDescribe {
 		if r.live.done {
 			return []hint{{"enter", "the proposal"}, {"x", "cancel"}}
 		}
@@ -939,13 +975,32 @@ func (m *Model) unvalidatedIDs() []int {
 }
 
 func (m *Model) startGeneralization() tea.Cmd {
-	if m.flow.lab == nil || m.flow.lab.ValidationRows == 0 {
+	if m.flow == nil || m.flow.lab == nil || m.flow.lab.ValidationRows == 0 {
+		m.setStatus("no validation queries — the section's first step defines them", true)
+		return nil
+	}
+	// Nothing owed is not "nothing to do": the rates are the point of the key, so a batch with
+	// nothing left to run lands on the table that reads them instead of on a status sentence.
+	if len(m.unvalidatedIDs()) == 0 {
+		m.setStatus("every measured wording has a full validation rate — the ranking is what is left", false)
+		return m.openRanking()
+	}
+	return m.startValidationBatch()
+}
+
+// startValidationBatch queues one validation run per wording that owes a full rate, and the queue
+// chains: the next candidate's run starts when the previous one finishes.
+func (m *Model) startValidationBatch() tea.Cmd {
+	if m.flow == nil || m.flow.lab == nil {
+		return nil
+	}
+	if m.flow.lab.ValidationRows == 0 {
 		m.setStatus("no validation queries — the section's first step defines them", true)
 		return nil
 	}
 	ids := m.unvalidatedIDs()
 	if len(ids) == 0 {
-		m.setStatus("every measured iteration has been validated", false)
+		m.setStatus("every measured wording has a full validation rate", false)
 		return nil
 	}
 	m.flow.gen = &genState{queue: ids}

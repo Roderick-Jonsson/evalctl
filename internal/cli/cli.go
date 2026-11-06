@@ -48,6 +48,9 @@ const usage = `evalctl — manage and run the eval sets: trigger queries and out
   evalctl stats                      counts per skill / label / split
   evalctl lab --skill S [--lane trigger|output] [--json]
                                      where that loop stands, and the guide's next move
+  evalctl describe --skill S [--candidate N] [--write] [--dry-run] [--model M] [--json]
+                                     ask a model for a new description from the train failures;
+                                     prints the character-level diff, writes nothing
   evalctl grade --skill S [--iteration N]   output lane: the judge grades every arm's assertions
   evalctl validate [--strict] [--json]  check the tree against the runner's rules
   evalctl renumber                   close id gaps (breaks comparability with old results)
@@ -134,6 +137,8 @@ func Run(args []string) int {
 		return runGrade(rest)
 	case "revise":
 		return runRevise(rest)
+	case "describe":
+		return runDescribe(rest)
 	case "runs", "results":
 		return runRuns(rest)
 	case "report":
