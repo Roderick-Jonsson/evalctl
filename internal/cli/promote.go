@@ -189,7 +189,7 @@ func promotePrompt(c *common, from, skill, split, label, why string, id int, dry
 	}
 	qid := id
 	if qid == 0 {
-		qid = c.s.NextTriggerID()
+		qid = c.s.NextTriggerID(targetSkill)
 	}
 	adoptWarning(c.s.Root, store.LaneTrigger, targetSkill, qid)
 

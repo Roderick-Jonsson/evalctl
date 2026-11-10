@@ -20,9 +20,6 @@ import (
 func describeFixture(t *testing.T) (*Runner, int, int) {
 	t.Helper()
 	r, root := labFixture(t)
-	if _, err := r.AdoptFileDescription("slide-builder"); err != nil {
-		t.Fatal(err)
-	}
 	text := r.Store.SkillDescription("slide-builder")
 	row := func(id int, split string, should, hit bool, query string) ScoreRow {
 		passed, rate := hit, 0.0
@@ -131,7 +128,7 @@ func TestAProposalIsWrittenBesideItsIterationAndReadBack(t *testing.T) {
 	if !strings.Contains(prop.Text, "not for research") || prop.Chars != len([]rune(prop.Text)) {
 		t.Errorf("text or char count wrong: %+v", prop)
 	}
-	dir := filepath.Join(r.Store.Root, "trigger-workspace", "trigger-1")
+	dir := filepath.Join(r.Store.Root, "slide-builder-workspace", "trigger-1")
 	for _, name := range []string{descriptionProposalFile, descriptionPromptFile, descriptionReplyFile} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Errorf("%s was not kept: %v", name, err)
@@ -172,14 +169,20 @@ func TestAProposalOverTheCeilingIsRefusedAndSaidSo(t *testing.T) {
 
 func TestAProposalNeedsAMeasuredWording(t *testing.T) {
 	r, root := labFixture(t)
-	if _, err := r.AdoptFileDescription("slide-builder"); err != nil {
+	// A draft in the workspace is a wording that has never been run: there are no failures to learn
+	// from.
+	if _, err := r.SaveDescriptionCandidate("slide-builder", "A wording nobody has measured."); err != nil {
 		t.Fatal(err)
 	}
-	// Candidate #2 is written but never run: there are no failures to learn from.
-	if _, err := r.SaveDescriptionCandidate("slide-builder", "A wording nobody has measured.", "draft", 1); err != nil {
+	lab, err := r.DescriptionLab("slide-builder")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := r.BuildDescriptionPrompt("slide-builder", 2); err == nil ||
+	pending := lab.latest()
+	if pending == nil || !pending.Pending {
+		t.Fatalf("fixture: the draft is not the pending candidate: %+v", lab.Candidates)
+	}
+	if _, _, err := r.BuildDescriptionPrompt("slide-builder", pending.ID); err == nil ||
 		!strings.Contains(err.Error(), "train measurement") {
 		t.Fatalf("want a refusal about the missing measurement, got %v", err)
 	}
@@ -282,7 +285,7 @@ func TestARefusedAnswerIsAskedAgainOnce(t *testing.T) {
 	}
 	// Both answers are on disk: a proposal that failed twice is a prompt bug, and the raw text is how
 	// it gets read.
-	dir := filepath.Join(r.Store.Root, "trigger-workspace", "trigger-1")
+	dir := filepath.Join(r.Store.Root, "slide-builder-workspace", "trigger-1")
 	if _, err := os.Stat(filepath.Join(dir, "description-reply.txt")); err != nil {
 		t.Errorf("the first answer was not kept: %v", err)
 	}

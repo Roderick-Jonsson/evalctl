@@ -49,7 +49,7 @@ func fixture(t *testing.T) (*Model, string, *store.Store) {
 	t.Setenv("HERMES_BIN", filepath.Join(root, "no-such-hermes"))
 	t.Setenv("HERMES_ROOT", filepath.Join(root, "hermes"))
 	t.Setenv("EVAL_MASTERCLASS_ROOT", filepath.Join(root, "masterclasses"))
-	write(t, filepath.Join(root, "trigger", "trigger-evals.json"), triggerSet)
+	write(t, filepath.Join(root, "slide-builder", "evals", "trigger-evals.json"), triggerSet)
 	write(t, filepath.Join(root, "slide-builder", "evals", "evals.json"), `{"skill_name":"slide-builder","evals":[]}`)
 	write(t, filepath.Join(root, "slide-builder", "SKILL.md"), skillMD)
 	s, err := store.Open(root)
@@ -106,7 +106,7 @@ func enterSection(m *Model, sec int) {
 // triggerFile is the trigger set as the file holds it, for the tests that pin "a read writes nothing".
 func triggerFile(t *testing.T, root string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(root, "trigger", "trigger-evals.json"))
+	b, err := os.ReadFile(filepath.Join(root, "slide-builder", "evals", "trigger-evals.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func row(id int, split string, should, hit bool) runner.ScoreRow {
 // so the loop can be tested without spending agent time.
 func iterationDir(t *testing.T, root, description string, iteration int, rows []runner.ScoreRow) {
 	t.Helper()
-	dir := filepath.Join(root, "trigger-workspace", fmt.Sprintf("trigger-%d", iteration))
+	dir := filepath.Join(root, "slide-builder-workspace", fmt.Sprintf("trigger-%d", iteration))
 	meta := fmt.Sprintf(`{"iteration":%d,"lane":"trigger","started":"2026-10-30T10:0%d:00+0100","runs":3,"threshold":0.5,
   "provenance":{"descriptions":{%q:{"chars":%d,"description":%q}}}}`,
 		iteration, iteration%10, "slide-builder", len([]rune(description)), description)
@@ -560,6 +560,11 @@ func TestANewSkillAppearsWithoutARestart(t *testing.T) {
 // ledger are gone, and a flow drawn over them would be a screen with nothing behind it.
 func TestASkillThatLeavesTheTreeGoesBackToTheList(t *testing.T) {
 	m, root, _ := fixture(t)
+	// A second skill keeps the tree a tree once slide-builder is gone: a root with no skill dirs has
+	// nothing to open, and this test is about the screen, not about that.
+	write(t, filepath.Join(root, "dummy", "evals", "evals.json"), `{"skill_name":"dummy","evals":[]}`)
+	write(t, filepath.Join(root, "dummy", "SKILL.md"), "---\nname: dummy\ndescription: A die.\n---\n")
+	m.syncTree()
 	m.openWork(pickRow{skill: "slide-builder", lane: store.LaneTrigger})
 	if m.mode != screenFlow {
 		t.Fatalf("mode = %d, want the workbench", m.mode)
@@ -571,8 +576,10 @@ func TestASkillThatLeavesTheTreeGoesBackToTheList(t *testing.T) {
 	if m.skill != "" || m.flow != nil || m.mode != screenPick {
 		t.Fatalf("skill = %q flow = %v mode = %d, want the work list with no skill open", m.skill, m.flow, m.mode)
 	}
-	if len(m.pick.rows) != 0 {
-		t.Fatalf("rows = %+v, want the list emptied of a skill that is gone", m.pick.rows)
+	for _, r := range m.pick.rows {
+		if r.skill == "slide-builder" {
+			t.Fatalf("rows = %+v, want the list emptied of a skill that is gone", m.pick.rows)
+		}
 	}
 	if !strings.Contains(m.status, "no longer in the tree") {
 		t.Fatalf("status = %q, want the disappearance said out loud", m.status)
@@ -612,7 +619,7 @@ func TestATreeCaughtMidWriteKeepsTheReadingAndRetries(t *testing.T) {
 	m, root, _ := fixture(t)
 	m.loadPick()
 	held := m.store
-	set := filepath.Join(root, "trigger", "trigger-evals.json")
+	set := filepath.Join(root, "slide-builder", "evals", "trigger-evals.json")
 	write(t, set, `{"queries": [`)
 	m.syncTree()
 	if m.store != held {
@@ -630,53 +637,48 @@ func TestATreeCaughtMidWriteKeepsTheReadingAndRetries(t *testing.T) {
 
 // ---------------------------------------------------------------- the loop's two failures
 
-// TestARevisionWrittenBetweenRunsIsStillMeasurable: a wording saved and then revised again before any
-// run leaves a candidate no train run ever measured. Nothing should measure it — a later revision
-// stepped over it, and measuring it would put the superseded wording back into SKILL.md — so it is
-// neither an iteration nor the run's target, and the ranking says that in words instead of leaving
-// the row count to be guessed. A draft nothing has revised yet is the run's target, and it is the
-// case the last-candidate check used to get wrong.
-func TestARevisionWrittenBetweenRunsIsStillMeasurable(t *testing.T) {
+// TestOneDraftAtATime: the workspace holds one staging slot, so a second draft replaces the first
+// rather than leaving an unmeasurable wording behind, and measuring the draft empties the slot. A
+// draft a run already measured is not a draft any more, which is what keeps the next run's target
+// unambiguous.
+func TestOneDraftAtATime(t *testing.T) {
 	m, root, s := fixture(t)
 	m.openSkill("slide-builder")
 	first := s.SkillDescription("slide-builder")
 	stranded := "Use this skill when an outline has to become slides, when the user says slides."
 	third := "Use this skill when an outline has to become slides, even if the user says deck."
-	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", stranded, "named slides", 1); err != nil {
+	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", stranded); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", third, "named deck", 2); err != nil {
+	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", third); err != nil {
 		t.Fatal(err)
 	}
-	// #1 and #3 are measured on train; #2 was written between the two runs and never was.
+	// #1 is measured on train; the staged wording is waiting for its own run.
 	iterationDir(t, root, first, 1, []runner.ScoreRow{row(1, "train", true, true), row(2, "train", false, true)})
-	iterationDir(t, root, third, 2, []runner.ScoreRow{row(1, "train", true, true), row(2, "train", false, true)})
 	m.reload()
 
-	if len(m.flow.iters) != 2 {
-		t.Fatalf("iterations = %d, want the two measured wordings", len(m.flow.iters))
+	if len(m.flow.iters) != 1 {
+		t.Fatalf("iterations = %d, want the one measured wording", len(m.flow.iters))
 	}
-	if pend := m.flow.pending(); pend != nil {
-		t.Fatalf("pending = %+v, want none: #2 was revised into #3, so it is history and not the run's target", pend)
+	pend := m.flow.pending()
+	if pend == nil || pend.ID != 2 || pend.Text != third {
+		t.Fatalf("pending = %+v, want the one staged draft with the latest text", pend)
 	}
-	draft, live := m.flow.draftOf()
-	if draft == nil || draft.ID != 2 || live {
-		t.Fatalf("draft = %+v live=%v, want the superseded #2 named as such", draft, live)
-	}
-	if len(m.flow.iters) != 2 || m.flow.iters[1].Cand.ID != 3 {
-		t.Fatalf("the table is %+v, want #1 and #3 and nothing else", m.flow.iters)
+	if draft, live := m.flow.draftOf(); draft == nil || !live {
+		t.Fatalf("draft = %+v live=%v, want the live staging slot", draft, live)
 	}
 
-	// A draft nothing has revised is the wording the next train run measures, and the row key says
-	// which candidate it is when "iteration 3" and "candidate #3" are not the same wording.
-	fourth := "Use this skill when an outline has to become slides, however the user names the output."
-	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", fourth, "any output name", 3); err != nil {
+	// Once the draft is measured it is an iteration, not a draft.
+	iterationDir(t, root, third, 2, []runner.ScoreRow{row(1, "train", true, true), row(2, "train", false, true)})
+	if err := runner.New(s).DiscardPending("slide-builder"); err != nil {
 		t.Fatal(err)
 	}
 	m.reload()
-	pend := m.flow.pending()
-	if pend == nil || pend.ID != 4 {
-		t.Fatalf("pending = %+v, want the live draft #4", pend)
+	if pend := m.flow.pending(); pend != nil {
+		t.Fatalf("pending = %+v, want none once the wording was measured", pend)
+	}
+	if len(m.flow.iters) != 2 {
+		t.Fatalf("iterations = %d, want both measured wordings", len(m.flow.iters))
 	}
 }
 
@@ -688,7 +690,7 @@ func TestAPartialValidationNeverRanks(t *testing.T) {
 	m.openSkill("slide-builder")
 	first := s.SkillDescription("slide-builder")
 	second := "Use this skill when an outline has to become slides — even when the user calls them a deck."
-	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", second, "named the deck", 1); err != nil {
+	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", second); err != nil {
 		t.Fatal(err)
 	}
 	// The set has two validation rows. #1 was stopped after the first; #2 saw both.

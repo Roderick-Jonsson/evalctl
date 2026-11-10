@@ -92,14 +92,18 @@ type TriggerConfig struct {
 	Threshold float64 `json:"threshold"`
 }
 
-// TriggerConfigOf reads the file's runs/threshold, falling back to the documented defaults.
-func (r *Runner) TriggerConfigOf() TriggerConfig {
+// TriggerConfigOf reads one skill's file runs/threshold, falling back to the documented defaults.
+func (r *Runner) TriggerConfigOf(skill string) TriggerConfig {
 	cfg := TriggerConfig{Runs: DefaultTriggerRuns, Threshold: DefaultTriggerThreshold}
-	if r.Store.Trigger.Runs != nil && *r.Store.Trigger.Runs > 0 {
-		cfg.Runs = *r.Store.Trigger.Runs
+	file, ok := r.Store.TriggerOf(skill)
+	if !ok {
+		return cfg
 	}
-	if r.Store.Trigger.Threshold != nil {
-		cfg.Threshold = *r.Store.Trigger.Threshold
+	if file.Runs != nil && *file.Runs > 0 {
+		cfg.Runs = *file.Runs
+	}
+	if file.Threshold != nil {
+		cfg.Threshold = *file.Threshold
 	}
 	return cfg
 }
@@ -120,67 +124,83 @@ var LoopSplits = []string{SplitTrain, SplitValidation}
 // KnownSplit reports whether a query's declared split is one the runner accepts.
 func KnownSplit(split string) bool { return store.KnownSplit(split) }
 
-// LoadTriggerQueries validates the whole file — the guide's split rule is about the file, not
-// the selection — then returns the rows the invocation asked for.
+// LoadTriggerQueries reads the trigger sets of the skills in scope — each file validated whole,
+// because the guide's split rule is about a set, not about the slice an invocation picked — then
+// returns the rows the invocation asked for.
 func (r *Runner) LoadTriggerQueries(skills []string, only map[int]bool, split string) ([]TriggerCase, error) {
-	if !r.Store.TriggerOK {
-		return nil, fmt.Errorf("missing evals/%s", store.TriggerFileName)
+	if len(skills) == 0 {
+		return nil, fmt.Errorf("no skill in scope — a trigger set belongs to one skill")
 	}
-	raw := r.Store.Trigger.Queries
-	if len(raw) == 0 {
-		return nil, fmt.Errorf("%s: 'queries' must be a non-empty list", store.TriggerFileName)
-	}
-	cases := make([]TriggerCase, 0, len(raw))
-	seen := map[int]bool{}
-	for _, q := range raw {
-		where := fmt.Sprintf("%s query %d", store.TriggerFileName, q.ID)
-		if q.ID <= 0 {
-			return nil, fmt.Errorf("%s: every query needs a positive integer 'id'", where)
+	var cases []TriggerCase
+	idOwner := map[int]string{}
+	for _, skill := range skills {
+		file, ok := r.Store.TriggerOf(skill)
+		if !ok {
+			return nil, fmt.Errorf("%s/evals/%s is missing or empty", skill, store.TriggerFileName)
 		}
-		if seen[q.ID] {
-			return nil, fmt.Errorf("%s: duplicate id", where)
+		raw := file.Queries
+		if len(raw) == 0 {
+			return nil, fmt.Errorf("%s/evals/%s: 'queries' must be a non-empty list", skill, store.TriggerFileName)
 		}
-		seen[q.ID] = true
-		if !r.Profiles.IsSkill(q.Skill) {
-			return nil, fmt.Errorf("%s: 'skill' must be one of %s, got %q", where,
-				strings.Join(r.Profiles.Skills, ", "), q.Skill)
-		}
-		if !KnownSplit(q.Split) {
-			return nil, fmt.Errorf("%s: 'split' must be train, validation or holdout, got %q", where, q.Split)
-		}
-		if strings.TrimSpace(q.Query) == "" {
-			return nil, fmt.Errorf("%s: 'query' is empty", where)
-		}
-		cases = append(cases, TriggerCase{ID: q.ID, Skill: q.Skill, Query: strings.TrimSpace(q.Query),
-			ShouldTrigger: q.ShouldTrigger, Split: q.Split, Why: q.Why})
-	}
-	// Each half has to carry both labels or the pass rates measure different things.
-	for _, name := range LoopSplits {
-		labels := map[bool]string{}
-		for _, c := range cases {
-			if c.Split == name {
-				labels[c.ShouldTrigger] = c.Skill
+		seen := map[int]bool{}
+		for _, q := range raw {
+			where := fmt.Sprintf("%s/evals/%s query %d", skill, store.TriggerFileName, q.ID)
+			if q.ID <= 0 {
+				return nil, fmt.Errorf("%s: every query needs a positive integer 'id'", where)
 			}
+			if seen[q.ID] {
+				return nil, fmt.Errorf("%s: duplicate id", where)
+			}
+			seen[q.ID] = true
+			if owner, dup := idOwner[q.ID]; dup && only != nil && only[q.ID] {
+				return nil, fmt.Errorf("%s: id %d also exists in %s — say which skill with --skill", where, q.ID, owner)
+			}
+			idOwner[q.ID] = skill
+			if q.Skill != "" && q.Skill != skill {
+				return nil, fmt.Errorf("%s: row names skill %q but lives in %s's file — a row's skill is its file",
+					where, q.Skill, skill)
+			}
+			if !r.Profiles.IsSkill(skill) {
+				return nil, fmt.Errorf("%s: %q is not one of %s", where, skill, strings.Join(r.Profiles.Skills, ", "))
+			}
+			if !KnownSplit(q.Split) {
+				return nil, fmt.Errorf("%s: 'split' must be train, validation or holdout, got %q", where, q.Split)
+			}
+			if strings.TrimSpace(q.Query) == "" {
+				return nil, fmt.Errorf("%s: 'query' is empty", where)
+			}
+			cases = append(cases, TriggerCase{ID: q.ID, Skill: skill, Query: strings.TrimSpace(q.Query),
+				ShouldTrigger: q.ShouldTrigger, Split: q.Split, Why: q.Why})
 		}
-		if _, yes := labels[true]; !yes {
-			return nil, fmt.Errorf("%s: split %q needs should-trigger AND should-not-trigger queries, "+
-				"found none that should trigger", store.TriggerFileName, name)
-		}
-		if _, no := labels[false]; !no {
-			return nil, fmt.Errorf("%s: split %q needs should-trigger AND should-not-trigger queries, "+
-				"found none that should not trigger", store.TriggerFileName, name)
+		// Each half has to carry both labels or the pass rates measure different things. The rule is
+		// per file: one skill's split with a single label is that skill's problem.
+		for _, name := range LoopSplits {
+			labels := map[bool]bool{}
+			for _, c := range cases {
+				if c.Skill == skill && c.Split == name {
+					labels[c.ShouldTrigger] = true
+				}
+			}
+			if !labels[true] {
+				return nil, fmt.Errorf("%s: split %q needs should-trigger AND should-not-trigger queries, "+
+					"found none that should trigger", skill, name)
+			}
+			if !labels[false] {
+				return nil, fmt.Errorf("%s: split %q needs should-trigger AND should-not-trigger queries, "+
+					"found none that should not trigger", skill, name)
+			}
 		}
 	}
 	if only != nil {
 		var missing []string
 		for id := range only {
-			if !seen[id] {
+			if _, ok := idOwner[id]; !ok {
 				missing = append(missing, fmt.Sprintf("%d", id))
 			}
 		}
 		if len(missing) > 0 {
 			sort.Strings(missing)
-			return nil, fmt.Errorf("unknown trigger query id(s): %s", strings.Join(missing, ", "))
+			return nil, fmt.Errorf("unknown trigger query id(s) in %s: %s", strings.Join(skills, ", "), strings.Join(missing, ", "))
 		}
 	}
 	picked := make([]TriggerCase, 0, len(cases))

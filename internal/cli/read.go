@@ -236,7 +236,7 @@ func runShow(args []string) int {
 	}
 
 	if ref.Lane == store.LaneTrigger {
-		q := c.s.Trigger.Queries[ref.Index]
+		q := c.s.QueriesOf(ref.Skill)[ref.Index]
 		fmt.Println(styleTitle.Render(fmt.Sprintf("trigger #%d", q.ID)))
 		fmt.Printf("  skill        %s\n", q.Skill)
 		label := "should not trigger"
@@ -300,7 +300,7 @@ func showJSON(s *store.Store, ref store.RowRef) int {
 			Lane  string `json:"lane"`
 			Index int    `json:"index"`
 			Query any    `json:"query"`
-		}{Lane: ref.Lane, Index: ref.Index, Query: s.Trigger.Queries[ref.Index]}
+		}{Lane: ref.Lane, Index: ref.Index, Query: s.QueriesOf(ref.Skill)[ref.Index]}
 		if err := writeJSON(os.Stdout, out); err != nil {
 			return fail(err)
 		}

@@ -32,11 +32,11 @@ func IDReferences(root, lane, skill string, id int) []IDRef {
 	return refs
 }
 
-// triggerIDRefs finds q<id>-<skill> dirs in every trigger iteration, plus the reports that quote
-// the id (its failure bullets and its every-query table both address rows by number).
+// triggerIDRefs finds q<id>-<skill> dirs in every skill's trigger iterations, plus the reports that
+// quote the id (its failure bullets and its every-query table both address rows by number).
 func triggerIDRefs(root string, id int) []IDRef {
 	var refs []IDRef
-	dirs, _ := filepath.Glob(filepath.Join(root, "trigger-workspace", "trigger-*"))
+	dirs, _ := filepath.Glob(filepath.Join(root, "*-workspace", "trigger-*"))
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {

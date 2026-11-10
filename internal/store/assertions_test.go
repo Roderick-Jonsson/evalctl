@@ -13,7 +13,7 @@ import (
 func TestAssertionsRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	at := func(p string) string { return filepath.Join(root, p) }
-	mustWrite(t, at("trigger/trigger-evals.json"), `{"queries":[{"id":1,"skill":"alpha","should_trigger":true,"split":"train","query":"research it"}]}`)
+	mustWrite(t, at("alpha/evals/trigger-evals.json"), `{"queries":[{"id":1,"skill":"alpha","should_trigger":true,"split":"train","query":"research it"}]}`)
 	mustWrite(t, at("alpha/evals/evals.json"), `{
   "skill_name": "alpha",
   "evals": [
@@ -88,10 +88,16 @@ func TestEmptyAssertionIsRejected(t *testing.T) {
 func TestSummariesCountPerSkill(t *testing.T) {
 	root := t.TempDir()
 	at := func(p string) string { return filepath.Join(root, p) }
-	mustWrite(t, at("trigger/trigger-evals.json"), `{"queries":[
+	mustWrite(t, at("alpha/evals/trigger-evals.json"), `{"queries":[
       {"id":1,"skill":"alpha","should_trigger":true,"split":"train","query":"a1"},
-      {"id":2,"skill":"alpha","should_trigger":false,"split":"validation","query":"a2"},
-      {"id":3,"skill":"beta","should_trigger":true,"split":"train","query":"b1"}]}`)
+      {"id":2,"skill":"alpha","should_trigger":false,"split":"train","query":"a2"},
+      {"id":3,"skill":"alpha","should_trigger":true,"split":"validation","query":"a3"},
+      {"id":4,"skill":"alpha","should_trigger":false,"split":"validation","query":"a4"}]}`)
+	mustWrite(t, at("beta/evals/trigger-evals.json"), `{"queries":[
+      {"id":5,"skill":"beta","should_trigger":true,"split":"train","query":"b1"},
+      {"id":6,"skill":"beta","should_trigger":false,"split":"train","query":"b2"},
+      {"id":7,"skill":"beta","should_trigger":true,"split":"validation","query":"b3"},
+      {"id":8,"skill":"beta","should_trigger":false,"split":"validation","query":"b4"}]}`)
 	mustWrite(t, at("alpha/evals/evals.json"), `{"skill_name":"alpha","evals":[
       {"id":1,"slug":"a-1","prompt":"p","expected_output":"e","files":[],"assertions":["one","two"]},
       {"id":2,"slug":"a-2","prompt":"p","expected_output":"e","files":[]}]}`)
@@ -107,20 +113,20 @@ func TestSummariesCountPerSkill(t *testing.T) {
 	}
 	a, b := sums[0], sums[1]
 	if a.Skill != "alpha" || a.Cases != 2 || a.Graded != 1 || a.Assertions != 2 ||
-		a.Fixtures != 1 || a.Files != 1 || a.Queries != 2 || a.Should != 1 || a.ShouldNot != 1 {
+		a.Fixtures != 1 || a.Files != 1 || a.Queries != 4 || a.Should != 2 || a.ShouldNot != 2 {
 		t.Fatalf("alpha summary = %+v", a)
 	}
-	if b.Skill != "beta" || b.Cases != 0 || b.Queries != 1 || b.Health() != "1 warning" {
+	if b.Skill != "beta" || b.Cases != 0 || b.Queries != 4 || b.Health() != "1 warning" {
 		t.Fatalf("beta summary = %+v", b)
 	}
 }
 
-// A trigger row the tree has no skill for is not dropped from the list: it is the scattered state
-// this view exists to surface.
-func TestSummariesIncludeOrphanTriggerSkills(t *testing.T) {
+// A row that names another skill is a contradiction, not a bundle fact: the file a row sits in IS
+// the skill under test, and a row that says otherwise is reported instead of honoured.
+func TestRowNamingAnotherSkillIsAnError(t *testing.T) {
 	root := t.TempDir()
 	at := func(p string) string { return filepath.Join(root, p) }
-	mustWrite(t, at("trigger/trigger-evals.json"), `{"queries":[
+	mustWrite(t, at("alpha/evals/trigger-evals.json"), `{"queries":[
       {"id":1,"skill":"alpha","should_trigger":true,"split":"train","query":"a1"},
       {"id":2,"skill":"gone","should_trigger":false,"split":"train","query":"g1"}]}`)
 	mustWrite(t, at("alpha/evals/evals.json"), `{"skill_name":"alpha","evals":[]}`)
@@ -128,17 +134,14 @@ func TestSummariesIncludeOrphanTriggerSkills(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var orphan *SkillSummary
-	for i, sum := range s.Summaries() {
-		if sum.Skill == "gone" {
-			orphan = &s.Summaries()[i]
+	var found bool
+	for _, i := range s.Validate() {
+		if i.Severity == SeverityError && strings.Contains(i.Msg, `row names skill "gone"`) {
+			found = true
 		}
 	}
-	if orphan == nil {
-		t.Fatal("the orphaned skill is missing from the summary list")
-	}
-	if orphan.OnDisk || orphan.Queries != 1 || orphan.Errors == 0 {
-		t.Fatalf("orphan summary = %+v, want no evals.json, one query, and an error", *orphan)
+	if !found {
+		t.Fatalf("a row naming a foreign skill was not reported: %v", s.Validate())
 	}
 }
 

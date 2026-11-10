@@ -63,8 +63,8 @@ func TestAProposalIsDrawnInTheDescriptionPane(t *testing.T) {
 	}
 }
 
-// y is the whole point: the paragraph becomes the draft, editable, with the model's reason in the
-// ledger's note. Nothing is written — the save is still ctrl+s.
+// y is the whole point: the paragraph becomes the draft, editable. Nothing is written — the save is
+// still ctrl+s.
 func TestKeepingAProposalPutsItInTheField(t *testing.T) {
 	m, _ := measured(t, []runner.ScoreRow{
 		row(1, "train", true, true), row(2, "train", true, false),
@@ -80,9 +80,6 @@ func TestKeepingAProposalPutsItInTheField(t *testing.T) {
 	}
 	if got := m.flow.draft.text.Value(); got != p.Text {
 		t.Fatalf("the field holds %q, want the proposal", got)
-	}
-	if got := m.flow.draft.note.Value(); !strings.Contains(got, "named the words") {
-		t.Errorf("the note should carry the model's reason, got %q", got)
 	}
 	if m.flow.focus != focusWording {
 		t.Errorf("the caret should be in the description, focus = %d", m.flow.focus)

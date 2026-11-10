@@ -1,5 +1,5 @@
 // Package store reads and writes the two eval lanes on disk. It never runs anything: it is the
-// only place that touches <root>/trigger/trigger-evals.json and <root>/<skill>/evals/evals.json.
+// only place that touches <root>/<skill>/evals/evals.json and <root>/<skill>/evals/trigger-evals.json.
 package store
 
 import (
@@ -35,22 +35,23 @@ func KnownSplit(split string) bool {
 	return split == SplitTrain || split == SplitValidation || split == SplitHoldout
 }
 
-// Skill is one stage skill: its name, its case file and the cases in it.
+// Skill is one stage skill: its name, its case file, the trigger set that tests its description,
+// and the rows in each.
 type Skill struct {
-	Name     string
-	Dir      string // <root>/<name>
-	FilePath string // <root>/<name>/evals/evals.json
-	Output   model.OutputFile
-	OnDisk   bool // evals.json exists (a trigger-only skill may not)
+	Name        string
+	Dir         string // <root>/<name>
+	FilePath    string // <root>/<name>/evals/evals.json
+	TriggerPath string // <root>/<name>/evals/trigger-evals.json
+	Output      model.OutputFile
+	Trigger     model.TriggerFile
+	OnDisk      bool // evals.json exists (a trigger-only skill may not)
+	TriggerOK   bool // trigger-evals.json exists and parsed
 }
 
 // Store is the whole eval tree in memory. Edits mutate it; writes are explicit and atomic.
 type Store struct {
-	Root        string
-	TriggerPath string
-	Trigger     model.TriggerFile
-	TriggerOK   bool // trigger file exists and parsed
-	Skills      []*Skill
+	Root   string
+	Skills []*Skill
 }
 
 // Open loads the tree rooted at dir (walking up if dir is inside one).
@@ -59,60 +60,63 @@ func Open(dir string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{Root: root, TriggerPath: filepath.Join(root, "trigger", TriggerFileName)}
+	s := &Store{Root: root}
 
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, err
 	}
 	for _, e := range entries {
-		// evals/ is a skill's own case dir, trigger/ the trigger set, *-workspace/ a skill's run
-		// output: none of them is a stage skill.
+		// evals/ is a skill's own case dir and *-workspace/ a skill's run output: neither is a
+		// stage skill.
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || e.Name() == "evals" ||
-			e.Name() == "trigger" || strings.HasSuffix(e.Name(), "-workspace") {
+			strings.HasSuffix(e.Name(), "-workspace") {
 			continue
 		}
-		path := filepath.Join(root, e.Name(), "evals", "evals.json")
+		dir := filepath.Join(root, e.Name())
+		path := filepath.Join(dir, "evals", "evals.json")
+		triggerPath := filepath.Join(dir, "evals", TriggerFileName)
+		sk := &Skill{Name: e.Name(), Dir: dir, FilePath: path, TriggerPath: triggerPath}
+		sk.Output.SkillName = e.Name()
+
 		if _, err := os.Stat(path); err != nil {
 			// A dir with a SKILL.md and no eval file yet is a skill somebody has just made. Hiding it
 			// until a case exists hides the two things the tool is for — a description to tune and a
 			// set to declare — and a skill you cannot see is a skill you cannot start.
-			if _, skillErr := os.Stat(filepath.Join(root, e.Name(), "SKILL.md")); skillErr == nil {
-				sk := &Skill{Name: e.Name(), Dir: filepath.Join(root, e.Name()), FilePath: path}
+			if _, skillErr := os.Stat(filepath.Join(dir, "SKILL.md")); skillErr != nil {
+				continue
+			}
+		} else {
+			if err := readJSON(path, &sk.Output); err != nil {
+				return nil, fmt.Errorf("%s: %w", rel(root, path), err)
+			}
+			if sk.Output.SkillName == "" {
 				sk.Output.SkillName = e.Name()
-				s.Skills = append(s.Skills, sk)
 			}
-			continue
-		}
-		sk := &Skill{Name: e.Name(), Dir: filepath.Join(root, e.Name()), FilePath: path}
-		if err := readJSON(path, &sk.Output); err != nil {
-			return nil, fmt.Errorf("%s: %w", rel(root, path), err)
-		}
-		if sk.Output.SkillName == "" {
-			sk.Output.SkillName = e.Name()
-		}
-		sk.OnDisk = true
-		for i := range sk.Output.Evals {
-			if sk.Output.Evals[i].Files == nil {
-				sk.Output.Evals[i].Files = []string{}
+			sk.OnDisk = true
+			for i := range sk.Output.Evals {
+				if sk.Output.Evals[i].Files == nil {
+					sk.Output.Evals[i].Files = []string{}
+				}
 			}
+		}
+
+		// The trigger set lives beside the cases: one file per skill, and a row's `skill` is the
+		// file it sits in.
+		if _, err := os.Stat(triggerPath); err == nil {
+			if err := readJSON(triggerPath, &sk.Trigger); err != nil {
+				return nil, fmt.Errorf("%s: %w", rel(root, triggerPath), err)
+			}
+			sk.TriggerOK = true
 		}
 		s.Skills = append(s.Skills, sk)
 	}
 	sort.Slice(s.Skills, func(i, j int) bool { return s.Skills[i].Name < s.Skills[j].Name })
-
-	if _, err := os.Stat(s.TriggerPath); err == nil {
-		if err := readJSON(s.TriggerPath, &s.Trigger); err != nil {
-			return nil, fmt.Errorf("%s: %w", rel(root, s.TriggerPath), err)
-		}
-		s.TriggerOK = true
-	}
 	return s, nil
 }
 
-// FindRoot walks up from start to the project root: the dir holding trigger/trigger-evals.json, or
-// failing that the dir holding stage skills with their own evals/evals.json. A tree still using the
-// old evals/trigger-evals.json is found too, so a half-migrated tree opens instead of vanishing.
+// FindRoot walks up from start to the project root: the dir holding stage skills, each with its
+// cases (<skill>/evals/evals.json) or its trigger set (<skill>/evals/trigger-evals.json).
 func FindRoot(start string) (string, error) {
 	abs, err := filepath.Abs(start)
 	if err != nil {
@@ -123,17 +127,12 @@ func FindRoot(start string) (string, error) {
 	}
 	dir := abs
 	for {
-		if isFile(filepath.Join(dir, "trigger", TriggerFileName)) ||
-			isFile(filepath.Join(dir, "evals", TriggerFileName)) || hasSkillDirs(dir) {
+		if hasSkillDirs(dir) {
 			return dir, nil
-		}
-		base := filepath.Base(dir)
-		if (base == "trigger" || base == "evals") && isFile(filepath.Join(dir, TriggerFileName)) {
-			return filepath.Dir(dir), nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", fmt.Errorf("no eval tree found at or above %s (expected trigger/%s or <skill>/evals/evals.json)", abs, TriggerFileName)
+			return "", fmt.Errorf("no eval tree found at or above %s (expected <skill>/evals/evals.json or <skill>/evals/%s)", abs, TriggerFileName)
 		}
 		dir = parent
 	}
@@ -145,7 +144,11 @@ func hasSkillDirs(root string) bool {
 		return false
 	}
 	for _, e := range entries {
-		if e.IsDir() && isFile(filepath.Join(root, e.Name(), "evals", "evals.json")) {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, e.Name(), "evals")
+		if isFile(filepath.Join(dir, "evals.json")) || isFile(filepath.Join(dir, TriggerFileName)) {
 			return true
 		}
 	}
@@ -188,35 +191,52 @@ func (s *Store) EnsureSkill(name string) *Skill {
 		return nil
 	}
 	sk := &Skill{
-		Name:     name,
-		Dir:      filepath.Join(s.Root, name),
-		FilePath: filepath.Join(s.Root, name, "evals", "evals.json"),
-		Output:   model.OutputFile{SkillName: name},
+		Name:        name,
+		Dir:         filepath.Join(s.Root, name),
+		FilePath:    filepath.Join(s.Root, name, "evals", "evals.json"),
+		TriggerPath: filepath.Join(s.Root, name, "evals", TriggerFileName),
+		Output:      model.OutputFile{SkillName: name},
 	}
 	s.Skills = append(s.Skills, sk)
 	sort.Slice(s.Skills, func(i, j int) bool { return s.Skills[i].Name < s.Skills[j].Name })
 	return sk
 }
 
-// KnownSkills is every skill name the tree mentions: on-disk stage skills plus anything the
-// trigger file already references. Used for editor pickers so an orphaned row stays editable.
-func (s *Store) KnownSkills() []string {
-	seen := map[string]bool{}
-	var out []string
-	add := func(n string) {
-		if n != "" && !seen[n] {
-			seen[n] = true
-			out = append(out, n)
+// Triggers lists the skills that carry a trigger set, in pipeline order: one file per skill, so
+// this is the lane's whole population.
+func (s *Store) Triggers() []*Skill {
+	var out []*Skill
+	for _, sk := range s.Skills {
+		if sk.TriggerOK {
+			out = append(out, sk)
 		}
 	}
-	for _, sk := range s.Skills {
-		add(sk.Name)
-	}
-	for _, q := range s.Trigger.Queries {
-		add(q.Skill)
-	}
-	sort.Strings(out)
 	return out
+}
+
+// QueriesOf is one skill's trigger rows, in file order.
+func (s *Store) QueriesOf(skill string) []model.TriggerQuery {
+	sk := s.Skill(skill)
+	if sk == nil {
+		return nil
+	}
+	return sk.Trigger.Queries
+}
+
+// TriggerOf is the skill's trigger file knobs: how many runs and what threshold. ok is false when
+// the skill has no trigger set at all.
+func (s *Store) TriggerOf(skill string) (model.TriggerFile, bool) {
+	sk := s.Skill(skill)
+	if sk == nil || !sk.TriggerOK {
+		return model.TriggerFile{}, false
+	}
+	return sk.Trigger, true
+}
+
+// KnownSkills is every stage skill the tree carries. A trigger row's `skill` is the file it lives
+// in, so there are no orphans to keep editable.
+func (s *Store) KnownSkills() []string {
+	return s.SkillNames()
 }
 
 // SkillOfSlug finds the stage skill a run's case slug belongs to, so a promotion can default to
@@ -233,8 +253,14 @@ func (s *Store) SkillOfSlug(slug string) string {
 	return ""
 }
 
-// TriggerPathFor returns the trigger file this store was opened from.
-func (s *Store) TriggerPathFor() string { return s.TriggerPath }
+// TriggerPathFor is one skill's trigger file.
+func (s *Store) TriggerPathFor(skill string) string {
+	sk := s.Skill(skill)
+	if sk == nil {
+		return filepath.Join(s.Root, skill, "evals", TriggerFileName)
+	}
+	return sk.TriggerPath
+}
 
 func (s *Store) OutputPathFor(skill string) string {
 	sk := s.Skill(skill)
@@ -271,16 +297,20 @@ func (s *Store) FixtureExists(skill, slug string) bool {
 
 // ---------------------------------------------------------------- writes
 
-// SaveTrigger writes the trigger lane, backing up whatever was there.
-func (s *Store) SaveTrigger() error {
-	b, err := json.MarshalIndent(s.Trigger, "", "  ")
+// SaveTrigger writes one skill's trigger lane, backing up whatever was there.
+func (s *Store) SaveTrigger(skill string) error {
+	sk := s.Skill(skill)
+	if sk == nil {
+		return fmt.Errorf("unknown skill %q", skill)
+	}
+	b, err := json.MarshalIndent(sk.Trigger, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := s.writeFile(s.TriggerPath, append(b, '\n')); err != nil {
+	if err := s.writeFile(sk.TriggerPath, append(b, '\n')); err != nil {
 		return err
 	}
-	s.TriggerOK = true
+	sk.TriggerOK = true
 	return nil
 }
 
@@ -305,12 +335,12 @@ func (s *Store) SaveSkill(name string) error {
 // SaveAll writes both lanes. A lane whose file does not exist is not created.
 func (s *Store) SaveAll() error {
 	var errs []string
-	if s.TriggerOK {
-		if err := s.SaveTrigger(); err != nil {
-			errs = append(errs, err.Error())
-		}
-	}
 	for _, sk := range s.Skills {
+		if sk.TriggerOK {
+			if err := s.SaveTrigger(sk.Name); err != nil {
+				errs = append(errs, err.Error())
+			}
+		}
 		if sk.OnDisk {
 			if err := s.SaveSkill(sk.Name); err != nil {
 				errs = append(errs, err.Error())
@@ -460,11 +490,11 @@ func (s *Store) MoveFixture(fromSkill, toSkill, slug string) error {
 
 // ---------------------------------------------------------------- ids
 
-// NextTriggerID is max(id)+1: ids stay stable forever, deletions leave gaps on purpose so old
-// result dirs (q<id>-<skill>) keep pointing at the same query.
-func (s *Store) NextTriggerID() int {
+// NextTriggerID is max(id)+1 inside one skill's file: ids stay stable forever, deletions leave gaps
+// on purpose so old result dirs (q<id>-<skill>) keep pointing at the same query.
+func (s *Store) NextTriggerID(skill string) int {
 	max := 0
-	for _, q := range s.Trigger.Queries {
+	for _, q := range s.QueriesOf(skill) {
 		if q.ID > max {
 			max = q.ID
 		}

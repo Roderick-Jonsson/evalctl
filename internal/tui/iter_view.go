@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -31,17 +30,16 @@ import (
 const (
 	focusSet = iota
 	focusWording
-	focusNote
 	focusCount
 )
 
-// iterDraft is the wording being edited, seeded from the candidate under test.
+// iterDraft is the wording being edited, seeded from the candidate under test. There is no note
+// field: what a wording changes is computed from the text itself, and the reason a losing wording
+// existed is not something a file has to remember.
 type iterDraft struct {
-	parent   int    // the candidate this text was seeded from
-	loaded   string // the text it was seeded with, for "has anything changed"
-	loadedIn string // and its note
-	text     textarea.Model
-	note     textinput.Model
+	parent int    // the candidate this text was seeded from
+	loaded string // the text it was seeded with, for "has anything changed"
+	text   textarea.Model
 }
 
 // iterBody is the workbench, or the stacked fallback when the window cannot hold four panes.
@@ -260,15 +258,6 @@ func (m *Model) quadWording(w, h int) []string {
 	for _, line := range strings.Split(strings.TrimRight(d.text.View(), "\n"), "\n") {
 		lines = append(lines, "  "+line)
 	}
-	// The note is the reason this wording exists; the ledger keeps it beside the text. It is its own
-	// region — the caret goes into it on the next tab — so it carries its own mark rather than
-	// borrowing the description's.
-	label := regionOff.Render("note")
-	prefix := "  "
-	if f.focus == focusNote {
-		label, prefix = regionOn.Render("note"), blockMark.Render(glyphs.Block)+" "
-	}
-	lines = append(lines, prefix+label+"  "+d.note.View())
 	return fitRows(lines, h)
 }
 
@@ -369,7 +358,7 @@ func (m *Model) iterBlockRow(it iteration, c blockCols, note int, best bool) str
 	if best {
 		mark = " " + tagRecommend.Render("Recommended")
 	}
-	text := oneLine(it.Cand.Note)
+	text := oneLine(it.Cand.Change)
 	if text == "" {
 		text = "—"
 	}
@@ -399,14 +388,14 @@ func (m *Model) ensureDraft() {
 	if f == nil || f.lab == nil || f.draft != nil {
 		return
 	}
-	parent, text, note := 0, "", ""
+	parent, text := 0, ""
 	if pend := f.pending(); pend != nil {
-		parent, text, note = pend.ID, pend.Text, pend.Note
+		parent, text = pend.ID, pend.Text
 	} else if it := f.latest(); it != nil {
-		parent, text, note = it.Cand.ID, it.Cand.Text, it.Cand.Note
+		parent, text = it.Cand.ID, it.Cand.Text
 	} else if n := len(f.lab.Candidates); n > 0 {
 		c := f.lab.Candidates[n-1]
-		parent, text, note = c.ID, c.Text, c.Note
+		parent, text = c.ID, c.Text
 	}
 
 	ta := textarea.New()
@@ -422,23 +411,16 @@ func (m *Model) ensureDraft() {
 	ta.SetWidth(max(20, m.width-6))
 	ta.SetHeight(6)
 
-	ni := textinput.New()
-	ni.Prompt = ""
-	ni.Placeholder = "why this change — one line"
-	ni.CharLimit = 240
-	ni.SetValue(note)
-
-	f.draft = &iterDraft{parent: parent, loaded: text, loadedIn: note, text: ta, note: ni}
+	f.draft = &iterDraft{parent: parent, loaded: text, text: ta}
 	f.applyFocus()
 }
 
-// draftChanged reports whether the wording or its note differs from what the draft was seeded from.
+// draftChanged reports whether the wording differs from what the draft was seeded from.
 func (f *flowState) draftChanged() bool {
 	if f.draft == nil {
 		return false
 	}
-	return strings.TrimSpace(f.draft.text.Value()) != strings.TrimSpace(f.draft.loaded) ||
-		strings.TrimSpace(f.draft.note.Value()) != strings.TrimSpace(f.draft.loadedIn)
+	return strings.TrimSpace(f.draft.text.Value()) != strings.TrimSpace(f.draft.loaded)
 }
 
 // passOf is one query's verdict in the latest train run, or nil when there was no run.
@@ -604,17 +586,17 @@ func (m *Model) updateIter(msg tea.KeyMsg) tea.Cmd {
 		// next run spends anything. They live on this screen because the run does.
 		if f.lab != nil {
 			n := min(9, f.lab.Runs+1)
-			if err := m.store.SetTriggerRuns(n); err != nil {
+			if err := m.store.SetTriggerRuns(m.skill, n); err != nil {
 				m.setStatus(err.Error(), true)
 			} else {
 				m.reload()
-				m.setStatus(fmt.Sprintf("runs per query = %d — written into trigger/trigger-evals.json", n), false)
+				m.setStatus(fmt.Sprintf("runs per query = %d — written into %s/evals/trigger-evals.json", n, m.skill), false)
 			}
 		}
 	case "-":
 		if f.lab != nil {
 			n := max(1, f.lab.Runs-1)
-			if err := m.store.SetTriggerRuns(n); err != nil {
+			if err := m.store.SetTriggerRuns(m.skill, n); err != nil {
 				m.setStatus(err.Error(), true)
 			} else {
 				m.reload()
@@ -714,17 +696,10 @@ func (m *Model) typingKey(msg tea.KeyMsg) tea.Cmd {
 		return m.cycleFocus(-1)
 	case "ctrl+s":
 		return m.saveDraft(false)
-	case "enter":
-		// In the note a newline is not a thing: enter saves and measures, like the set's enter.
-		if f.focus == focusNote {
-			return m.saveDraft(true)
-		}
 	}
 	var cmd tea.Cmd
 	if f.focus == focusWording {
 		f.draft.text, cmd = f.draft.text.Update(msg)
-	} else {
-		f.draft.note, cmd = f.draft.note.Update(msg)
 	}
 	return cmd
 }
@@ -755,10 +730,6 @@ func (f *flowState) applyFocus() {
 	switch f.focus {
 	case focusWording:
 		f.draft.text.Focus()
-		f.draft.note.Blur()
-	case focusNote:
-		f.draft.text.Blur()
-		f.draft.note.Focus()
 	default:
 		f.blur()
 	}
@@ -767,12 +738,11 @@ func (f *flowState) applyFocus() {
 func (f *flowState) blur() {
 	if f.draft != nil {
 		f.draft.text.Blur()
-		f.draft.note.Blur()
 	}
 }
 
 // runOrSave is the enter key on the set: write the wording you have been editing, then measure it.
-// A save that fails starts nothing — the run measures what is in the ledger, and a wording that was
+// A save that fails starts nothing — the run measures what is on disk, and a wording that was
 // refused is not.
 func (m *Model) runOrSave() tea.Cmd {
 	f := m.flow
@@ -782,7 +752,7 @@ func (m *Model) runOrSave() tea.Cmd {
 	return m.startTrainingRun()
 }
 
-// saveDraft writes the wording into the ledger as the next candidate. It does not touch SKILL.md —
+// saveDraft stages the wording as the next draft. It does not touch SKILL.md —
 // the run is what puts it there, because the file is what the router reads and a wording nobody has
 // measured should not be in it.
 func (m *Model) saveDraft(thenRun bool) tea.Cmd {
@@ -807,18 +777,16 @@ func (m *Model) saveDraft(thenRun bool) tea.Cmd {
 		}
 		return nil
 	}
-	cand, err := runner.New(m.store).SaveDescriptionCandidate(m.skill, text,
-		strings.TrimSpace(f.draft.note.Value()), f.draft.parent)
-	if err != nil {
+	if _, err := runner.New(m.store).SaveDescriptionCandidate(m.skill, text); err != nil {
 		m.setStatus(err.Error(), true)
 		return nil
 	}
 	m.reload()
-	// Seed again from the candidate just written: the draft is clean, and the pane says which
-	// candidate the next run measures.
+	// Seed again after the draft is staged: the field is clean, and the pane says which wording the
+	// next run measures.
 	f.draft = nil
 	m.ensureDraft()
-	m.setStatus(fmt.Sprintf("candidate #%d saved — enter runs the train set against it", cand.ID), false)
+	m.setStatus(fmt.Sprintf("draft staged in %s-workspace — enter runs the train set against it", m.skill), false)
 	if thenRun {
 		return m.startTrainingRun()
 	}

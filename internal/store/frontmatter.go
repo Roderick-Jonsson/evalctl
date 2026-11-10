@@ -3,112 +3,23 @@ package store
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
-
-	"evalctl/internal/model"
 )
 
 // The description is the router's input: it is the only part of a SKILL.md an agent sees before it
 // decides to load the skill, and the agentskills.io optimization loop tunes nothing else. So it gets
 // a reader and a writer of its own, in one place, instead of a regex in the TUI and another in the
 // report.
-
-// DescriptionsDir is where each skill's candidate ledger lives, beside the trigger set it is
-// measured against.
-const DescriptionsDir = "descriptions"
+//
+// The candidates and their measurements are not stored: a trigger iteration already records the
+// description text it ran (meta.json) and scores its rows (trigger.json), so the loop is joined
+// against the runs instead of copied into a second file that would drift from them.
 
 // DescriptionLimit is the format's hard ceiling on a description.
 const DescriptionLimit = 1024
-
-// DescriptionPath is one skill's ledger file.
-func (s *Store) DescriptionPath(skill string) string {
-	return filepath.Join(s.Root, "trigger", DescriptionsDir, skill+".json")
-}
-
-// LoadDescriptionLedger reads one skill's ledger. A missing file is not an error: every skill the
-// tool has ever seen starts with no loop at all, and the first candidate is copied from SKILL.md.
-func (s *Store) LoadDescriptionLedger(skill string) (model.DescriptionLedger, bool, error) {
-	path := s.DescriptionPath(skill)
-	ledger := model.DescriptionLedger{Skill: skill}
-	if !isFile(path) {
-		return ledger, false, nil
-	}
-	if err := readJSON(path, &ledger); err != nil {
-		return ledger, true, fmt.Errorf("%s: %w", rel(s.Root, path), err)
-	}
-	if ledger.Skill == "" {
-		ledger.Skill = skill
-	}
-	return ledger, true, nil
-}
-
-// SaveDescriptionLedger writes one skill's ledger, refusing the shapes the lab cannot read back:
-// two candidates sharing an id, an empty draft, a skill name that is not this file's.
-func (s *Store) SaveDescriptionLedger(l model.DescriptionLedger) error {
-	if strings.TrimSpace(l.Skill) == "" {
-		return fmt.Errorf("ledger has no skill name")
-	}
-	seen := map[int]bool{}
-	for _, c := range l.Candidates {
-		if c.ID <= 0 {
-			return fmt.Errorf("%s: candidate id must be positive", l.Skill)
-		}
-		if seen[c.ID] {
-			return fmt.Errorf("%s: candidate %d appears twice", l.Skill, c.ID)
-		}
-		seen[c.ID] = true
-		if strings.TrimSpace(c.Text) == "" {
-			return fmt.Errorf("%s: candidate %d has no text", l.Skill, c.ID)
-		}
-	}
-	for _, c := range l.Candidates {
-		if c.Parent != 0 && !seen[c.Parent] {
-			return fmt.Errorf("%s: candidate %d revises %d, which is not in the ledger", l.Skill, c.ID, c.Parent)
-		}
-	}
-	b, err := json.MarshalIndent(l, "", "  ")
-	if err != nil {
-		return err
-	}
-	return s.writeFile(s.DescriptionPath(l.Skill), append(b, '\n'))
-}
-
-// NextDescriptionCandidateID is the next free number in a skill's ledger.
-func (s *Store) NextDescriptionCandidateID(skill string) int {
-	ledger, _, err := s.LoadDescriptionLedger(skill)
-	if err != nil {
-		return 1
-	}
-	best := 0
-	for _, c := range ledger.Candidates {
-		if c.ID > best {
-			best = c.ID
-		}
-	}
-	return best + 1
-}
-
-// DescriptionSkills is every skill that has a ledger on disk, alphabetically.
-func (s *Store) DescriptionSkills() []string {
-	entries, err := os.ReadDir(filepath.Join(s.Root, "trigger", DescriptionsDir))
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		out = append(out, strings.TrimSuffix(e.Name(), ".json"))
-	}
-	sort.Strings(out)
-	return out
-}
 
 // ---------------------------------------------------------------- SKILL.md frontmatter
 

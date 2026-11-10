@@ -142,7 +142,7 @@ func (p *liveRun) stateText() string {
 // startTrainingRun launches the train run for the wording the loop is waiting on. There is nothing
 // between the key and the spend: how many runs each query gets is the set's own number, changed in
 // the section pane beside it, and the candidate is the one the workbench is editing. The live screen
-// is the whole of the run — what it is measuring is its title and the ledger it writes.
+// is the whole of the run — what it is measuring is its title and the report it writes.
 func (m *Model) startTrainingRun() tea.Cmd {
 	f := m.flow
 	if f == nil || f.lab == nil {

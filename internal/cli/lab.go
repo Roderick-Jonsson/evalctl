@@ -57,7 +57,7 @@ func runLab(args []string) int {
 	partial := false
 	for _, cand := range lab.Candidates {
 		state := ""
-		if cand.Applied {
+		if cand.InFile {
 			state = "applied"
 		}
 		if cand.InFile {
@@ -71,7 +71,7 @@ func runLab(args []string) int {
 		rows = append(rows, []string{
 			fmt.Sprintf("#%d", cand.ID), strings.TrimSpace(state),
 			train, valid,
-			fmt.Sprint(cand.Chars), shortStamp(cand.Created), truncate(cand.Note, 46),
+			fmt.Sprint(cand.Chars), shortStamp(cand.Created), truncate(cand.Change, 46),
 		})
 	}
 	if len(rows) > 0 {

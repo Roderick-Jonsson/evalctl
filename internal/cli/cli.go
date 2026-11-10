@@ -348,9 +348,14 @@ func refByID(s *store.Store, lane, skill string, id int) (store.RowRef, error) {
 	var hits []store.RowRef
 	switch lane {
 	case store.LaneTrigger:
-		for i, q := range s.Trigger.Queries {
-			if q.ID == id {
-				hits = append(hits, store.RowRef{Lane: lane, Index: i})
+		for _, sk := range s.Skills {
+			if skill != "" && sk.Name != skill {
+				continue
+			}
+			for i, q := range sk.Trigger.Queries {
+				if q.ID == id {
+					hits = append(hits, store.RowRef{Lane: lane, Skill: sk.Name, Index: i})
+				}
 			}
 		}
 	case store.LaneOutput:
@@ -397,7 +402,7 @@ func idSpan(s *store.Store, lane, skill string) string {
 	add := func(id int) { ids = append(ids, id) }
 	switch lane {
 	case store.LaneTrigger:
-		for _, q := range s.Trigger.Queries {
+		for _, q := range s.Queries() {
 			add(q.ID)
 		}
 	case store.LaneOutput:
@@ -632,8 +637,10 @@ func reportSave(s *store.Store, changes []string, touched map[string]bool) {
 func saveTouched(c *common, changes []string, touched map[string]bool) int {
 	for lane := range touched {
 		var err error
-		if lane == store.LaneTrigger {
-			err = c.s.SaveTrigger()
+		if strings.HasPrefix(lane, store.LaneTrigger+":") {
+			err = c.s.SaveTrigger(strings.TrimPrefix(lane, store.LaneTrigger+":"))
+		} else if lane == store.LaneTrigger {
+			err = c.s.SaveAll()
 		} else {
 			err = c.s.SaveSkill(lane)
 		}

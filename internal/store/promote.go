@@ -152,9 +152,6 @@ type QueryPromotion struct {
 // An identical query is refused rather than duplicated: the trigger set answers "does the right
 // skill load for this request?", and two rows of the same text measure one thing twice.
 func (s *Store) PromotePrompt(req PromotePromptRequest) (QueryPromotion, error) {
-	if !s.TriggerOK {
-		return QueryPromotion{}, errors.New("trigger/trigger-evals.json is missing — the trigger lane cannot be managed")
-	}
 	src := s.Skill(req.Skill)
 	if src == nil {
 		return QueryPromotion{}, fmt.Errorf("unknown stage skill %q", req.Skill)
@@ -172,10 +169,14 @@ func (s *Store) PromotePrompt(req PromotePromptRequest) (QueryPromotion, error) 
 	}
 	under := s.Skill(req.Under)
 	if under == nil {
-		return QueryPromotion{}, fmt.Errorf("unknown stage skill %q (a trigger row's skill needs its own evals/evals.json)", req.Under)
+		return QueryPromotion{}, fmt.Errorf("unknown stage skill %q", req.Under)
+	}
+	if !under.TriggerOK {
+		return QueryPromotion{}, fmt.Errorf("%s/evals/%s is missing — the row would have no file to live in",
+			under.Name, TriggerFileName)
 	}
 	norm := normalizeQuery(query)
-	for _, q := range s.Trigger.Queries {
+	for _, q := range s.Queries() {
 		if normalizeQuery(q.Query) == norm {
 			return QueryPromotion{}, fmt.Errorf("trigger #%d already carries this prompt (%s, %s) — nothing to promote",
 				q.ID, q.Skill, splitOrLabel(q))
@@ -190,11 +191,11 @@ func (s *Store) PromotePrompt(req PromotePromptRequest) (QueryPromotion, error) 
 	}
 	id := req.ID
 	if id == 0 {
-		id = s.NextTriggerID()
+		id = s.NextTriggerID(under.Name)
 	}
 	out := QueryPromotion{ID: id, Skill: under.Name, Split: split, ShouldTrigger: req.ShouldTrigger,
 		Why: promptWhy(req, src.Name, cse), Query: query, SourceSkill: src.Name, SourceID: cse.ID,
-		SourceSlug: cse.Slug, Index: len(s.Trigger.Queries)}
+		SourceSlug: cse.Slug, Index: len(s.QueriesOf(under.Name))}
 	if req.DryRun {
 		return out, nil
 	}
@@ -205,7 +206,7 @@ func (s *Store) PromotePrompt(req PromotePromptRequest) (QueryPromotion, error) 
 	}
 	q := model.TriggerQuery{ID: id, Skill: under.Name, ShouldTrigger: req.ShouldTrigger, Split: split,
 		Why: out.Why, Query: query, Extra: map[string]json.RawMessage{ProvenanceKey: prov}}
-	if err := s.AddTrigger(q); err != nil {
+	if err := s.AddTrigger(under.Name, q); err != nil {
 		return QueryPromotion{}, err
 	}
 	return out, nil

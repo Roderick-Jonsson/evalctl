@@ -37,21 +37,21 @@ func eqInts(t *testing.T, got, want []int) {
 
 func TestSortByColumnKeepsTiesInFileOrder(t *testing.T) {
 	s := openTest(t)
-	// File order is 1,2,3,4; by id descending it must reverse exactly.
+	// File order is skill by skill: alpha 1-4, then beta 5-8; by id descending it must reverse exactly.
 	rows := s.RowsOrdered(LaneTrigger, Filter{}, Order{Keys: []Sort{{Field: "id", Desc: true}}})
-	eqInts(t, ids(rows), []int{4, 3, 2, 1})
+	eqInts(t, ids(rows), []int{8, 7, 6, 5, 4, 3, 2, 1})
 
-	// Sorting by label groups the two "no" rows first and leaves their file order alone.
+	// Sorting by label groups the four "no" rows first and leaves their file order alone.
 	rows = s.RowsOrdered(LaneTrigger, Filter{}, Order{Keys: []Sort{{Field: "label"}}})
-	eqInts(t, ids(rows), []int{2, 4, 1, 3})
+	eqInts(t, ids(rows), []int{2, 4, 6, 8, 1, 3, 5, 7})
 
 	// Two keys: split, then id descending.
 	rows = s.RowsOrdered(LaneTrigger, Filter{}, Order{Keys: []Sort{{Field: "split"}, {Field: "id", Desc: true}}})
-	eqInts(t, ids(rows), []int{2, 1, 4, 3})
+	eqInts(t, ids(rows), []int{6, 5, 2, 1, 8, 7, 4, 3})
 
 	// No keys is file order, untouched.
 	rows = s.RowsOrdered(LaneTrigger, Filter{}, Order{})
-	eqInts(t, ids(rows), []int{1, 2, 3, 4})
+	eqInts(t, ids(rows), []int{1, 2, 3, 4, 5, 6, 7, 8})
 }
 
 func TestSortIsCaseInsensitiveAndNumericForIDs(t *testing.T) {
@@ -72,21 +72,21 @@ func TestGroupEntriesHeadersAndCounts(t *testing.T) {
 	if len(groups) != 2 {
 		t.Fatalf("want 2 groups, got %d: %+v", len(groups), groups)
 	}
-	if groups[0].Key != "alpha" || len(groups[0].Entries) != 2 {
+	if groups[0].Key != "alpha" || len(groups[0].Entries) != 4 {
 		t.Fatalf("first group = %q with %d rows", groups[0].Key, len(groups[0].Entries))
 	}
-	if groups[1].Key != "beta" || len(groups[1].Entries) != 2 {
+	if groups[1].Key != "beta" || len(groups[1].Entries) != 4 {
 		t.Fatalf("second group = %q with %d rows", groups[1].Key, len(groups[1].Entries))
 	}
 	if got := GroupLabel("skill", groups[0].Key); got != "skill alpha" {
 		t.Fatalf("label = %q", got)
 	}
 	// Inside a group the rows keep the order they were given.
-	eqInts(t, ids(groups[1].Entries), []int{3, 4})
+	eqInts(t, ids(groups[1].Entries), []int{5, 6, 7, 8})
 
 	// No group column: one unnamed group, so callers have a single rendering path.
 	flat := GroupEntries(rows, "")
-	if len(flat) != 1 || flat[0].Key != "" || len(flat[0].Entries) != 4 {
+	if len(flat) != 1 || flat[0].Key != "" || len(flat[0].Entries) != 8 {
 		t.Fatalf("flat grouping = %+v", flat)
 	}
 }
@@ -125,9 +125,9 @@ func TestSearchScopedToColumn(t *testing.T) {
 	if got := len(s.RowsOrdered(LaneTrigger, Filter{Search: "operator"}, Order{})); got != 1 {
 		t.Fatalf("unscoped search matched %d rows, want 1", got)
 	}
-	// "beta" is a skill and also a word in a prompt; scoped to skill it is exactly two rows.
-	if got := len(s.RowsOrdered(LaneTrigger, Filter{Search: "beta", In: "skill"}, Order{})); got != 2 {
-		t.Fatalf("skill-scoped search matched %d rows, want 2", got)
+	// "beta" is a skill, so scoped to that column it is exactly its own rows.
+	if got := len(s.RowsOrdered(LaneTrigger, Filter{Search: "beta", In: "skill"}, Order{})); got != 4 {
+		t.Fatalf("skill-scoped search matched %d rows, want 4", got)
 	}
 	// A scope the lane does not have falls back to the full text rather than matching nothing:
 	// `ls --lane both --in slug` still lists the trigger rows that mention the word.

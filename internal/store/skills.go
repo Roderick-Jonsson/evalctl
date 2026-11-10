@@ -70,16 +70,18 @@ func (s *Store) Summaries() []SkillSummary {
 			}
 		}
 	}
-	for _, q := range s.Trigger.Queries {
-		sum := get(q.Skill)
-		if q.Skill == "" {
-			continue
-		}
-		sum.Queries++
-		if q.ShouldTrigger {
-			sum.Should++
-		} else {
-			sum.ShouldNot++
+	for _, sk := range s.Skills {
+		for _, q := range sk.Trigger.Queries {
+			sum := get(q.Skill)
+			if q.Skill == "" {
+				continue
+			}
+			sum.Queries++
+			if q.ShouldTrigger {
+				sum.Should++
+			} else {
+				sum.ShouldNot++
+			}
 		}
 	}
 	for _, i := range s.Validate() {

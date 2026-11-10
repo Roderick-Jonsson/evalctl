@@ -12,9 +12,9 @@ import (
 	"evalctl/internal/version"
 )
 
-// RunTrigger is the trigger lane: every selected query N times against the trigger profile, then
-// the rate, the pass rule and the report. Nothing is staged, so a trigger run never touches a
-// workspace.
+// RunTrigger is the trigger lane: one skill's selected queries N times against the trigger profile,
+// then the rate, the pass rule and the report. Nothing is staged, so a trigger run never touches a
+// case fixture — but its results land in that skill's workspace, beside its output iterations.
 func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 	if o.Budget <= 0 {
 		o.Budget = DefaultTriggerBudget
@@ -28,16 +28,23 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 	if o.Split != "all" && !KnownSplit(o.Split) {
 		return fmt.Errorf("--split must be all, train, validation or holdout")
 	}
-	cfg := r.TriggerConfigOf()
+	skills, err := r.ResolveSkills(o.Skills)
+	if err != nil {
+		return err
+	}
+	// A trigger iteration belongs to one skill's workspace, so the lane is scoped like the case
+	// lanes: measuring several skills at once is several iterations, one per skill.
+	if len(skills) != 1 {
+		return fmt.Errorf("a trigger iteration measures one skill's set — pass --skill (%s)",
+			strings.Join(skills, ", "))
+	}
+	skill := skills[0]
+	cfg := r.TriggerConfigOf(skill)
 	if o.Runs <= 0 {
 		o.Runs = cfg.Runs
 	}
 	if o.Threshold <= 0 {
 		o.Threshold = cfg.Threshold
-	}
-	skills, err := r.ResolveSkills(o.Skills)
-	if err != nil {
-		return err
 	}
 	only := idSet(o.QueryIDs)
 	cases, err := r.LoadTriggerQueries(skills, only, o.Split)
@@ -62,7 +69,7 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 
 	iteration := o.Iteration
 	if iteration == 0 {
-		iteration = r.NextIteration(r.TriggerWorkspace(), "trigger")
+		iteration = r.NextIteration(r.TriggerWorkspace(skill), "trigger")
 	}
 
 	// A batch nobody is waiting for provisions nothing: a cancelled context is checked before the
@@ -71,14 +78,14 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 		return err
 	}
 
-	iterDir := r.TriggerIterDir(iteration)
+	iterDir := r.TriggerIterDir(skill, iteration)
 	if fileExists(iterDir) && !o.DryRun && !o.Resume && !o.Force {
 		return fmt.Errorf("%s already exists — rerun with --resume, --force, or pick another --iteration",
 			r.relative(iterDir))
 	}
 
-	start := fmt.Sprintf("trigger eval %d · %d quer(y/ies) × %d run(s) · threshold %v · profile %s · evalctl %s",
-		iteration, len(cases), o.Runs, trimFloat(o.Threshold), profileNameTrigger, version.Resolve().Short())
+	start := fmt.Sprintf("trigger eval %s/trigger-%d · %d quer(y/ies) × %d run(s) · threshold %v · profile %s · evalctl %s",
+		skill, iteration, len(cases), o.Runs, trimFloat(o.Threshold), profileNameTrigger, version.Resolve().Short())
 	if o.DryRun {
 		start += " · DRY RUN"
 	}
@@ -223,7 +230,7 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 		return err
 	}
 	triggerFileSHA := ""
-	if b, err := os.ReadFile(r.Store.TriggerPath); err == nil {
+	if b, err := os.ReadFile(r.Store.TriggerPathFor(skill)); err == nil {
 		triggerFileSHA = sha256Hex(b)
 	}
 	descriptions := map[string]struct {
@@ -242,7 +249,7 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 			treeSHA[skill] = sha
 		}
 	}
-	meta := metaTrigger{Iteration: iteration, Lane: LaneTrigger, Started: startedAt,
+	meta := metaTrigger{Iteration: iteration, Lane: LaneTrigger, Skill: skill, Started: startedAt,
 		Model: orDefault(o.Model, "default"), Runs: o.Runs, Threshold: o.Threshold, Split: o.Split,
 		BudgetS: int(o.Budget.Seconds()), MaxTurns: o.MaxTurns, Queries: []string{}}
 	for _, c := range cases {
@@ -260,8 +267,8 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 		return err
 	}
 
-	msg := fmt.Sprintf("overall %s · train %s · validation %s · wrote %s/report.md",
-		pctText(score.Overall), pctText(score.Splits["train"]), pctText(score.Splits["validation"]),
+	msg := fmt.Sprintf("%s · overall %s · train %s · validation %s · wrote %s/report.md",
+		skill, pctText(score.Overall), pctText(score.Splits["train"]), pctText(score.Splits["validation"]),
 		r.relative(iterDir))
 	r.emit(Event{Kind: EventScored, Lane: LaneTrigger, Case: fmt.Sprintf("trigger-%d", iteration), Message: msg})
 	r.emit(Event{Kind: EventDone, Lane: LaneTrigger, Case: fmt.Sprintf("trigger-%d", iteration), Message: msg})
@@ -270,6 +277,7 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 
 type metaTrigger struct {
 	Iteration  int      `json:"iteration"`
+	Skill      string   `json:"skill"`
 	Lane       string   `json:"lane"`
 	Started    string   `json:"started"`
 	Model      string   `json:"model"`

@@ -59,7 +59,7 @@ func TestTheRankingSaysWhenTheSetCannotSeparateThem(t *testing.T) {
 	m.openSkill("slide-builder")
 	first := s.SkillDescription("slide-builder")
 	second := "Use this skill when an outline has to become slides — even when the user calls them a deck."
-	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", second, "named the deck", 1); err != nil {
+	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", second); err != nil {
 		t.Fatal(err)
 	}
 	rows := []runner.ScoreRow{
@@ -154,7 +154,7 @@ func TestTheRankingWalksItsRows(t *testing.T) {
 	m.openSkill("slide-builder")
 	first := s.SkillDescription("slide-builder")
 	second := "Use this skill when an outline has to become slides — even when the user calls them a deck."
-	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", second, "named the deck", 1); err != nil {
+	if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", second); err != nil {
 		t.Fatal(err)
 	}
 	lo := []runner.ScoreRow{

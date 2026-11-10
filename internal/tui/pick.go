@@ -120,7 +120,7 @@ func triggerPickRow(r *runner.Runner, s *store.Store, name string) pickRow {
 	}
 	lab, err := r.DescriptionLab(name)
 	if err != nil || lab == nil {
-		row.state, row.urgent = "the ledger did not re-read", 1
+		row.state, row.urgent = "the skill's files did not re-read", 1
 		row.next = err.Error()
 		return row
 	}
@@ -389,7 +389,7 @@ func lanePurpose(lane string) string {
 	return "does the right skill load? — tune the description until it does"
 }
 
-// openSkill opens a skill's description loop on the work surface: the ledger, the rows of the split
+// openSkill opens a skill's description loop on the work surface: its trigger runs, the rows of the split
 // on screen, and candidate #1 adopted from SKILL.md when the loop has never started — retyping your
 // own description is the one step of the guide a tool can do for you, and a paraphrase would measure
 // a text nobody ships.
@@ -408,15 +408,12 @@ func (m *Model) openSkill(name string) {
 		switch {
 		case strings.TrimSpace(m.store.SkillDescription(name)) == "":
 			// A skill with no description is the first day of one: the wording block is empty and the
-			// sentence typed into it is candidate #1.
-			m.setStatus("no description yet — type it in the wording block, ctrl+s writes it into "+name+"/SKILL.md", false)
+			// sentence typed into it is the first draft.
+			m.setStatus("no description yet — type it in the wording block, ctrl+s stages it", false)
 		default:
-			if _, err := runner.New(m.store).AdoptFileDescription(name); err != nil {
-				m.setStatus(err.Error(), true)
-			} else {
-				m.reload()
-				m.setStatus("candidate #1 adopted from "+name+"/SKILL.md", false)
-			}
+			// The wording SKILL.md carries is a candidate as soon as it is measured: there is nothing
+			// to adopt, only something to run.
+			m.setStatus("no trigger runs yet — enter measures the wording "+name+"/SKILL.md carries", false)
 		}
 	}
 	// The wording block is seeded here and not on the first frame: a skill with no description opens on

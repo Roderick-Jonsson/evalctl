@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-const triggerJSON = `{
-  "note": "one row per query",
+const alphaTriggerJSON = `{
+  "note": "alpha's rows",
   "runs": 3,
   "threshold": 0.5,
   "queries": [
@@ -31,15 +31,15 @@ const triggerJSON = `{
     },
     {
       "id": 3,
-      "skill": "beta",
+      "skill": "alpha",
       "should_trigger": true,
       "split": "validation",
       "why": "validation positive",
-      "query": "turn the research into a teaching order"
+      "query": "turn my rough notes into a teaching order"
     },
     {
       "id": 4,
-      "skill": "beta",
+      "skill": "alpha",
       "should_trigger": false,
       "split": "validation",
       "why": "validation negative",
@@ -49,10 +49,52 @@ const triggerJSON = `{
 }
 `
 
+const betaTriggerJSON = `{
+  "note": "beta's rows",
+  "runs": 3,
+  "threshold": 0.5,
+  "queries": [
+    {
+      "id": 5,
+      "skill": "beta",
+      "should_trigger": true,
+      "split": "train",
+      "why": "clear case",
+      "query": "make the deck's speaker notes say it out loud"
+    },
+    {
+      "id": 6,
+      "skill": "beta",
+      "should_trigger": false,
+      "split": "train",
+      "why": "near miss",
+      "query": "summarise this pdf into three bullets in chat"
+    },
+    {
+      "id": 7,
+      "skill": "beta",
+      "should_trigger": true,
+      "split": "validation",
+      "why": "validation positive",
+      "query": "cut a two-minute render from these slides"
+    },
+    {
+      "id": 8,
+      "skill": "beta",
+      "should_trigger": false,
+      "split": "validation",
+      "why": "validation negative",
+      "query": "find me sources with links for the reconciliation pattern"
+    }
+  ]
+}
+`
+
 func writeTestTree(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	mustWrite(t, filepath.Join(root, "trigger", "trigger-evals.json"), triggerJSON)
+	mustWrite(t, filepath.Join(root, "alpha", "evals", "trigger-evals.json"), alphaTriggerJSON)
+	mustWrite(t, filepath.Join(root, "beta", "evals", "trigger-evals.json"), betaTriggerJSON)
 	mustWrite(t, filepath.Join(root, "alpha", "evals", "evals.json"), `{
   "skill_name": "alpha",
   "evals": [
@@ -101,15 +143,20 @@ func TestSaveWithoutChangeIsByteIdentical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SaveTrigger(); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"alpha", "beta"} {
+		if err := s.SaveTrigger(name); err != nil {
+			t.Fatal(err)
+		}
 	}
-	got, err := os.ReadFile(filepath.Join(root, "trigger", "trigger-evals.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != triggerJSON {
-		t.Fatalf("round trip changed the file:\n--- want ---\n%s\n--- got ---\n%s", triggerJSON, got)
+	want := map[string]string{"alpha": alphaTriggerJSON, "beta": betaTriggerJSON}
+	for name, expect := range want {
+		got, err := os.ReadFile(filepath.Join(root, name, "evals", "trigger-evals.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != expect {
+			t.Fatalf("%s: round trip changed the file:\n--- want ---\n%s\n--- got ---\n%s", name, expect, got)
+		}
 	}
 }
 
@@ -117,8 +164,8 @@ func TestSaveWithoutChangeIsByteIdentical(t *testing.T) {
 // survive an edit, not be silently dropped.
 func TestUnknownKeysSurviveAnEdit(t *testing.T) {
 	root := writeTestTree(t)
-	path := filepath.Join(root, "trigger", "trigger-evals.json")
-	withExtra := strings.Replace(triggerJSON, `"why": "clear case",`,
+	path := filepath.Join(root, "alpha", "evals", "trigger-evals.json")
+	withExtra := strings.Replace(alphaTriggerJSON, `"why": "clear case",`,
 		`"why": "clear case",
       "notes": {"author": "rod", "reviewed": true},`, 1)
 	mustWrite(t, path, withExtra)
@@ -137,9 +184,9 @@ func TestUnknownKeysSurviveAnEdit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q := s.Trigger.Queries[0]
+	q := s.QueriesOf("alpha")[0]
 	q.Query = "research the operator pattern and keep the links"
-	if err := s.UpdateTrigger(0, q); err != nil {
+	if err := s.UpdateTrigger("alpha", 0, q); err != nil {
 		t.Fatal(err)
 	}
 	sk := s.Skill("beta")
@@ -234,7 +281,7 @@ func TestValidateCatchesRunPyFailures(t *testing.T) {
 	}
 
 	// Deleting the last negative of the train split is exactly what the runner refuses.
-	if _, err := s.DeleteRows([]RowRef{{Lane: LaneTrigger, Index: 1}}, false); err != nil {
+	if _, err := s.DeleteRows([]RowRef{{Lane: LaneTrigger, Skill: "alpha", Index: 1}}, false); err != nil {
 		t.Fatal(err)
 	}
 	// A declared file that is not on disk cannot be staged.
@@ -274,10 +321,10 @@ func TestDupeClustersFindNearTwins(t *testing.T) {
 	if groups := s.DupeGroups(LaneTrigger, DefaultDupeThreshold); len(groups) != 0 {
 		t.Fatalf("distinct queries grouped: %v", groups)
 	}
-	twin := s.Trigger.Queries[0]
+	twin := s.QueriesOf("alpha")[0]
 	twin.ID = 9
 	twin.Query = "research the operator pattern for me and write up the facts with links"
-	if err := s.AddTrigger(twin); err != nil {
+	if err := s.AddTrigger("alpha", twin); err != nil {
 		t.Fatal(err)
 	}
 	groups := s.DupeGroups(LaneTrigger, DefaultDupeThreshold)
@@ -292,14 +339,14 @@ func TestRenumberIsExplicitAndClosesGaps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DeleteRows([]RowRef{{Lane: LaneTrigger, Index: 0}}, false); err != nil {
+	if _, err := s.DeleteRows([]RowRef{{Lane: LaneTrigger, Skill: "alpha", Index: 0}}, false); err != nil {
 		t.Fatal(err)
 	}
-	if s.Trigger.Queries[0].ID != 2 {
+	if s.QueriesOf("alpha")[0].ID != 2 {
 		t.Fatal("ids must not shift on delete")
 	}
-	s.RenumberTrigger()
-	for i, q := range s.Trigger.Queries {
+	s.RenumberTrigger("alpha")
+	for i, q := range s.QueriesOf("alpha") {
 		if q.ID != i+1 {
 			t.Fatalf("renumber left id %d at position %d", q.ID, i)
 		}

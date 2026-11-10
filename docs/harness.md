@@ -13,21 +13,26 @@ live in `<skill>/evals/`, and its results live in a workspace folder **beside** 
 source-research/
 ├── SKILL.md
 └── evals/
-    ├── evals.json
+    ├── evals.json                    the output lane's cases
+    ├── trigger-evals.json            this skill's routing rows
     └── files/<slug>/                 the case's fixture, mirroring a run root
 source-research-workspace/            gitignored
-└── iteration-N/
-    ├── <slug>/
-    │   ├── prompt.txt
-    │   ├── with_skill/
-    │   │   ├── outputs/              the tree the run produced (MC-[topic]/ …)
-    │   │   ├── stream.jsonl  stderr.txt  activity.log
-    │   │   └── timing.json  changes.json  grading.json
-    │   └── without_skill/…
-    └── benchmark.json  report.md  feedback.json  meta.json
-trigger/trigger-evals.json            the one cross-skill case file
-trigger-workspace/trigger-N/…         its results: no skill owns the bundle-level lane
+├── iteration-N/                      output runs
+│   ├── <slug>/
+│   │   ├── prompt.txt
+│   │   ├── with_skill/
+│   │   │   ├── outputs/              the tree the run produced (MC-[topic]/ …)
+│   │   │   ├── stream.jsonl  stderr.txt  activity.log
+│   │   │   └── timing.json  changes.json  grading.json
+│   │   └── without_skill/…
+│   ├── benchmark.json  report.md  feedback.json  meta.json
+├── trigger-N/                        routing runs: q<id>-<skill>/run-K/, trigger.json, report.md, meta.json
+└── pending-description.json          the one staged draft, when there is one
 ```
+
+Both eval sets belong to the skill, and so do both kinds of run: a trigger iteration measures one
+skill's rows, in that skill's own workspace. Nothing sits above the skills any more — no
+`trigger/`, no `trigger-workspace/` — so a folder in the tree is a skill or a skill's results.
 
 Two consequences worth naming, because they are rules, not accidents:
 
@@ -96,16 +101,18 @@ A run must never be told it is being evaluated, so none of this lives in `contra
 
 ## The trigger lane (descriptions)
 
-`trigger/trigger-evals.json` holds the second eval set: realistic user prompts labelled with the
-skill they are testing and whether that skill's `SKILL.md` should load. It exists because a skill
+`<skill>/evals/trigger-evals.json` holds the second eval set: realistic user prompts labelled with
+whether that skill's `SKILL.md` should load. It exists because a skill
 that never triggers is a dead file — the `description` in frontmatter carries the entire burden of
 activation, and it is only improvable against measurements (agentskills.io, *Optimizing skill
 descriptions*).
 
 Every row is `id`, `skill`, `query`, `should_trigger`, `split`, and an optional `why` (the reason
-the row is in the set, for whoever reads a failure). The label is about **one** skill: a near-miss
-that should fire the *next* stage is a legitimate should-not-trigger row for this one, and with all
-four skills installed the run's loaded set shows exactly that.
+the row is in the set, for whoever reads a failure). One file per skill: the file a row sits in *is*
+the skill under test, and a row that names another skill is a validation error, not a bundle fact.
+The label is about that one skill — a near-miss that should fire the *next* stage is a legitimate
+should-not-trigger row — and every run still installs **all** the skills, so a misselection is
+measurable and the run's loaded set shows which sibling answered.
 
 - **Runs.** Model behavior is nondeterministic, so every query runs N times (file default 3) and the
   fraction of runs that opened the skill is its trigger rate.
@@ -127,17 +134,19 @@ four skills installed the run's loaded set shows exactly that.
   the rate, never scored as "did not trigger".
 
 ```bash
-evalctl trigger --list                    # the set, its labels and split
-evalctl trigger --split train             # iterate here only
-evalctl trigger --query 1,6 --runs 1      # cheap probe
-evalctl trigger                           # full set × 3 runs
+evalctl run --lane trigger --skill dummy --list              # that skill's set, labels and splits
+evalctl run --lane trigger --skill dummy --split train       # iterate here only
+evalctl run --lane trigger --skill dummy --query 59,60 --runs 1   # cheap probe
+evalctl run --lane trigger --skill dummy                     # the whole set × 3 runs
 ```
 
-`trigger-workspace/trigger-N/report.md` carries the pass rate overall / train / validation, a per-skill
-table, the descriptions under test with char counts and the guide's phrasing advisories, every
+One iteration measures one skill's file: `--skill` is required, and ids are per file, so `--query 59`
+means dummy's row. `<skill>-workspace/trigger-N/report.md` carries the pass rate overall / train /
+validation, the descriptions under test with char counts and the guide's phrasing advisories, every
 failure with the loaded set it produced, and the full query table. `trigger.json` keeps the raw
-per-run records; `meta.json` hashes the query file and records each description verbatim, so an
-iteration is reproducible after the descriptions change. A filtered or resumed invocation still
+per-run records; `meta.json` hashes the skill's query file and records **every** installed skill's description
+verbatim — a sibling's wording decides this skill's negatives — so an iteration stays readable after
+the descriptions change. A filtered or resumed invocation still
 scores every query that has data on disk in that iteration, so `--query`/`--split` slices accumulate
 into one comparable report instead of overwriting it with a fragment.
 

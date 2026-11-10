@@ -156,18 +156,10 @@ func (m *Model) keepDescription() tea.Cmd {
 		return nil
 	}
 	f.draft.text.SetValue(p.text)
-	// The note is the ledger's reason for this wording, and the model wrote one. It fills the field
-	// only when the operator has not written their own: an empty note is a note that says nothing.
-	if why := strings.TrimSpace(p.why); why != "" && strings.TrimSpace(f.draft.note.Value()) == strings.TrimSpace(f.draft.loadedIn) {
-		if r := []rune(why); len(r) > 200 {
-			why = strings.TrimSpace(string(r[:200]))
-		}
-		f.draft.note.SetValue(why)
-	}
 	f.proposal = nil
 	f.focus = focusWording
 	f.applyFocus()
-	m.setStatus(fmt.Sprintf("the proposal is in the field (%d chars) — edit it, ctrl+s saves it as the next candidate, enter saves and runs it", p.chars), false)
+	m.setStatus(fmt.Sprintf("the proposal is in the field (%d chars) — edit it, ctrl+s stages it as the next draft", p.chars), false)
 	return nil
 }
 

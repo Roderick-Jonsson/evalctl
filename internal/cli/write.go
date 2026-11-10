@@ -81,9 +81,12 @@ func runAdd(args []string) int {
 	}
 
 	if *lane == store.LaneTrigger {
+		if _, ok := c.s.TriggerOf(*skill); !ok {
+			return fail(fmt.Errorf("%s/evals/%s is missing — a trigger row's skill is its file", *skill, store.TriggerFileName))
+		}
 		q := model.TriggerQuery{ID: *id, Skill: *skill, Split: *split, Why: *why}
 		if q.ID == 0 {
-			q.ID = c.s.NextTriggerID()
+			q.ID = c.s.NextTriggerID(*skill)
 		}
 		adoptWarning(c.s.Root, store.LaneTrigger, *skill, q.ID)
 		var err error
@@ -101,11 +104,11 @@ func runAdd(args []string) int {
 		default:
 			return fail(fmt.Errorf("--label must be yes or no"))
 		}
-		if err := c.s.AddTrigger(q); err != nil {
+		if err := c.s.AddTrigger(*skill, q); err != nil {
 			return fail(err)
 		}
 		return saveTouched(c, []string{fmt.Sprintf("added trigger #%d (%s, %s)", q.ID, q.Skill, splitOrLabel(q.ShouldTrigger, q.Split))},
-			map[string]bool{store.LaneTrigger: true})
+			map[string]bool{store.LaneTrigger + ":" + q.Skill: true})
 	}
 
 	cse := model.OutputCase{ID: *id, Slug: *slug, Files: splitList(*files), Assertions: splitAssertions(*assertions)}
@@ -171,7 +174,7 @@ func runEdit(args []string) int {
 	}
 
 	if ref.Lane == store.LaneTrigger {
-		q := c.s.Trigger.Queries[ref.Index]
+		q := c.s.QueriesOf(ref.Skill)[ref.Index]
 		before := q
 		if set["id"] {
 			q.ID = *id
@@ -211,14 +214,14 @@ func runEdit(args []string) int {
 			printTriggerDiff(before, q)
 			return 0
 		}
-		if err := c.s.UpdateTrigger(ref.Index, q); err != nil {
+		if err := c.s.UpdateTrigger(ref.Skill, ref.Index, q); err != nil {
 			return fail(err)
 		}
 		var changes []string
 		if diff := triggerDiff(before, q); diff != "" {
 			changes = append(changes, fmt.Sprintf("trigger #%d: %s", q.ID, diff))
 		}
-		return saveTouched(c, changes, map[string]bool{store.LaneTrigger: true})
+		return saveTouched(c, changes, map[string]bool{store.LaneTrigger + ":" + ref.Skill: true})
 	}
 
 	sk := c.s.Skill(ref.Skill)
@@ -447,7 +450,7 @@ func describeRefs(s *store.Store, refs []store.RowRef) []string {
 	var out []string
 	for _, r := range refs {
 		if r.Lane == store.LaneTrigger {
-			q := s.Trigger.Queries[r.Index]
+			q := s.QueriesOf(r.Skill)[r.Index]
 			out = append(out, fmt.Sprintf("#%-3d %-20s %-3s %-10s %s",
 				q.ID, q.Skill, boolShort(q.ShouldTrigger), q.Split, clipText(q.Query, 60)))
 			continue
@@ -588,18 +591,22 @@ func runRenumber(args []string) int {
 	}
 	var changes []string
 	touched := map[string]bool{}
+	renumberTrigger := func() {
+		for _, sk := range c.s.Triggers() {
+			changes = append(changes, c.s.RenumberTrigger(sk.Name)...)
+			touched[store.LaneTrigger+":"+sk.Name] = true
+		}
+	}
 	switch *lane {
 	case "trigger":
-		changes = append(changes, c.s.RenumberTrigger()...)
-		touched[store.LaneTrigger] = true
+		renumberTrigger()
 	case "output":
 		for _, name := range c.s.SkillNames() {
 			changes = append(changes, c.s.RenumberOutput(name)...)
 			touched[name] = true
 		}
 	case "both":
-		changes = append(changes, c.s.RenumberTrigger()...)
-		touched[store.LaneTrigger] = true
+		renumberTrigger()
 		for _, name := range c.s.SkillNames() {
 			changes = append(changes, c.s.RenumberOutput(name)...)
 			touched[name] = true

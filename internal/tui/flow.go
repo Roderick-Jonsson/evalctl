@@ -66,7 +66,7 @@ type flowState struct {
 	sec  int
 	step int // 1-based within the section
 	lab  *runner.Lab
-	// iters is the measured candidates in ledger order: the loop's own numbering, which is what the
+	// iters is the measured wordings in iteration order: the loop's own numbering, which is what the
 	// ranking is keyed on.
 	iters []iteration
 	// rows is the split the section's first step edits; empty on the other steps.
@@ -184,16 +184,9 @@ func (f *flowState) latest() *iteration {
 	return &f.iters[len(f.iters)-1]
 }
 
-// pending is the wording the next training run is about: the newest candidate with no TRAIN
-// measurement that nothing has been revised into. It is the train run that makes a candidate an
-// iteration, so a wording that has only been through the validation set is still waiting to be
-// measured — which is the state a skill is in when its description was already validated in some
-// earlier run.
-//
-// Two rules, both learned from a ledger that had them wrong. It reads every candidate and not just
-// the last one, because a revision written between two train runs leaves a wording that only the
-// last-candidate check would hide. And a candidate with a child was revised past: #5 written and
-// then corrected to #6 is history, not work, so measuring it would put the typo back into SKILL.md.
+// pending is the wording the next training run is about: the draft staged in the workspace. There is
+// one staging slot, so a later draft replaces an earlier one instead of stranding it, and a wording
+// the runs already measured has no draft at all.
 func (f *flowState) pending() *runner.LabCandidate {
 	c, live := f.draftOf()
 	if !live {
@@ -202,32 +195,26 @@ func (f *flowState) pending() *runner.LabCandidate {
 	return c
 }
 
-// draftOf is a candidate the ledger holds and no train run measured: the wording the next run is
-// about when nothing newer is waiting (live), or one a later revision stepped over (superseded).
+// draftOf is the wording the next train run is about: the draft staged in the workspace if there is
+// one, otherwise the wording SKILL.md carries when it has been through the validation set but never
+// through a train run. With one staging slot nothing is ever superseded — a draft is replaced, not
+// stepped over — so a staged wording is always the live one.
 func (f *flowState) draftOf() (*runner.LabCandidate, bool) {
 	if f.lab == nil {
 		return nil, false
 	}
-	var out *runner.LabCandidate
-	revised := map[int]bool{}
 	for i := range f.lab.Candidates {
-		if p := f.lab.Candidates[i].Parent; p != 0 {
-			revised[p] = true
+		if f.lab.Candidates[i].Pending {
+			return &f.lab.Candidates[i], true
 		}
 	}
 	for i := range f.lab.Candidates {
 		c := &f.lab.Candidates[i]
-		if c.MeasureOn(store.SplitTrain) != nil {
-			continue
-		}
-		if out == nil || c.ID > out.ID {
-			out = c
+		if c.InFile && c.MeasureOn(store.SplitTrain) == nil {
+			return c, true
 		}
 	}
-	if out == nil {
-		return nil, false
-	}
-	return out, !revised[out.ID]
+	return nil, false
 }
 
 // complete says whether a validation measurement judged the whole validation set.
@@ -270,7 +257,7 @@ func noCandidateLeft(lab *runner.Lab) bool {
 func (f *flowState) gateOpen() bool { return len(f.iters) >= iterationsRequired || f.forced }
 
 // loopOpen is where a skill's work opens: the section and the step inside it, computed from the set
-// and the ledger alone. The chooser and the flow both read it, so the chooser cannot promise a step
+// and the runs alone. The chooser and the flow both read it, so the chooser cannot promise a step
 // the flow will not open.
 func loopOpen(lab *runner.Lab) (sec, step int) {
 	iters := iterationsOf(lab)
@@ -547,9 +534,7 @@ func (f *flowState) hints(m *Model) []hint {
 	}
 	switch f.focus {
 	case focusWording:
-		return []hint{{"type", "the description"}, {"tab", "note"}, {"ctrl+s", "save"}, {"esc", "the set"}}
-	case focusNote:
-		return []hint{{"type", "why this change"}, {"enter", "save & run"}, {"tab", "the set"}, {"esc", "the set"}}
+		return []hint{{"type", "the description"}, {"ctrl+s", "save"}, {"esc", "the set"}}
 	}
 	act := "save & run"
 	if !f.draftChanged() {

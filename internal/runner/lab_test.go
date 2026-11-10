@@ -11,31 +11,32 @@ import (
 	"evalctl/internal/store"
 )
 
+const labBase = "Use this skill when an outline has to become slides, even if the user never says slides."
+
 // labFixture is a tree with one skill, a folded description, and no iterations yet.
 func labFixture(t *testing.T) (*Runner, string) {
 	t.Helper()
 	s, root := newTree(t)
 	r := New(s)
 	// The description the loop starts from, in the same folded style the writer produces.
-	if err := s.SetSkillDescription("slide-builder",
-		"Use this skill when an outline has to become slides, even if the user never says slides."); err != nil {
+	if err := s.SetSkillDescription("slide-builder", labBase); err != nil {
 		t.Fatal(err)
 	}
 	return r, root
 }
 
-// writeIteration fabricates one finished trigger iteration: the description it ran, and its score.
-// It is the only way to test the loop without spending twenty minutes of agent time, and it exercises
-// the same join the lab uses on real runs.
+// writeIteration fabricates one finished trigger iteration for one skill: the description it ran
+// and the score its own rows produced. It is the only way to test the loop without spending twenty
+// minutes of agent time, and it writes exactly what a real run writes, in the same place.
 func writeIteration(t *testing.T, root, skill, description string, iteration int, rows []ScoreRow) {
 	t.Helper()
-	dir := filepath.Join(root, "trigger-workspace", fmt.Sprintf("trigger-%d", iteration))
+	dir := filepath.Join(root, skill+"-workspace", fmt.Sprintf("trigger-%d", iteration))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	meta := fmt.Sprintf(`{"iteration":%d,"lane":"trigger","started":"2026-10-30T10:0%d:00+0100","runs":3,"threshold":0.5,
+	meta := fmt.Sprintf(`{"iteration":%d,"skill":%q,"lane":"trigger","started":"2026-10-30T10:0%d:00+0100","runs":3,"threshold":0.5,
   "provenance":{"descriptions":{%q:{"chars":%d,"description":%q}}}}`,
-		iteration, iteration, skill, len([]rune(description)), description)
+		iteration, skill, iteration, skill, len([]rune(description)), description)
 	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -52,39 +53,37 @@ func writeIteration(t *testing.T, root, skill, description string, iteration int
 	}
 }
 
-// TestLabJoinsByDescriptionHash: two iterations, two descriptions, and the ledger's candidates get
-// the measurements of the text they actually carry — the join is the hash, never the order.
+func ptr[T any](v T) *T { return &v }
+
+// row builds one scored row for the fixtures above: runs always 3, judged, and the verdict asked for.
+func scoredRow(id int, split string, should, hit bool) ScoreRow {
+	rate := 0.0
+	triggers := 0
+	if hit {
+		rate, triggers = 1, 3
+	}
+	passed := hit
+	return ScoreRow{ID: id, Skill: "slide-builder", Split: split, ShouldTrigger: should,
+		Runs: 3, ValidRuns: 3, Triggers: triggers, Rate: &rate, Passed: &passed}
+}
+
+// TestLabJoinsByDescriptionHash: two iterations, two wordings, and the candidate each wording
+// becomes carries the measurements of the text it actually ran — the join is the hash, never the
+// order.
 func TestLabJoinsByDescriptionHash(t *testing.T) {
 	runtime, root := labFixture(t)
-	if _, err := runtime.AdoptFileDescription("slide-builder"); err != nil {
-		t.Fatal(err)
-	}
-	first := runtime.Store.SkillDescription("slide-builder")
 	second := "Use this skill when an outline has to become slides — even when the user calls them a deck."
-	cand, err := runtime.SaveDescriptionCandidate("slide-builder", second, "broadened to cover 'deck'", 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pass := func(id int, split string, should, hit bool) ScoreRow {
-		passed := hit
-		rate := 1.0
-		if !hit {
-			rate = 0
-		}
-		return ScoreRow{ID: id, Skill: "slide-builder", Split: split, ShouldTrigger: should,
-			Runs: 3, ValidRuns: 3, Triggers: map[bool]int{true: 3, false: 0}[hit], Rate: &rate, Passed: &passed}
-	}
-	writeIteration(t, root, "slide-builder", first, 1, []ScoreRow{
-		pass(1, SplitTrain, true, true),
-		pass(2, SplitTrain, false, true),
-		pass(3, SplitValidation, true, false),
-		pass(4, SplitValidation, false, true),
+	writeIteration(t, root, "slide-builder", labBase, 1, []ScoreRow{
+		scoredRow(1, SplitTrain, true, true),
+		scoredRow(2, SplitTrain, false, true),
+		scoredRow(3, SplitValidation, true, false),
+		scoredRow(4, SplitValidation, false, true),
 	})
 	writeIteration(t, root, "slide-builder", second, 2, []ScoreRow{
-		pass(1, SplitTrain, true, true),
-		pass(2, SplitTrain, false, true),
-		pass(3, SplitValidation, true, true),
-		pass(4, SplitValidation, false, true),
+		scoredRow(1, SplitTrain, true, true),
+		scoredRow(2, SplitTrain, false, true),
+		scoredRow(3, SplitValidation, true, true),
+		scoredRow(4, SplitValidation, false, true),
 	})
 
 	lab, err := runtime.DescriptionLab("slide-builder")
@@ -92,88 +91,77 @@ func TestLabJoinsByDescriptionHash(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(lab.Candidates) != 2 {
-		t.Fatalf("candidates = %d", len(lab.Candidates))
+		t.Fatalf("candidates = %+v", lab.Candidates)
 	}
-	if len(lab.Candidates[0].Measures) != 1 || lab.Candidates[0].Measure().Iteration != 1 {
-		t.Fatalf("#1 measures = %+v", lab.Candidates[0].Measures)
+	// The id is the first iteration that measured the wording, so prose and the run directory agree.
+	if lab.Candidates[0].ID != 1 || lab.Candidates[0].Iterations[0] != 1 {
+		t.Fatalf("#1 = %+v", lab.Candidates[0])
 	}
-	if len(lab.Candidates[1].Measures) != 1 || lab.Candidates[1].Measure().Iteration != 2 {
-		t.Fatalf("#2 measures = %+v", lab.Candidates[1].Measures)
+	if lab.Candidates[1].ID != 2 || lab.Candidates[1].Iterations[0] != 2 {
+		t.Fatalf("#2 = %+v", lab.Candidates[1])
 	}
-	// The revision fixed the validation row it was meant to fix, and the ledger knows it.
+	// The revision fixed the validation row it was meant to fix.
 	if fixed := lab.Candidates[1].Measure().Fixed; len(fixed) != 1 || fixed[0] != 3 {
 		t.Fatalf("fixed = %v, want the validation row 3", fixed)
 	}
-	if lab.Best == nil || lab.Best.ID != cand.ID {
-		t.Fatalf("best = %+v, want the candidate with the better validation rate", lab.Best)
+	if lab.Candidates[1].Parent != 1 || lab.Candidates[1].Change == "" {
+		t.Fatalf("change cell = %q (parent %d)", lab.Candidates[1].Change, lab.Candidates[1].Parent)
 	}
-	if lab.Next.Key != "best" {
-		t.Fatalf("next = %+v, want apply once the train split is clean", lab.Next)
+	if lab.Best == nil || lab.Best.ID != 2 {
+		t.Fatalf("best = %+v, want the wording with the better validation rate", lab.Best)
 	}
 }
 
-// TestLabAppliesTheBestNotTheLast: the guide's rule that costs people the most — the winner is the
-// candidate with the best validation rate, and applying it puts its wording back into the file even
-// though a later candidate was the one measured last.
-func TestLabAppliesTheBestNotTheLast(t *testing.T) {
-	runtime, root := labFixture(t)
+// TestLabAsksForTheFirstRun: with no trigger run on disk, the loop's first move is to measure the
+// wording the router actually reads. There is nothing to adopt — the file already holds it.
+func TestLabAsksForTheFirstRun(t *testing.T) {
+	runtime, _ := labFixture(t)
 	lab, err := runtime.DescriptionLab("slide-builder")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(lab.Candidates) != 0 || lab.Next.Step != StepBaseline || !strings.Contains(lab.Next.Line, "adopt") {
-		t.Fatalf("a skill with no loop should ask for its file's wording as #1: %+v", lab.Next)
+	if len(lab.Candidates) != 0 || lab.Next.Step != StepBaseline ||
+		!strings.Contains(lab.Next.Line, "evaluate the description") {
+		t.Fatalf("a skill with no loop should ask for its file's wording to be run: %+v", lab.Next)
 	}
-	first, err := runtime.AdoptFileDescription("slide-builder")
-	if err != nil {
-		t.Fatal(err)
-	}
-	base := runtime.Store.SkillDescription("slide-builder")
+}
 
-	// #1 measured: train clean, validation clean. A validation run judges the whole validation set —
-	// a rate over one of its two rows is a stopped batch, and the lab refuses to rank it.
-	writeIteration(t, root, "slide-builder", base, 1, []ScoreRow{
-		{ID: 1, Skill: "slide-builder", Split: SplitTrain, ShouldTrigger: true, Runs: 3, ValidRuns: 3, Triggers: 3, Rate: ptr(1.0), Passed: ptr(true)},
-		{ID: 3, Skill: "slide-builder", Split: SplitValidation, ShouldTrigger: true, Runs: 3, ValidRuns: 3, Triggers: 3, Rate: ptr(1.0), Passed: ptr(true)},
-		{ID: 4, Skill: "slide-builder", Split: SplitValidation, ShouldTrigger: false, Runs: 3, ValidRuns: 3, Triggers: 0, Rate: ptr(1.0), Passed: ptr(true)},
+// TestLabAppliesTheBestNotTheLast: the guide's rule that costs people the most — the winner is the
+// wording with the best validation rate, and applying it puts its text back into the file even
+// though a later wording was the one measured last.
+func TestLabAppliesTheBestNotTheLast(t *testing.T) {
+	runtime, root := labFixture(t)
+	writeIteration(t, root, "slide-builder", labBase, 1, []ScoreRow{
+		scoredRow(1, SplitTrain, true, true),
+		scoredRow(3, SplitValidation, true, true),
+		scoredRow(4, SplitValidation, false, true),
 	})
-	// #2 is longer and its train split is spotless, but it loses one validation row: it fitted the
+	// The second wording's train split is spotless, but it loses one validation row: it fitted the
 	// train sample, which is exactly what the validation split exists to catch.
-	second, err := runtime.SaveDescriptionCandidate("slide-builder",
-		base+" Decks, talks and handouts all count, and the outline may be called anything at all.", "wider", first.ID)
-	if err != nil {
+	wider := labBase + " Decks, talks and handouts all count, and the outline may be called anything at all."
+	if err := runtime.Store.SetSkillDescription("slide-builder", wider); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.PrepareMeasure("slide-builder", second.ID); err != nil {
-		t.Fatal(err)
-	}
-	writeIteration(t, root, "slide-builder", runtime.Store.SkillDescription("slide-builder"), 2, []ScoreRow{
-		{ID: 1, Skill: "slide-builder", Split: SplitTrain, ShouldTrigger: true, Runs: 3, ValidRuns: 3, Triggers: 3, Rate: ptr(1.0), Passed: ptr(true)},
-		{ID: 3, Skill: "slide-builder", Split: SplitValidation, ShouldTrigger: true, Runs: 3, ValidRuns: 3, Triggers: 1, Rate: ptr(0.33), Passed: ptr(false)},
-		{ID: 4, Skill: "slide-builder", Split: SplitValidation, ShouldTrigger: false, Runs: 3, ValidRuns: 3, Triggers: 0, Rate: ptr(1.0), Passed: ptr(true)},
+	writeIteration(t, root, "slide-builder", wider, 2, []ScoreRow{
+		scoredRow(1, SplitTrain, true, true),
+		scoredRow(3, SplitValidation, true, false),
+		scoredRow(4, SplitValidation, false, true),
 	})
 
-	lab, err = runtime.DescriptionLab("slide-builder")
+	lab, err := runtime.DescriptionLab("slide-builder")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lab.Best == nil || lab.Best.ID != first.ID {
-		t.Fatalf("best = %+v, want #%d on its validation rate", lab.Best, first.ID)
+	if lab.Best == nil || lab.Best.ID != 1 {
+		t.Fatalf("best = %+v, want #1 on its validation rate", lab.Best)
 	}
-	if lab.Next.Key != "best" {
-		t.Fatalf("next = %+v, want apply once train is clean", lab.Next)
+	if lab.Drifted {
+		t.Fatal("the file carries the newest wording; that is not drift")
 	}
 	if _, err := runtime.ApplyDescription("slide-builder", lab.Best.ID); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	ledger, _, err := runtime.Store.LoadDescriptionLedger("slide-builder")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ledger.Applied == nil || ledger.Applied.Candidate != first.ID {
-		t.Fatalf("applied = %+v", ledger.Applied)
-	}
-	if got := runtime.Store.SkillDescription("slide-builder"); store.HashText(got) != store.HashText(base) {
+	if got := runtime.Store.SkillDescription("slide-builder"); store.HashText(got) != store.HashText(labBase) {
 		t.Fatalf("SKILL.md does not carry the applied wording:\n%s", got)
 	}
 	after, err := runtime.DescriptionLab("slide-builder")
@@ -181,10 +169,31 @@ func TestLabAppliesTheBestNotTheLast(t *testing.T) {
 		t.Fatal(err)
 	}
 	if after.Drifted {
-		t.Fatal("the applied description is in the file; that is not drift")
+		t.Fatal("the applied wording was measured; that is not drift")
 	}
 	if after.Next.Step != StepApply {
 		t.Fatalf("next = %+v, want the holdout step after applying", after.Next)
+	}
+}
+
+// TestLabSeesAnUnmeasuredEdit: editing SKILL.md by hand after a run is drift — the file's wording has
+// no measurement of its own, so the rate beside it describes something else.
+func TestLabSeesAnUnmeasuredEdit(t *testing.T) {
+	runtime, root := labFixture(t)
+	writeIteration(t, root, "slide-builder", labBase, 1, []ScoreRow{
+		scoredRow(1, SplitTrain, true, true),
+		scoredRow(3, SplitValidation, true, true),
+		scoredRow(4, SplitValidation, false, true),
+	})
+	if err := runtime.Store.SetSkillDescription("slide-builder", labBase+" Talks count too."); err != nil {
+		t.Fatal(err)
+	}
+	lab, err := runtime.DescriptionLab("slide-builder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lab.Drifted || lab.Next.Step != StepEvaluate {
+		t.Fatalf("drift = %v, next = %+v, want the new wording measured", lab.Drifted, lab.Next)
 	}
 }
 
@@ -253,25 +262,14 @@ func TestHoldoutRateIsScoredApart(t *testing.T) {
 // advice — five revisions in, no train gain, and the wording is not what is failing.
 func TestLabStopsAfterFiveFlatIterations(t *testing.T) {
 	runtime, root := labFixture(t)
-	base := runtime.Store.SkillDescription("slide-builder")
-	parent := 0
 	for i := 1; i <= 5; i++ {
-		text := fmt.Sprintf("%s revision %d", base, i)
-		if i == 1 {
-			if _, err := runtime.AdoptFileDescription("slide-builder"); err != nil {
-				t.Fatal(err)
-			}
-			text = base
-		} else {
-			c, err := runtime.SaveDescriptionCandidate("slide-builder", text, "another try", parent)
-			if err != nil {
-				t.Fatal(err)
-			}
-			parent = c.ID
+		text := labBase
+		if i > 1 {
+			text = fmt.Sprintf("%s revision %d", labBase, i)
 		}
 		writeIteration(t, root, "slide-builder", text, i, []ScoreRow{
-			{ID: 1, Skill: "slide-builder", Split: SplitTrain, ShouldTrigger: true, Runs: 3, ValidRuns: 3, Triggers: 1, Rate: ptr(0.33), Passed: ptr(false)},
-			{ID: 3, Skill: "slide-builder", Split: SplitValidation, ShouldTrigger: true, Runs: 3, ValidRuns: 3, Triggers: 3, Rate: ptr(1.0), Passed: ptr(true)},
+			scoredRow(1, SplitTrain, true, false),
+			scoredRow(3, SplitValidation, true, true),
 		})
 	}
 	lab, err := runtime.DescriptionLab("slide-builder")
@@ -301,34 +299,12 @@ func TestLiftedWordsCatchesThePaste(t *testing.T) {
 	}
 }
 
-func ptr[T any](v T) *T { return &v }
-
-// row builds one scored row for the fixtures above: runs always 3, judged, and the verdict asked for.
-func scoredRow(id int, split string, should, hit bool) ScoreRow {
-	rate := 0.0
-	if hit {
-		rate = 1
-	}
-	triggers := 0
-	if hit {
-		triggers = 3
-	}
-	passed := hit
-	return ScoreRow{ID: id, Skill: "slide-builder", Split: split, ShouldTrigger: should,
-		Runs: 3, ValidRuns: 3, Triggers: triggers, Rate: &rate, Passed: &passed}
-}
-
-// TestLabJSONCarriesTheMeasurements: `lab --json` is the machine-readable view of the loop, and the
-// ledger row alone is not that view. DescriptionCandidate's MarshalJSON used to be promoted onto
-// LabCandidate and win, so the output lost sha, chars, measures, applied and in_file — every field
-// the JSON exists for.
+// TestLabJSONCarriesTheMeasurements: `lab --json` is the machine-readable view of the loop, so a
+// candidate has to carry its text, its hash, its size and its measurements — and must not carry an
+// `applied` flag it can no longer know.
 func TestLabJSONCarriesTheMeasurements(t *testing.T) {
 	runtime, root := labFixture(t)
-	first, err := runtime.AdoptFileDescription("slide-builder")
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeIteration(t, root, "slide-builder", first.Text, 1, []ScoreRow{
+	writeIteration(t, root, "slide-builder", labBase, 1, []ScoreRow{
 		scoredRow(1, SplitTrain, true, true),
 		scoredRow(3, SplitValidation, true, true),
 		scoredRow(4, SplitValidation, false, true),
@@ -345,10 +321,13 @@ func TestLabJSONCarriesTheMeasurements(t *testing.T) {
 	if err := json.Unmarshal(blob, &got); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"id", "text", "sha", "chars", "measures", "applied", "in_file"} {
+	for _, key := range []string{"id", "text", "sha", "chars", "measures", "in_file", "iterations"} {
 		if _, ok := got[key]; !ok {
 			t.Fatalf("lab json is missing %q: %s", key, blob)
 		}
+	}
+	if _, ok := got["applied"]; ok {
+		t.Fatalf("lab json still claims an applied flag: %s", blob)
 	}
 	measures, _ := got["measures"].([]any)
 	if len(measures) != 1 {
@@ -357,20 +336,15 @@ func TestLabJSONCarriesTheMeasurements(t *testing.T) {
 }
 
 // TestApplySurvivesTheValidationRunBeingLast: which half of the loop ran last is the operator's
-// order, not a property of the candidate. Applying a wording whose newest measurement is its
-// validation run used to fail with "measured on no train rows", and when it did not, it recorded the
-// validation iteration and printed validation 0/0.
+// order, not a property of the wording. Applying a wording whose newest measurement is its
+// validation run used to fail with "measured on no train rows".
 func TestApplySurvivesTheValidationRunBeingLast(t *testing.T) {
 	runtime, root := labFixture(t)
-	first, err := runtime.AdoptFileDescription("slide-builder")
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeIteration(t, root, "slide-builder", first.Text, 1, []ScoreRow{
+	writeIteration(t, root, "slide-builder", labBase, 1, []ScoreRow{
 		scoredRow(1, SplitTrain, true, true),
 		scoredRow(2, SplitTrain, false, true),
 	})
-	writeIteration(t, root, "slide-builder", first.Text, 2, []ScoreRow{
+	writeIteration(t, root, "slide-builder", labBase, 2, []ScoreRow{
 		scoredRow(3, SplitValidation, true, true),
 		scoredRow(4, SplitValidation, false, false),
 	})
@@ -378,22 +352,22 @@ func TestApplySurvivesTheValidationRunBeingLast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m := lab.Candidate(first.ID).Measure(); m == nil || m.Validation.Judged == 0 {
+	// Two iterations, one wording: the halves of the loop merge on the text they measured.
+	if len(lab.Candidates) != 1 || len(lab.Candidates[0].Measures) != 2 {
+		t.Fatalf("candidates = %+v, want one wording with two measures", lab.Candidates)
+	}
+	if m := lab.Candidate(1).Measure(); m == nil || m.Validation.Judged == 0 {
 		t.Fatalf("fixture is not the case: the newest measure must be the validation run: %+v", m)
 	}
-	note, err := runtime.ApplyDescription("slide-builder", first.ID)
+	note, err := runtime.ApplyDescription("slide-builder", 1)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if !strings.Contains(note, "train 2/2") || !strings.Contains(note, "validation 1/2") {
 		t.Fatalf("note = %q, want both halves reported from their own runs", note)
 	}
-	ledger, _, err := runtime.Store.LoadDescriptionLedger("slide-builder")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ledger.Applied == nil || ledger.Applied.Iteration != 1 {
-		t.Fatalf("applied = %+v, want the train iteration 1", ledger.Applied)
+	if !strings.Contains(note, "commit it: `description #1:") {
+		t.Fatalf("note = %q, want the commit message git can keep", note)
 	}
 }
 
@@ -401,21 +375,14 @@ func TestApplySurvivesTheValidationRunBeingLast(t *testing.T) {
 // lab's own best-of rule must not hand it the win it would get by having less to fail.
 func TestLabRanksOnlyAFullValidation(t *testing.T) {
 	runtime, root := labFixture(t)
-	first, err := runtime.AdoptFileDescription("slide-builder")
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := runtime.SaveDescriptionCandidate("slide-builder",
-		first.Text+" Decks and handouts count too.", "wider", first.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// #1 was stopped after the first validation query and passed it; #2 saw both and failed one.
-	writeIteration(t, root, "slide-builder", first.Text, 1, []ScoreRow{
+	wider := labBase + " Decks and handouts count too."
+	// The first wording was stopped after the first validation query and passed it; the second saw
+	// both and failed one.
+	writeIteration(t, root, "slide-builder", labBase, 1, []ScoreRow{
 		scoredRow(1, SplitTrain, true, true),
 		scoredRow(3, SplitValidation, true, true),
 	})
-	writeIteration(t, root, "slide-builder", second.Text, 2, []ScoreRow{
+	writeIteration(t, root, "slide-builder", wider, 2, []ScoreRow{
 		scoredRow(1, SplitTrain, true, true),
 		scoredRow(3, SplitValidation, true, true),
 		scoredRow(4, SplitValidation, false, false),
@@ -424,16 +391,54 @@ func TestLabRanksOnlyAFullValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !lab.Complete(lab.Candidate(second.ID).MeasureOn(SplitValidation)) {
+	if !lab.Complete(lab.Candidate(2).MeasureOn(SplitValidation)) {
 		t.Fatal("fixture: #2's validation judged both rows and must count as complete")
 	}
-	if lab.Complete(lab.Candidate(first.ID).MeasureOn(SplitValidation)) {
+	if lab.Complete(lab.Candidate(1).MeasureOn(SplitValidation)) {
 		t.Fatal("fixture: #1's validation judged one of two rows and must not count as complete")
 	}
-	if lab.Best == nil || lab.Best.ID != second.ID {
-		t.Fatalf("best = %+v, want #%d: a partial rate is not a ranking", lab.Best, second.ID)
+	if lab.Best == nil || lab.Best.ID != 2 {
+		t.Fatalf("best = %+v, want #2: a partial rate is not a ranking", lab.Best)
 	}
 	if strings.Contains(lab.Next.Line, "best validation 1/1") {
 		t.Fatalf("next = %q, must not name a partial rate as the best", lab.Next.Line)
+	}
+}
+
+// TestDraftIsStagedAndBecomesTheFile: the ledger's unmeasured candidate is now a file in the
+// workspace — the loop's staging slot — and measuring it writes it into SKILL.md and drops the draft.
+func TestDraftIsStagedAndBecomesTheFile(t *testing.T) {
+	runtime, root := labFixture(t)
+	writeIteration(t, root, "slide-builder", labBase, 1, []ScoreRow{
+		scoredRow(1, SplitTrain, true, false),
+		scoredRow(3, SplitValidation, true, true),
+	})
+	draft, err := runtime.SaveDescriptionCandidate("slide-builder", labBase+" Talks count too.")
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	lab, err := runtime.DescriptionLab("slide-builder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := lab.latest()
+	if pending == nil || !pending.Pending || pending.ID != 2 || pending.Text != draft.Text {
+		t.Fatalf("pending candidate = %+v", pending)
+	}
+	if lab.Next.Step != StepEvaluate || !strings.Contains(lab.Next.Line, "evaluate #2") {
+		t.Fatalf("next = %+v, want the draft measured next", lab.Next)
+	}
+	if _, err := runtime.PrepareMeasure("slide-builder", pending.ID); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if got := runtime.Store.SkillDescription("slide-builder"); store.HashText(got) != store.HashText(draft.Text) {
+		t.Fatalf("SKILL.md does not carry the draft:\n%s", got)
+	}
+	if _, ok := runtime.PendingDescription("slide-builder"); ok {
+		t.Fatal("the draft survived becoming the file")
+	}
+	// Staging the wording the file already carries is refused: it cannot be measured apart from it.
+	if _, err := runtime.SaveDescriptionCandidate("slide-builder", draft.Text); err == nil {
+		t.Fatal("a draft equal to SKILL.md was accepted")
 	}
 }

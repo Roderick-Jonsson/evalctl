@@ -19,10 +19,10 @@ func TestSetSkillDescriptionTouchesOnlyTheDescription(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, "trigger"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "alpha", "evals"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "trigger", "trigger-evals.json"), []byte(`{"queries":[]}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "alpha", "evals", "trigger-evals.json"), []byte(`{"queries":[]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	s, err := Open(root)
@@ -68,10 +68,10 @@ func TestSetSkillDescriptionRefusesWhatTheFormatRefuses(t *testing.T) {
 	if err := os.WriteFile(path, []byte("---\nname: alpha\n---\n\n# alpha\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, "trigger"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "alpha", "evals"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "trigger", "trigger-evals.json"), []byte(`{"queries":[]}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "alpha", "evals", "trigger-evals.json"), []byte(`{"queries":[]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	s, err := Open(root)
@@ -99,50 +99,6 @@ func TestDescriptionSpanReadsEveryScalarStyle(t *testing.T) {
 		got, _, _, ok := DescriptionSpan(body)
 		if !ok || got != want {
 			t.Fatalf("%q → %q (ok=%v), want %q", body, got, ok, want)
-		}
-	}
-}
-
-// TestLedgerRoundTripsUnknownKeys: the ledger is a file a person may extend, and a manager that eats
-// a key it does not know silently loses work — the same rule the eval files live by.
-func TestLedgerRoundTripsUnknownKeys(t *testing.T) {
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "trigger", "descriptions"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, "trigger"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "trigger", "trigger-evals.json"), []byte(`{"queries":[]}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	s, err := Open(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := `{
-  "skill": "alpha",
-  "note_for_humans": "keep me",
-  "candidates": [{"id": 1, "text": "Use this skill when.", "origin": "file", "future_field": 7}]
-}
-`
-	if err := os.WriteFile(s.DescriptionPath("alpha"), []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	ledger, ok, err := s.LoadDescriptionLedger("alpha")
-	if err != nil || !ok {
-		t.Fatalf("load: %v (ok=%v)", err, ok)
-	}
-	if err := s.SaveDescriptionLedger(ledger); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-	raw, err := os.ReadFile(s.DescriptionPath("alpha"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"note_for_humans", "future_field"} {
-		if !strings.Contains(string(raw), want) {
-			t.Fatalf("a round trip dropped %q:\n%s", want, raw)
 		}
 	}
 }

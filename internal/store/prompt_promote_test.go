@@ -24,7 +24,7 @@ func TestPromotePromptAddsATriggerRow(t *testing.T) {
 		t.Fatalf("promote: %v", err)
 	}
 	if res.ID != 5 {
-		t.Errorf("id = %d, want the next free id 5", res.ID)
+		t.Errorf("id = %d, want the next free id in alpha's file, 5", res.ID)
 	}
 	if res.Skill != "alpha" || res.Split != "train" || !res.ShouldTrigger {
 		t.Errorf("row = %s/%s/%v, want alpha/train/should-trigger", res.Skill, res.Split, res.ShouldTrigger)
@@ -39,10 +39,10 @@ func TestPromotePromptAddsATriggerRow(t *testing.T) {
 		t.Errorf("why does not name the source case: %q", res.Why)
 	}
 
-	if len(s.Trigger.Queries) != 5 {
-		t.Fatalf("queries = %d, want 5", len(s.Trigger.Queries))
+	if len(s.QueriesOf("alpha")) != 5 {
+		t.Fatalf("alpha queries = %d, want 5", len(s.QueriesOf("alpha")))
 	}
-	q := s.Trigger.Queries[4]
+	q := s.QueriesOf("alpha")[4]
 	if q.ID != res.ID || q.Query != res.Query || q.Split != res.Split || !q.ShouldTrigger {
 		t.Errorf("appended row = %+v", q)
 	}
@@ -62,17 +62,17 @@ func TestPromotePromptSurvivesTheRoundTrip(t *testing.T) {
 	if _, err := s.PromotePrompt(PromotePromptRequest{Skill: "alpha", Index: 0, ShouldTrigger: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SaveTrigger(); err != nil {
+	if err := s.SaveTrigger("alpha"); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := Open(s.Root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reopened.Trigger.Queries) != 5 {
-		t.Fatalf("queries after reopen = %d, want 5", len(reopened.Trigger.Queries))
+	if len(reopened.QueriesOf("alpha")) != 5 {
+		t.Fatalf("alpha queries after reopen = %d, want 5", len(reopened.QueriesOf("alpha")))
 	}
-	q := reopened.Trigger.Queries[4]
+	q := reopened.QueriesOf("alpha")[4]
 	prov, err := DecodePromotedQuery(q)
 	if err != nil || prov == nil || prov.Slug != "a-1" {
 		t.Fatalf("provenance did not survive: %+v, %v", prov, err)
@@ -91,8 +91,8 @@ func TestPromotePromptRefusesADuplicateQuery(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "already carries this prompt") {
 		t.Fatalf("second promote = %v, want a duplicate refusal", err)
 	}
-	if len(s.Trigger.Queries) != 5 {
-		t.Errorf("queries = %d, want the refused row not appended", len(s.Trigger.Queries))
+	if len(s.QueriesOf("alpha")) != 5 {
+		t.Errorf("alpha queries = %d, want the refused row not appended", len(s.QueriesOf("alpha")))
 	}
 }
 
@@ -144,8 +144,8 @@ func TestPromotePromptRefusals(t *testing.T) {
 			t.Errorf("%s: err = %v, want %q", c.name, err, c.want)
 		}
 	}
-	if len(s.Trigger.Queries) != 4 {
-		t.Errorf("a refused promotion appended a row: %d queries", len(s.Trigger.Queries))
+	if len(s.Queries()) != 8 {
+		t.Errorf("a refused promotion appended a row: %d queries", len(s.Queries()))
 	}
 }
 
@@ -174,7 +174,7 @@ func TestPromotePromptDryRunWritesNothing(t *testing.T) {
 	if res.ID != 5 || res.Query != "do the alpha thing" {
 		t.Errorf("dry run did not describe the row: %+v", res)
 	}
-	if len(s.Trigger.Queries) != 4 {
-		t.Errorf("dry run appended a row: %d queries", len(s.Trigger.Queries))
+	if len(s.Queries()) != 8 {
+		t.Errorf("dry run appended a row: %d queries", len(s.Queries()))
 	}
 }

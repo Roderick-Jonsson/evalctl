@@ -106,11 +106,10 @@ func runDescribe(args []string) int {
 			prop.Skill, prop.Candidate)))
 		return 0
 	}
-	cand, err := runner.New(c.s).SaveDescriptionCandidate(prop.Skill, prop.Text, prop.Why, prop.Candidate)
-	if err != nil {
+	if _, err := runner.New(c.s).SaveDescriptionCandidate(prop.Skill, prop.Text); err != nil {
 		return fail(err)
 	}
-	fmt.Printf("candidate #%d saved — `evalctl lab --skill %s` says what the loop asks for next\n", cand.ID, prop.Skill)
+	fmt.Printf("draft staged in %s-workspace — `evalctl lab --skill %s` says what the loop asks for next\n", prop.Skill, prop.Skill)
 	return 0
 }
 

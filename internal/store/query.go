@@ -44,16 +44,18 @@ func (s *Store) Rows(lane string, f Filter) []Entry {
 	out := []Entry{}
 	switch lane {
 	case LaneTrigger:
-		for i, q := range s.Trigger.Queries {
-			e := Entry{Lane: lane, Index: i, ID: q.ID, Skill: q.Skill, Split: q.Split,
-				Text: q.Query, Why: q.Why, Dupe: clusters[rowKey(lane, q.Skill, i)]}
-			if q.ShouldTrigger {
-				e.Label = "yes"
-			} else {
-				e.Label = "no"
-			}
-			if f.matches(e) {
-				out = append(out, e)
+		for _, sk := range s.Skills {
+			for i, q := range sk.Trigger.Queries {
+				e := Entry{Lane: lane, Index: i, ID: q.ID, Skill: q.Skill, Split: q.Split,
+					Text: q.Query, Why: q.Why, Dupe: clusters[rowKey(lane, q.Skill, i)]}
+				if q.ShouldTrigger {
+					e.Label = "yes"
+				} else {
+					e.Label = "no"
+				}
+				if f.matches(e) {
+					out = append(out, e)
+				}
 			}
 		}
 	case LaneOutput:
@@ -75,10 +77,11 @@ func (s *Store) Rows(lane string, f Filter) []Entry {
 func (s *Store) EntryAt(lane string, skill string, index int) (Entry, bool) {
 	switch lane {
 	case LaneTrigger:
-		if index < 0 || index >= len(s.Trigger.Queries) {
+		qs := s.QueriesOf(skill)
+		if index < 0 || index >= len(qs) {
 			return Entry{}, false
 		}
-		q := s.Trigger.Queries[index]
+		q := qs[index]
 		e := Entry{Lane: lane, Index: index, ID: q.ID, Skill: q.Skill, Split: q.Split,
 			Text: q.Query, Why: q.Why, Dupe: s.DupeClusters(lane, DefaultDupeThreshold)[rowKey(lane, q.Skill, index)]}
 		if q.ShouldTrigger {
@@ -129,8 +132,15 @@ func (f Filter) matches(e Entry) bool {
 	return true
 }
 
-// Queries mirrors the file's trigger queries in order, for the CLI.
-func (s *Store) Queries() []model.TriggerQuery { return s.Trigger.Queries }
+// Queries mirrors every skill's trigger queries, skill order then file order, for the CLI's
+// repo-wide views. A row's Skill says which file it came from.
+func (s *Store) Queries() []model.TriggerQuery {
+	var out []model.TriggerQuery
+	for _, sk := range s.Skills {
+		out = append(out, sk.Trigger.Queries...)
+	}
+	return out
+}
 
 // DefaultDupeThreshold is the word-overlap at which two prompts are "the same test twice".
 const DefaultDupeThreshold = 0.6
@@ -145,8 +155,10 @@ func (s *Store) DupeClusters(lane string, threshold float64) map[string]int {
 	var items []item
 	switch lane {
 	case LaneTrigger:
-		for i, q := range s.Trigger.Queries {
-			items = append(items, item{rowKey(lane, q.Skill, i), tokenSet(q.Query)})
+		for _, sk := range s.Skills {
+			for i, q := range sk.Trigger.Queries {
+				items = append(items, item{rowKey(lane, q.Skill, i), tokenSet(q.Query)})
+			}
 		}
 	case LaneOutput:
 		for _, sk := range s.Skills {

@@ -3,7 +3,7 @@
 The whole eval toolchain for this repo in one Go binary: it manages the two eval lanes, runs
 them, and browses the results. No Python at runtime.
 
-- **trigger lane** — `trigger/trigger-evals.json` (does the right skill load?)
+- **trigger lane** — `<skill>/evals/trigger-evals.json` (does the right skill load?)
 - **output lane** — `<skill>/evals/evals.json` plus the fixture dirs `<skill>/evals/files/<slug>/`
 
 Built with Bubble Tea, Bubbles, Lip Gloss and Huh, and Glamour for the reports.
@@ -56,7 +56,7 @@ harness is not comparable with the last one. It is also the first thing in the a
   always the same one: a stale `bin/evalctl` looks exactly like a fresh one until the corner says
   when it was made. An unstamped `go build` shows no clock rather than the commit's time, which is
   the one number in this tool that would make a stale binary look fresh;
-- `<skill>-workspace/iteration-N/meta.json` and `trigger-workspace/trigger-N/meta.json` record `provenance.tool`
+- `<skill>-workspace/iteration-N/meta.json` and `<skill>-workspace/trigger-N/meta.json` record `provenance.tool`
   (version, commit, dirty, `built_at`);
 - both `report.md` files name the build that generated them, and a run's start line prints it.
 
@@ -115,8 +115,8 @@ body where the rail was.
                                      │   generalization the validation set: run every wording against it, then rank
                                      │ 
                                      │   It writes
-                                     │   the set        trigger/trigger-evals.json
-                                     │   wordings       trigger/descriptions/<skill>.json
+                                     │   the set        <skill>/evals/trigger-evals.json
+                                     │   the draft      <skill>-workspace/pending-description.json
                                      │   the winner     SKILL.md — the frontmatter key, nothing else
                                      │ 
                                      │   → enter  pick the skill whose wording gets tuned
@@ -154,9 +154,9 @@ same shape as the trigger lane's, with its own columns and its own two screens (
                                            │   validation   2 queries · 1 trigger · 1 do not
                                            │   holdout      0 queries
                                            │ 
-                                           │   The ledger
-                                           │   wordings     0 candidates
-                                           │   applied      none yet
+                                           │   The wordings
+                                           │   measured     0 runs
+                                           │   staged       none yet
                                            │   in SKILL.md  52 characters
                                            │ 
                                            │   Findings
@@ -175,15 +175,15 @@ j k move · enter open the loop · esc lanes                                    
  1 skill with a description to tune                                                                           1 / 1 
 ```
 
-`TRAIN`/`VALID` are the query rows that name the skill, `ITERS` is where it stands against the five
-iterations the guide asks for, and `STATE` is what the loop would do next with it — one phrase, read
-off the ledger and the iterations on disk rather than remembered.
+`TRAIN`/`VALID` are that skill's query rows, `ITERS` is where it stands against the five iterations
+the guide asks for, and `STATE` is what the loop would do next with it — one phrase, read off the
+trigger runs on disk rather than remembered.
 
 The list is the disk, not a copy of it taken at startup. The tool stamps the tree once a second —
 every path under the root with its size and mtime, pruned at the workspaces' iteration level and
 skipping `.git` and `.evalctl`'s backups — and re-reads when the stamp moves. Add a stage skill in
 another window and it is in the table a second later; finish a run in a second terminal and the
-counts, the ledger and the `STATE` phrase follow it. Two states are held back on purpose, because
+counts, the wordings and the `STATE` phrase follow it. Two states are held back on purpose, because
 they are writes and not readings: a run in flight, whose runner is still writing into the store it
 started with, and an open form or question, which holds the index of the row it is about to write.
 Both re-read on the tick after they hand the keys back.
@@ -191,8 +191,8 @@ Both re-read on the tick after they hand the keys back.
 The table is the shape the eval tables had: a two-cell gutter where the cursor lives, fixed columns,
 counts right-aligned so 1 and 47 end on one edge, a quiet header and no rule under it. Beside it, the
 pane says what the row under the cursor is — the activity and step its loop opens in, what both splits
-hold (queries, and how many should trigger), how many wordings the ledger carries, which one
-`SKILL.md` was given, and that skill's validation findings.
+hold (queries, and how many should trigger), how many wordings its runs have measured, whether a
+draft is staged, and that skill's validation findings.
 
 `STATE` is the column that gives way first: the pane already says it in words. Below the width that
 buys a pane, the row under the cursor is spelled out in a block under the table instead — same facts,
@@ -342,15 +342,14 @@ for. The `split` field is how a row moves between the train set, the validation 
 save says so out loud (**moved train → validation**), because that row stops being part of what this
 screen measures. The id is left to the tool: it indexes the result directories.
 
-**The loop in one key.** `enter` on the set does the next thing and the footer names it: it saves the
-wording you typed as the next candidate (if it changed) and measures it. `ctrl+s` saves without
-measuring, `R` measures again on purpose, and `enter` on an unchanged draft just runs — a run is not a
-revision, and the ledger keeps a new candidate only when the text differs.
+**The loop in one key.** `enter` on the set does the next thing and the footer names it: it stages
+the wording you typed (if it changed) and measures it. `ctrl+s` stages without measuring, `R` measures
+again on purpose, and `enter` on an unchanged draft just runs — a run is not a revision.
 
-A revision does not touch `SKILL.md` by itself: it becomes the next candidate in the ledger, and the
-training run is what writes it into the file, because the file is what the router reads and a wording
-nobody has measured should not be in it. The note beside the description is the ledger's `note` field
-— the one place to say why this wording exists, for whoever reads the run in a month.
+A revision does not touch `SKILL.md` by itself: it becomes the draft in the workspace
+(`pending-description.json`), and the training run is what writes it into the file, because the file
+is what the router reads and a wording nobody has measured should not be in it. There is no note
+field: what a wording changed is computed from the text itself, against the wording before it.
 
 Below 90 columns the four quadrants cannot be read, so the workbench stacks: the set with its
 verdicts, then the description. The failures keep their full cards behind `f`.
@@ -410,12 +409,12 @@ batch that stopped competing with one that finished. The cell says how many of t
 queries it actually judged, the table says what that mark means, and the recommendation never picks
 such a row: `v` runs the whole set for it again. `x` on the run screen stops the batch at the candidate
 it is on — the queue behind it is dropped rather than walked through, and an aborted batch writes no
-measurement, so nothing stopped enters the ledger as an iteration.
+measurement, so a stopped batch is never read as an iteration.
 
-**A wording nothing has run yet is named, not drawn.** A revision saved and then revised again before
-any run leaves a candidate the ledger holds and no train run measured. It is not an iteration, so it has
-no row; the line under the table names it, says that no train run has measured it, and points at the
-workbench's run, which is what measures it.
+**A wording nothing has run yet is named, not drawn.** A staged draft is not an iteration: it has no
+row, and the line under the table names it, says that no run has measured it, and points at the
+workbench's run, which is what measures it. There is one staging slot, so a second draft replaces the
+first rather than leaving a wording nobody can measure.
 
 **The recommendation is a tag on the row, and a line under the table.** `Recommended`, in amber, at the
 right edge of the row the rule picked — a word instead of the green tick it used to be, because a tick
@@ -425,7 +424,8 @@ the best validation rate, a tie going to the earlier wording, the one that got t
 fewer revisions — and it is where the cursor opens, because walking to the winner by hand would be the
 reader repeating the arithmetic. The pick stays yours: `j k` walk the table and `enter` (or `a`) applies
 the row under the cursor to `SKILL.md` — frontmatter only, backed up, re-read through the parser,
-recorded in the ledger beside the measurement that earned it — after the loop's one confirmation. `f`
+and the numbers that earned it printed as the commit message git can keep — after the loop's one
+confirmation. `f`
 opens that iteration in full, and `h` then runs the fresh queries once, apart from every rate the loop
 tuned on. With nothing validated yet the table has no rate to rank, and it says so instead of
 recommending a row.
@@ -461,8 +461,8 @@ an aborted run leaves no iteration behind rather than a table of cancelled rows;
 create carries `aborted.json` and no `meta.json`, so the lab skips it and the next reader sees what
 stopped and why. `v` opens the arm's log in full, and the live screen is the one place `esc` does not
 leave: a half-read table of a run that is still spending money is worse than the wait. What the run
-measured — the candidate, the rate, the per-row verdicts — is in the ledger the workbench reads when it
-comes back.
+measured — the wording, the rate, the per-row verdicts — is in `trigger.json`, which the workbench
+reads when it comes back.
 
 ### The output lane
 
@@ -930,8 +930,8 @@ with `SKILL.md` telling the agent to take its shape and never its content.
 ### Promoting a prompt into the trigger lane
 
 A case's prompt is a request a real user typed, so it is also a fair question for the other lane:
-*saying this, does the right skill load?* `promote --to-trigger` lifts the text into
-`trigger/trigger-evals.json` unchanged:
+*saying this, does the right skill load?* `promote --to-trigger` lifts the text into the target
+skill's `evals/trigger-evals.json` unchanged:
 
 ```bash
 evalctl promote --to-trigger --from <case-ref> [--skill S] [--split train|validation] \
@@ -1008,19 +1008,23 @@ carry the same information.
   judge-stream.jsonl judge-stderr.txt                    the grading call, after `grade`
 <skill>-workspace/iteration-N/benchmark.json report.md feedback.json
 
-trigger-workspace/trigger-N/meta.json                   query-file hash + every description verbatim
-trigger-workspace/trigger-N/q01-<skill>/query.txt
-trigger-workspace/trigger-N/q01-<skill>/run-1/stream.jsonl activity.log trigger.json stderr.txt
-trigger-workspace/trigger-N/trigger.json                per-run records + the score
-trigger-workspace/trigger-N/report.md
+<skill>-workspace/trigger-N/meta.json                   the skill's query-file hash + EVERY installed
+                                                    skill's description verbatim
+<skill>-workspace/trigger-N/q01-<skill>/query.txt
+<skill>-workspace/trigger-N/q01-<skill>/run-1/stream.jsonl activity.log trigger.json stderr.txt
+<skill>-workspace/trigger-N/trigger.json                per-run records + the score
+<skill>-workspace/trigger-N/report.md
 
-trigger/descriptions/<skill>.json                       the loop's candidates, their notes, the applied one
+<skill>-workspace/pending-description.json              the one staged draft, when there is one
 ```
 
-The ledger is the only description state the tool owns, and it is committed with the set for the same
-reason a query carries a `why`: a wording nobody can explain is one the next change undoes. Its
-`applied.sha256` is what makes drift detectable — if `SKILL.md` no longer hashes to it, the file is
-ahead of the last measurement.
+There is no description ledger. The wordings a skill has been through are its trigger iterations —
+each one records the text it ran and the rate it produced — so the loop reads them instead of keeping
+a second copy that could drift. Drift is derived the same way: if no iteration recorded the text
+`SKILL.md` carries now, that wording has not been measured. What survives from the old ledger is the
+one thing a run cannot supply: a draft waiting for its run, staged in the workspace. When a wording is
+applied, the numbers that earned it are printed as a commit message, so git keeps what a pruned
+workspace may lose.
 
 `grading.json` carries the mechanical checks (containment, root guard, the skills the run actually
 loaded, the skill's own `verify` output), the final response, and — once `evalctl grade` has run —

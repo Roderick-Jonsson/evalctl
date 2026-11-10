@@ -125,7 +125,7 @@ func (m *Model) rankingRow(it iteration, w int, focused, best bool) string {
 		}
 	}
 	// The row's key is the iteration — the measured order — and the candidate's own id is printed
-	// beside it only when the two differ, which is the case a draft in the ledger created: without
+	// beside it only when the two differ, which is the case a staged draft creates: without
 	// it "iteration 5" and "candidate #5" would be two different wordings on one screen.
 	idTxt := fmt.Sprint(it.N)
 	if it.Cand.ID != it.N {
@@ -148,7 +148,7 @@ func (m *Model) rankingRow(it iteration, w int, focused, best bool) string {
 		marks += " " + tagRecommend.Render("Recommended")
 	}
 	room := w - lipgloss.Width(prefix) - lipgloss.Width(marks) - 1
-	note := oneLine(it.Cand.Note)
+	note := oneLine(it.Cand.Change)
 	if note == "" {
 		note = "—"
 	}
@@ -160,7 +160,7 @@ func (m *Model) rankingRow(it iteration, w int, focused, best bool) string {
 }
 
 // rankingTail is what the table still owes, said under it: the batch that would fill the dashes and
-// what it costs, a tie the set cannot break, the draft the ledger holds that is not a row here, and
+// what it costs, a tie the set cannot break, the draft staged in the workspace that is not a row here, and
 // the legend for a partial cell — each only when it applies.
 func (m *Model) rankingTail(w int) []string {
 	f := m.flow
@@ -194,7 +194,7 @@ func (m *Model) rankingTail(w int) []string {
 		if !live {
 			word = "a later revision stepped over it"
 		}
-		say(fmt.Sprintf("#%d is in the ledger but not this table — %s", draft.ID, word))
+		say(fmt.Sprintf("#%d is a staged draft, not this table — %s", draft.ID, word))
 	}
 	if m.anyPartial() {
 		say("of N — judged of the split; a stopped batch never ranks")
@@ -394,8 +394,8 @@ func (m *Model) openIterationRecord(it iteration) tea.Cmd {
 	}
 	d.fact("gap", gapOf(&it.Train.Train, valid))
 	d.fact("chars", fmt.Sprint(it.Cand.Chars))
-	if it.Cand.Note != "" {
-		d.fact("note", it.Cand.Note)
+	if it.Cand.Change != "" {
+		d.fact("change", it.Cand.Change)
 	}
 	if len(it.Train.Fixed) > 0 || len(it.Train.Broke) > 0 {
 		d.fact("diff", fmt.Sprintf("fixed %s · broke %s", idListOf(it.Train.Fixed), idListOf(it.Train.Broke)))
@@ -429,7 +429,7 @@ func (m *Model) openIterationRecord(it iteration) tea.Cmd {
 }
 
 // askApply is the write into SKILL.md, confirmed: it is the one action in the loop that changes what
-// ships, and the ledger records it beside the measurement that earned it.
+// ships, and the commit message carries the measurement that earned it.
 func (m *Model) askApply(it iteration) {
 	validTxt := "not validated"
 	if v := it.valid(); v != nil {
@@ -467,11 +467,11 @@ func (m *Model) openHoldout() tea.Cmd {
 		return nil
 	}
 	if f.lab.HoldoutRows == 0 {
-		m.setStatus("no holdout queries — add a few fresh ones to trigger/trigger-evals.json with split holdout", true)
+		m.setStatus("no holdout queries — add a few fresh ones to "+m.skill+"/evals/trigger-evals.json with split holdout", true)
 		return nil
 	}
-	if f.lab.Applied == nil {
-		m.setStatus("apply a candidate first — the holdout measures what ships", true)
+	if inFile := f.lab.Best; inFile != nil && !inFile.InFile {
+		m.setStatus("apply a wording first — the holdout measures what ships", true)
 		return nil
 	}
 	m.run = &runState{

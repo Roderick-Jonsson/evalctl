@@ -51,10 +51,12 @@ func (i Issue) String() string {
 var SlugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // Validate checks both lanes against the rules the runner enforces, plus the fixture-dir
-// consistency it assumes. Order is stable: trigger first, then skills alphabetically.
+// consistency it assumes. Order is stable: each skill's trigger file, then its cases, alphabetical.
 func (s *Store) Validate() []Issue {
 	var issues []Issue
-	issues = append(issues, s.validateTrigger()...)
+	for _, sk := range s.Skills {
+		issues = append(issues, s.validateTriggerFile(sk)...)
+	}
 
 	slugOwner := map[string]string{}
 	for _, sk := range s.Skills {
@@ -74,29 +76,29 @@ func (s *Store) Validate() []Issue {
 	return issues
 }
 
-func (s *Store) validateTrigger() []Issue {
-	if !s.TriggerOK {
-		return []Issue{{SeverityError, LaneTrigger, "", 0, "",
-			"trigger/trigger-evals.json is missing — the trigger lane cannot be managed"}}
+// validateTriggerFile checks one skill's trigger set. A skill with no trigger file is a warning,
+// not an error: a stage can be measured for output quality before anyone writes queries for its
+// description. Once the file exists, the same arithmetic applies to it alone — the set is one
+// skill's, so a split with one label is that skill's problem and nobody else's.
+func (s *Store) validateTriggerFile(sk *Skill) []Issue {
+	if !sk.TriggerOK {
+		return []Issue{{SeverityWarning, LaneTrigger, sk.Name, 0, "",
+			"no evals/" + TriggerFileName + " — the description cannot be measured for this skill"}}
 	}
 	var issues []Issue
-	qs := s.Trigger.Queries
+	qs := sk.Trigger.Queries
 	if len(qs) == 0 {
-		issues = append(issues, Issue{SeverityError, LaneTrigger, "", 0, "",
-			"no queries: the runner treats an empty query list as fatal"})
+		issues = append(issues, Issue{SeverityError, LaneTrigger, sk.Name, 0, "",
+			"no queries: the runner treats an empty trigger set as fatal"})
 	}
 
-	known := map[string]bool{}
-	for _, n := range s.SkillNames() {
-		known[n] = true
-	}
 	seenIDs := map[int]bool{}
 	splitLabels := map[string]map[bool]bool{SplitTrain: {}, SplitValidation: {}, SplitHoldout: {}}
 	splitCounts := map[string]int{}
 	textSeen := map[string]int{}
 
 	for _, q := range qs {
-		base := Issue{Lane: LaneTrigger, Skill: q.Skill, ID: q.ID}
+		base := Issue{Lane: LaneTrigger, Skill: sk.Name, ID: q.ID}
 		if q.ID <= 0 {
 			one := base
 			one.Severity = SeverityError
@@ -106,14 +108,15 @@ func (s *Store) validateTrigger() []Issue {
 		if seenIDs[q.ID] {
 			one := base
 			one.Severity = SeverityError
-			one.Msg = "duplicate id"
+			one.Msg = "duplicate id in this skill"
 			issues = append(issues, one)
 		}
 		seenIDs[q.ID] = true
-		if !known[q.Skill] {
+		if q.Skill != "" && q.Skill != sk.Name {
 			one := base
 			one.Severity = SeverityError
-			one.Msg = fmt.Sprintf("skill %q has no evals/evals.json in the tree (the runner rejects it)", q.Skill)
+			one.Msg = fmt.Sprintf("row names skill %q but lives in %s/evals/%s — a row's skill is its file",
+				q.Skill, sk.Name, TriggerFileName)
 			issues = append(issues, one)
 		}
 		if !KnownSplit(q.Split) {
@@ -147,19 +150,19 @@ func (s *Store) validateTrigger() []Issue {
 	for _, name := range []string{SplitTrain, SplitValidation} {
 		labels := splitLabels[name]
 		if len(labels) != 2 {
-			issues = append(issues, Issue{SeverityError, LaneTrigger, "", 0, "",
+			issues = append(issues, Issue{SeverityError, LaneTrigger, sk.Name, 0, "",
 				fmt.Sprintf("%s split has no %s queries — the runner refuses a split that carries one label",
 					name, missingLabel(labels))})
 		}
 		if splitCounts[name] == 0 {
-			issues = append(issues, Issue{SeverityError, LaneTrigger, "", 0, "",
+			issues = append(issues, Issue{SeverityError, LaneTrigger, sk.Name, 0, "",
 				fmt.Sprintf("%s split is empty", name)})
 		}
 	}
 	if total := splitCounts["train"] + splitCounts["validation"]; total > 0 {
 		share := float64(splitCounts["validation"]) / float64(total)
 		if share < 0.2 || share > 0.6 {
-			issues = append(issues, Issue{SeverityWarning, LaneTrigger, "", 0, "",
+			issues = append(issues, Issue{SeverityWarning, LaneTrigger, sk.Name, 0, "",
 				fmt.Sprintf("split is %d train / %d validation (%.0f%% validation); the guide asks for roughly 60/40",
 					splitCounts["train"], splitCounts["validation"], share*100)})
 		}

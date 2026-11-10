@@ -130,7 +130,7 @@ func TestTheSetSaysWhichRowsPassed(t *testing.T) {
 	}
 	// A candidate that has not been run has not graded to show, and the column says that too.
 	m.flow.draft = nil
-	if _, err := runner.New(m.store).SaveDescriptionCandidate("slide-builder", "a new wording entirely", "testing", 1); err != nil {
+	if _, err := runner.New(m.store).SaveDescriptionCandidate("slide-builder", "a new wording entirely"); err != nil {
 		t.Fatal(err)
 	}
 	m.reload()
@@ -167,12 +167,8 @@ func TestTheIterationTableListsEveryRun(t *testing.T) {
 	m, root := measured(t, []runner.ScoreRow{
 		row(1, "train", true, true), row(2, "train", false, false),
 	})
-	s := m.store
 	for n := 2; n <= 3; n++ {
 		text := strings.Repeat("word ", n) + "description"
-		if _, err := runner.New(s).SaveDescriptionCandidate("slide-builder", text, "revision "+string(rune('0'+n)), n-1); err != nil {
-			t.Fatal(err)
-		}
 		iterationDir(t, root, text, n, []runner.ScoreRow{
 			row(1, "train", true, true), row(2, "train", false, true),
 		})
@@ -180,7 +176,9 @@ func TestTheIterationTableListsEveryRun(t *testing.T) {
 	m.reload()
 	enterSection(m, secIteration)
 	view := quadView(m)
-	for _, want := range []string{"revision 2", "revision 3", "3 of 5"} {
+	// The note column is the computed change: each wording differs from the one before it by text,
+	// never by a typed reason.
+	for _, want := range []string{"+5 chars", "3 of 5"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("the iteration table is missing %q:\n%s", want, view)
 		}
@@ -239,52 +237,42 @@ func TestEnterSavesTheWordingThenMeasuresIt(t *testing.T) {
 	m, _ := measured(t, []runner.ScoreRow{row(1, "train", true, true), row(2, "train", false, false)})
 	enterSection(m, secIteration)
 
-	// Enter with an unchanged wording measures the candidate already in the ledger, and writes
-	// nothing: a run is not a revision. It lands on the live log — the run's settings are the set's,
-	// changed on the section pane, so no screen stands between the key and the spend.
+	// Enter with an unchanged wording measures the wording SKILL.md carries, and writes nothing: a
+	// run is not a revision. It lands on the live log — the run's settings are the set's, changed on
+	// the section pane, so no screen stands between the key and the spend.
 	press(m, "enter")
 	if m.mode != screenRunLive || m.run == nil || m.run.live == nil {
-		t.Fatalf("enter runs the stored candidate: mode = %d", m.mode)
+		t.Fatalf("enter runs the stored wording: mode = %d", m.mode)
 	}
 	if m.run.cand != 1 || !strings.Contains(m.run.scope, "candidate #1") {
 		t.Fatalf("the run must name what it measures: cand = %d, scope = %q", m.run.cand, m.run.scope)
 	}
-	led, _, err := m.store.LoadDescriptionLedger("slide-builder")
-	if err != nil || len(led.Candidates) != 1 {
-		t.Fatalf("a run wrote a candidate: %d %v", len(led.Candidates), err)
+	if _, staged := runner.New(m.store).PendingDescription("slide-builder"); staged {
+		t.Fatal("a run staged a draft: enter measures what is already written")
 	}
 	// The test leaves the live screen the way the run's own leave key would, without waiting for the
 	// stub binary to fail: what is under test is the key, not the run.
 	m.run, m.mode = nil, screenFlow
 
-	// Typed wording is saved as the next candidate, and measured in the same keypress.
+	// A typed wording is staged in the workspace, and measured in the same keypress.
 	press(m, "tab") // wording
 	for _, key := range []string{" ", "+", "d", "e", "c", "k"} {
 		press(m, key)
 	}
-	press(m, "tab") // note
 	press(m, "tab") // set
 	press(m, "enter")
 
-	led, _, err = m.store.LoadDescriptionLedger("slide-builder")
-	if err != nil {
-		t.Fatal(err)
+	if got := m.store.SkillDescription("slide-builder"); !strings.HasSuffix(strings.TrimSpace(got), "+deck") {
+		t.Fatalf("the typed wording never reached SKILL.md: %q", got)
 	}
-	if len(led.Candidates) != 2 {
-		t.Fatalf("%d candidates, want the baseline and the one written here", len(led.Candidates))
-	}
-	last := led.Candidates[len(led.Candidates)-1]
-	if !strings.HasSuffix(strings.TrimSpace(last.Text), "+deck") {
-		t.Fatalf("the candidate kept the wrong text: %q", last.Text)
-	}
-	if last.Parent != 1 {
-		t.Fatalf("the revision must name what it revises: parent = %d", last.Parent)
+	if _, staged := runner.New(m.store).PendingDescription("slide-builder"); staged {
+		t.Fatal("the draft outlived becoming the file")
 	}
 	if m.mode != screenRunLive {
-		t.Fatalf("enter runs what it saved: mode = %d", m.mode)
+		t.Fatalf("enter runs what it staged: mode = %d", m.mode)
 	}
 	if m.run == nil || m.run.cand != 2 {
-		t.Fatalf("the run must measure the candidate just written, not the one before it")
+		t.Fatalf("the run must measure the wording just written, not the one before it")
 	}
 	if !strings.Contains(m.run.scope, "candidate #2") {
 		t.Fatalf("the run must name the candidate it measures: %q", m.run.scope)
@@ -303,7 +291,7 @@ func TestTheWorkbenchCursorWalksTheFailures(t *testing.T) {
 		{ID: 6, Skill: "slide-builder", ShouldTrigger: false, Split: "train",
 			Query: "summarise the incident", Why: "noise"},
 	} {
-		if err := s.AddTrigger(q); err != nil {
+		if err := s.AddTrigger("slide-builder", q); err != nil {
 			t.Fatal(err)
 		}
 	}

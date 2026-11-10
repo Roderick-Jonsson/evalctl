@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"evalctl/internal/diff"
 	"evalctl/internal/model"
 	"evalctl/internal/store"
 )
@@ -125,39 +125,21 @@ type LabMeasure struct {
 	HoldoutFull    bool `json:"holdout_full"`
 }
 
-// LabCandidate is one wording, the measurements of it, and what it is to the tree right now.
+// LabCandidate is one wording of the description, the iterations that measured it, and what it is to
+// the tree right now. It is assembled from the runs on disk — there is no ledger — so its id is the
+// first trigger iteration that measured this text: "#7" means <skill>-workspace/trigger-7.
 type LabCandidate struct {
-	model.DescriptionCandidate
-	SHA      string       `json:"sha"`
-	Chars    int          `json:"chars"`
-	Measures []LabMeasure `json:"measures"`
-	Applied  bool         `json:"applied"`
-	InFile   bool         `json:"in_file"`
-}
-
-// MarshalJSON keeps the ledger's own fields and adds the measurement view beside them. Without it
-// DescriptionCandidate's method is promoted onto this type and wins, so `lab --json` printed the
-// ledger row and dropped sha, chars, measures, applied and in_file — the five things the JSON output
-// exists for.
-func (c LabCandidate) MarshalJSON() ([]byte, error) {
-	base, err := json.Marshal(c.DescriptionCandidate)
-	if err != nil {
-		return nil, err
-	}
-	obj := map[string]any{}
-	if err := json.Unmarshal(base, &obj); err != nil {
-		return nil, err
-	}
-	obj["sha"] = c.SHA
-	obj["chars"] = c.Chars
-	if c.Measures == nil {
-		obj["measures"] = []LabMeasure{}
-	} else {
-		obj["measures"] = c.Measures
-	}
-	obj["applied"] = c.Applied
-	obj["in_file"] = c.InFile
-	return json.Marshal(obj)
+	ID         int          `json:"id"`
+	Parent     int          `json:"parent,omitempty"` // the wording measured before this one
+	Change     string       `json:"change,omitempty"` // computed from the diff against Parent
+	Text       string       `json:"text"`
+	SHA        string       `json:"sha"`
+	Chars      int          `json:"chars"`
+	Created    string       `json:"created,omitempty"`
+	Iterations []int        `json:"iterations,omitempty"`
+	Measures   []LabMeasure `json:"measures"`
+	InFile     bool         `json:"in_file"`
+	Pending    bool         `json:"pending,omitempty"` // a draft in the workspace, never run
 }
 
 // judged reports whether a measurement judged rows of one split.
@@ -292,26 +274,28 @@ type LabNext struct {
 }
 
 // Lab is a skill's whole state in the loop.
+//
+// There is no ledger: the candidates are the wordings its trigger iterations recorded, and the one
+// a draft in the workspace proposes. Everything the loop decides is computed from those runs, so a
+// pruned workspace costs history, never the ability to read the current state.
 type Lab struct {
-	Skill          string                    `json:"skill"`
-	File           string                    `json:"file"` // the description SKILL.md carries now
-	FileSHA        string                    `json:"file_sha"`
-	FileChars      int                       `json:"file_chars"`
-	FileInLedger   bool                      `json:"file_in_ledger"`
-	Candidates     []LabCandidate            `json:"candidates"`
-	Applied        *model.AppliedDescription `json:"applied,omitempty"`
-	Drifted        bool                      `json:"drifted"`
-	Checks         []LabCheck                `json:"checks"`
-	Ready          bool                      `json:"ready"`
-	Best           *LabCandidate             `json:"best,omitempty"`
-	Next           LabNext                   `json:"next"`
-	Iterations     int                       `json:"iterations"` // trigger iterations that measured this skill
-	Measured       int                       `json:"measured"`
-	TrainRows      int                       `json:"train_rows"`
-	ValidationRows int                       `json:"validation_rows"`
-	HoldoutRows    int                       `json:"holdout_rows"`
-	Runs           int                       `json:"runs"`
-	Threshold      float64                   `json:"threshold"`
+	Skill          string         `json:"skill"`
+	File           string         `json:"file"` // the description SKILL.md carries now
+	FileSHA        string         `json:"file_sha"`
+	FileChars      int            `json:"file_chars"`
+	Candidates     []LabCandidate `json:"candidates"`
+	Drifted        bool           `json:"drifted"` // the file's wording is not the newest measured one
+	Checks         []LabCheck     `json:"checks"`
+	Ready          bool           `json:"ready"`
+	Best           *LabCandidate  `json:"best,omitempty"`
+	Next           LabNext        `json:"next"`
+	Iterations     int            `json:"iterations"` // trigger iterations that measured this skill
+	Measured       int            `json:"measured"`
+	TrainRows      int            `json:"train_rows"`
+	ValidationRows int            `json:"validation_rows"`
+	HoldoutRows    int            `json:"holdout_rows"`
+	Runs           int            `json:"runs"`
+	Threshold      float64        `json:"threshold"`
 }
 
 // Candidate finds one candidate by id.
@@ -335,32 +319,23 @@ func LoopRows(rows []ScoreRow) []ScoreRow {
 	return out
 }
 
-// DescriptionLab reads the skill's ledger, joins it against every trigger iteration that recorded
-// the skill's description, and says what the guide would have you do next.
+// DescriptionLab joins the skill's trigger iterations together and says what the guide would have
+// you do next. The candidates are the wordings those runs recorded, plus the draft in the workspace
+// if there is one — so nothing here can disagree with the measurements: they are the same read.
 func (r *Runner) DescriptionLab(skill string) (*Lab, error) {
 	if r.Store.Skill(skill) == nil {
 		return nil, fmt.Errorf("unknown skill %q", skill)
 	}
-	ledger, _, err := r.Store.LoadDescriptionLedger(skill)
-	if err != nil {
-		return nil, err
-	}
-	lab := &Lab{Skill: skill, Applied: ledger.Applied}
+	cfg := r.TriggerConfigOf(skill)
+	lab := &Lab{Skill: skill, Runs: cfg.Runs, Threshold: cfg.Threshold}
 	lab.File = r.Store.SkillDescription(skill)
 	lab.FileSHA = store.HashText(lab.File)
 	lab.FileChars = len([]rune(lab.File))
-	cfg := r.TriggerConfigOf()
-	lab.Runs, lab.Threshold = cfg.Runs, cfg.Threshold
-
-	measured, err := r.descriptionMeasures(skill)
-	if err != nil {
-		return nil, err
-	}
 
 	// The set's own sizes come first: they are what decides whether a measurement judged all of a
 	// split, and that has to be known before any measurement is chosen for one.
-	for _, e := range r.Store.Rows(store.LaneTrigger, store.Filter{Skill: skill}) {
-		switch r.Store.Trigger.Queries[e.Index].Split {
+	for _, q := range r.Store.QueriesOf(skill) {
+		switch q.Split {
 		case SplitTrain:
 			lab.TrainRows++
 		case SplitValidation:
@@ -370,57 +345,67 @@ func (r *Runner) DescriptionLab(skill string) (*Lab, error) {
 		}
 	}
 
-	// Every measurement of a wording is kept, not just the newest: the train run and the
-	// validation run are two measurements of one candidate, and joining by hash without keeping
-	// both would throw away whichever half ran first.
-	bySHA := map[string][]LabMeasure{}
+	measured, err := r.descriptionMeasures(skill)
+	if err != nil {
+		return nil, err
+	}
+
+	// One candidate per distinct wording, in the order the runs first measured it. Every measurement
+	// of a wording is kept, not just the newest: the train run and the validation run are two
+	// measurements of one candidate, and joining by hash without keeping both would throw away
+	// whichever half ran first.
+	at := map[string]int{}
 	for _, m := range measured {
 		m.measure.TrainFull = complete(m.measure.Train, lab.TrainRows)
 		m.measure.ValidationFull = complete(m.measure.Validation, lab.ValidationRows)
 		m.measure.HoldoutFull = complete(m.measure.Holdout, lab.HoldoutRows)
-		bySHA[m.sha] = append(bySHA[m.sha], m.measure)
-	}
-	for _, c := range ledger.Candidates {
-		view := LabCandidate{DescriptionCandidate: c, SHA: store.HashText(c.Text),
-			Chars: len([]rune(store.FoldText(c.Text)))}
-		if ms, ok := bySHA[view.SHA]; ok {
-			view.Measures = append(view.Measures, ms...)
+		i, seen := at[m.sha]
+		if !seen {
+			lab.Candidates = append(lab.Candidates, LabCandidate{
+				ID: m.measure.Iteration, SHA: m.sha, Text: m.text,
+				Chars: len([]rune(store.FoldText(m.text))), Created: m.measure.Started,
+			})
+			i = len(lab.Candidates) - 1
+			at[m.sha] = i
 		}
-		view.InFile = view.SHA == lab.FileSHA
-		view.Applied = lab.Applied != nil && lab.Applied.Candidate == c.ID
-		if view.Applied && lab.Applied != nil && lab.Applied.SHA256 != "" && lab.Applied.SHA256 != lab.FileSHA {
-			lab.Drifted = true
-		}
-		lab.Candidates = append(lab.Candidates, view)
+		c := &lab.Candidates[i]
+		c.Measures = append(c.Measures, m.measure)
+		c.Iterations = append(c.Iterations, m.measure.Iteration)
 	}
+
+	fileMeasured := false
 	for i := range lab.Candidates {
-		if !lab.Candidates[i].Unmeasured() {
+		c := &lab.Candidates[i]
+		c.InFile = c.SHA == lab.FileSHA
+		if c.InFile {
+			fileMeasured = true
+		}
+		if i > 0 {
+			prev := &lab.Candidates[i-1]
+			c.Parent = prev.ID
+			c.Change = changeSummary(prev.Text, c.Text)
+		}
+		if !c.Unmeasured() {
 			lab.Measured++
 		}
 		// Iterations are measured wordings, which is what the loop counts and what the gate is
 		// stated in: a candidate's train run and its validation run are two measurements of the same
 		// iteration, so counting records would report the loop as twice as long as it is.
-		if lab.Candidates[i].MeasureOn(SplitTrain) != nil {
+		if c.MeasureOn(SplitTrain) != nil {
 			lab.Iterations++
 		}
 	}
-	// Fixed/broke are the diff against the parent's own measurement: the record of what a revision
-	// actually did, which is what stops the next revision from re-breaking what this one fixed.
-	for i := range lab.Candidates {
-		c := &lab.Candidates[i]
-		if c.Parent == 0 {
+
+	// Fixed/broke are the diff against the previous wording's own measurement: the record of what a
+	// revision actually did, which is what stops the next revision from re-breaking what this one
+	// fixed. The diff is computed split by split, because the two halves of the loop are two
+	// measurements: comparing the newest measure of each side compares a validation run with a train
+	// run the moment the halves ran in a different order.
+	for i := 1; i < len(lab.Candidates); i++ {
+		c, parent := &lab.Candidates[i], &lab.Candidates[i-1]
+		if parent.Unmeasured() || c.Unmeasured() {
 			continue
 		}
-		parent := lab.Candidate(c.Parent)
-		if parent == nil || parent.Unmeasured() || c.Unmeasured() {
-			continue
-		}
-		// The diff is computed split by split, because the two halves of the loop are two
-		// measurements: comparing the newest measure of each side compares a validation run with a
-		// train run the moment the halves ran in a different order, and then reports "broke q63" for
-		// a row the wording was never measured on twice. Each measure carries its own split's diff,
-		// and when one iteration holds both halves — a single run over the whole set — it carries
-		// both, which is the union the reader wants anyway.
 		for _, split := range []string{SplitTrain, SplitValidation, SplitHoldout} {
 			before, after := parent.MeasureOn(split), c.MeasureOn(split)
 			if !judged(before, split) || !judged(after, split) {
@@ -449,29 +434,71 @@ func (r *Runner) DescriptionLab(skill string) (*Lab, error) {
 		}
 	}
 
-	lab.FileInLedger = false
-	for _, c := range lab.Candidates {
-		if c.InFile {
-			lab.FileInLedger = true
+	// A draft in the workspace is the one candidate with no measurement: it stages a wording the
+	// next run will measure, which is what the ledger's unmeasured candidates used to do.
+	if draft, ok := r.PendingDescription(skill); ok && store.HashText(draft.Text) != lab.FileSHA && !seenSHA(lab.Candidates, store.HashText(draft.Text)) {
+		parentID, parentText := 0, ""
+		if n := len(lab.Candidates); n > 0 {
+			parentID, parentText = lab.Candidates[n-1].ID, lab.Candidates[n-1].Text
 		}
+		lab.Candidates = append(lab.Candidates, LabCandidate{
+			ID: r.NextIteration(r.TriggerWorkspace(skill), "trigger"), Text: draft.Text,
+			SHA: store.HashText(draft.Text), Chars: len([]rune(store.FoldText(draft.Text))),
+			Created: draft.At, Pending: true, Parent: parentID, Change: changeSummary(parentText, draft.Text),
+		})
 	}
+
+	// Drift is the file having moved since the last run: the wording in SKILL.md has no measurement
+	// of its own, so any rate beside it would describe text nobody has run.
+	lab.Drifted = len(lab.Candidates) > 0 && !fileMeasured
+
 	lab.Checks, lab.Ready = r.labChecks(skill)
 	lab.Best = lab.best()
 	lab.Next = lab.next()
 	return lab, nil
 }
 
+func seenSHA(cands []LabCandidate, sha string) bool {
+	for _, c := range cands {
+		if c.SHA == sha {
+			return true
+		}
+	}
+	return false
+}
+
+// changeSummary is the table's CHANGE cell, computed rather than typed: how much this wording added
+// and removed against the previous one. It is the honest version of the note a ledger used to carry,
+// and it cannot go stale.
+func changeSummary(before, after string) string {
+	if strings.TrimSpace(before) == "" {
+		return fmt.Sprintf("%d chars, first wording", len([]rune(store.FoldText(after))))
+	}
+	segs := diff.Segments(store.FoldText(before), store.FoldText(after))
+	added, removed := diff.SegmentsStat(segs)
+	switch {
+	case added == 0 && removed == 0:
+		return "unchanged"
+	case removed == 0:
+		return fmt.Sprintf("+%d chars", added)
+	case added == 0:
+		return fmt.Sprintf("−%d chars", removed)
+	}
+	return fmt.Sprintf("+%d/−%d chars", added, removed)
+}
+
 type measuredDescription struct {
 	sha     string
+	text    string
 	measure LabMeasure
 }
 
-// descriptionMeasures reads every trigger iteration that recorded this skill's description, with
-// that skill's own rows. The iteration is global and the skill scoped, exactly like the results tab.
+// descriptionMeasures reads every trigger iteration in this skill's workspace, with the description
+// that iteration ran and the rates its own rows produced.
 func (r *Runner) descriptionMeasures(skill string) ([]measuredDescription, error) {
-	entries, err := os.ReadDir(r.TriggerWorkspace())
+	entries, err := os.ReadDir(r.TriggerWorkspace(skill))
 	if err != nil {
-		return nil, nil // no trigger run has ever happened here
+		return nil, nil // no trigger run has ever happened for this skill
 	}
 	var out []measuredDescription
 	for _, e := range entries {
@@ -482,7 +509,7 @@ func (r *Runner) descriptionMeasures(skill string) ([]measuredDescription, error
 		if err != nil {
 			continue
 		}
-		dir := filepath.Join(r.TriggerWorkspace(), e.Name())
+		dir := filepath.Join(r.TriggerWorkspace(skill), e.Name())
 		var meta metaTrigger
 		if err := readJSONFile(filepath.Join(dir, "meta.json"), &meta); err != nil {
 			continue
@@ -514,7 +541,7 @@ func (r *Runner) descriptionMeasures(skill string) ([]measuredDescription, error
 			Holdout:    labTally(tally(splitRows(rows, SplitHoldout))),
 			Rows:       rows,
 		}
-		out = append(out, measuredDescription{sha: store.HashText(desc.Description), measure: measure})
+		out = append(out, measuredDescription{sha: store.HashText(desc.Description), text: desc.Description, measure: measure})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].measure.Iteration < out[j].measure.Iteration })
 	return out, nil
@@ -575,14 +602,12 @@ func betterPick(a, b *LabCandidate) bool {
 // labChecks is the guide's "designing trigger eval queries" section, tested.
 func (r *Runner) labChecks(skill string) ([]LabCheck, bool) {
 	var checks []LabCheck
-	rows := r.Store.Rows(store.LaneTrigger, store.Filter{Skill: skill})
 	train := 0
 	validation := 0
 	holdout := 0
 	labelsOf := map[string]map[bool]bool{SplitTrain: {}, SplitValidation: {}, SplitHoldout: {}}
 	missingWhy := 0
-	for _, e := range rows {
-		q := r.Store.Trigger.Queries[e.Index]
+	for _, q := range r.Store.QueriesOf(skill) {
 		labelsOf[q.Split][q.ShouldTrigger] = true
 		switch q.Split {
 		case SplitTrain:
@@ -627,9 +652,10 @@ func (r *Runner) labChecks(skill string) ([]LabCheck, bool) {
 		Detail: fmt.Sprintf("%d row(s) carry no `why` — the near-miss record is what a revision reads", missingWhy),
 		Fix:    "e",
 	})
+	cfg := r.TriggerConfigOf(skill)
 	checks = append(checks, LabCheck{
-		Key: "set.runs", OK: r.TriggerConfigOf().Runs >= 3, Blocking: false,
-		Detail: fmt.Sprintf("%d run(s) per query — one cannot tell a flaky miss from a real one", r.TriggerConfigOf().Runs),
+		Key: "set.runs", OK: cfg.Runs >= 3, Blocking: false,
+		Detail: fmt.Sprintf("%d run(s) per query — one cannot tell a flaky miss from a real one", cfg.Runs),
 	})
 	checks = append(checks, LabCheck{
 		Key: "set.holdout", OK: holdout > 0, Blocking: false,
@@ -673,27 +699,22 @@ func (l *Lab) next() LabNext {
 			}
 		}
 	}
-	if l.Drifted && l.Applied != nil {
-		return LabNext{Step: StepEvaluate, Key: "evaluate",
-			Line:   fmt.Sprintf("SKILL.md has moved since #%d was applied — evaluate it again", l.Applied.Candidate),
-			Detail: "the applied description is not the text in the file, so the rate beside it describes something else"}
-	}
-	if len(l.Candidates) == 0 || !l.FileInLedger {
-		line := "adopt the description SKILL.md carries as candidate #1"
-		if len(l.Candidates) > 0 {
-			line = fmt.Sprintf("SKILL.md's wording is not in the ledger — adopt it as candidate #%d", l.Candidates[len(l.Candidates)-1].ID+1)
-		}
-		return LabNext{Step: StepBaseline, Key: "baseline", Line: line,
-			Detail: "the loop starts from what the router reads today, so the first candidate is the file itself"}
-	}
 	last := l.latest()
-	if last == nil {
-		return LabNext{Step: StepBaseline, Key: "baseline", Line: "write the baseline wording"}
-	}
-	if last.Unmeasured() {
+	if last != nil && last.Pending {
 		return LabNext{Step: StepEvaluate, Key: "evaluate",
-			Line:   fmt.Sprintf("evaluate #%d — %d chars, %d train + %d validation rows × %d runs", last.ID, last.Chars, l.Count(SplitTrain), l.Count(SplitValidation), l.Runs),
-			Detail: "evaluating writes the wording into SKILL.md first: that is what the router reads"}
+			Line: fmt.Sprintf("evaluate #%d — %d chars, %d train + %d validation rows × %d runs",
+				last.ID, last.Chars, l.Count(SplitTrain), l.Count(SplitValidation), l.Runs),
+			Detail: "evaluating writes the draft into SKILL.md first: that is what the router reads"}
+	}
+	if l.Drifted {
+		return LabNext{Step: StepEvaluate, Key: "evaluate",
+			Line:   "the wording in SKILL.md has not been measured — evaluate it",
+			Detail: "no trigger run recorded this text, so a rate beside it would describe something else"}
+	}
+	if last == nil {
+		return LabNext{Step: StepBaseline, Key: "baseline",
+			Line:   "evaluate the description SKILL.md carries",
+			Detail: "the loop starts from what the router reads today; the first run is the baseline"}
 	}
 	failed := last.FailedTrain()
 	if len(failed) > 0 {
@@ -706,8 +727,9 @@ func (l *Lab) next() LabNext {
 			Line:   fmt.Sprintf("%d train row(s) fail on #%d — %s", len(failed), last.ID, idsLine(failed)),
 			Detail: "these guide the revision; the validation rows judge it. V shows them, and should not, until the next draft exists"}
 	}
-	// The train set passes for this candidate. Choose, then close the loop with fresh queries.
-	if l.Applied == nil || l.Best == nil || l.Applied.Candidate != l.Best.ID {
+	// The train set passes for this wording. Choose, then close the loop with fresh queries.
+	inFile := l.inFile()
+	if l.Best == nil || inFile == nil || l.Best.ID != inFile.ID {
 		best := l.Best
 		if best == nil {
 			best = last
@@ -728,20 +750,31 @@ func (l *Lab) next() LabNext {
 		return LabNext{Step: StepBest, Key: "best", Line: line,
 			Detail: "the best description is not necessarily the last one; validation is the number that ranks them"}
 	}
-	if hold := last.MeasureOn(SplitHoldout); hold != nil && hold.Holdout.Judged > 0 {
+	if hold := inFile.MeasureOn(SplitHoldout); hold != nil && hold.Holdout.Judged > 0 {
 		return LabNext{Step: StepApply, Key: "closed",
 			Line: fmt.Sprintf("loop closed: #%d applied · fresh queries %d/%d (%s)",
-				l.Applied.Candidate, hold.Holdout.Passed, hold.Holdout.Judged, pctOf(hold.Holdout, true)),
+				inFile.ID, hold.Holdout.Passed, hold.Holdout.Judged, pctOf(hold.Holdout, true)),
 			Detail: "reopen the loop when the set changes; the applied description stays the record of why this wording won"}
 	}
 	if l.Count(SplitHoldout) == 0 {
 		return LabNext{Step: StepApply, Key: "apply",
-			Line:   fmt.Sprintf("#%d is applied and the train set is clean — write 5–10 fresh queries", l.Applied.Candidate),
+			Line:   fmt.Sprintf("#%d is applied and the train set is clean — write 5–10 fresh queries", inFile.ID),
 			Detail: "queries that were never part of the loop are the only honest check that the wording generalizes"}
 	}
 	return LabNext{Step: StepApply, Key: "apply",
 		Line:   "5–10 fresh queries are written but have not been run — run them once",
 		Detail: "a fresh set that gets re-run becomes a validation set, and the check stops being honest"}
+}
+
+// inFile is the candidate whose wording SKILL.md carries, or nil when the file has moved since the
+// last run (which is what Drifted says).
+func (l *Lab) inFile() *LabCandidate {
+	for i := range l.Candidates {
+		if l.Candidates[i].InFile {
+			return &l.Candidates[i]
+		}
+	}
+	return nil
 }
 
 // Count is how many of this skill's rows a split holds, read off the set rather than off a run: a
@@ -833,204 +866,168 @@ func pctOf(t LabTally, dash bool) string {
 
 // ---------------------------------------------------------------- writes
 
-// AdoptFileDescription copies the description SKILL.md carries into the ledger as the loop's first
-// candidate. It is how the loop starts from the truth rather than from a retyped paraphrase.
-func (r *Runner) AdoptFileDescription(skill string) (model.DescriptionCandidate, error) {
-	text := store.FoldText(r.Store.SkillDescription(skill))
-	if text == "" {
-		return model.DescriptionCandidate{}, fmt.Errorf("%s/SKILL.md has no description to adopt", skill)
-	}
-	ledger, _, err := r.Store.LoadDescriptionLedger(skill)
-	if err != nil {
-		return model.DescriptionCandidate{}, err
-	}
-	sha := store.HashText(text)
-	for _, c := range ledger.Candidates {
-		if store.HashText(c.Text) == sha {
-			return c, fmt.Errorf("#%d already carries this description", c.ID)
-		}
-	}
-	c := model.DescriptionCandidate{ID: r.Store.NextDescriptionCandidateID(skill), Text: text,
-		Origin: model.CandidateFromFile, Note: "the description in SKILL.md when the loop started",
-		Created: timestamp()}
-	ledger.Skill = skill
-	ledger.Candidates = append(ledger.Candidates, c)
-	if err := r.Store.SaveDescriptionLedger(ledger); err != nil {
-		return model.DescriptionCandidate{}, err
-	}
-	return c, nil
+// PendingDescription is a draft wording waiting for its run: the loop's staging slot. It lives in
+// the workspace, because it is work in progress, not test data.
+type PendingDescription struct {
+	Text string `json:"text"`
+	At   string `json:"at,omitempty"`
 }
 
-// SaveDescriptionCandidate records a revision: the text, the one-line note the guide's step 3 asks
-// for ("what changed, and toward what"), and the candidate it revises.
-func (r *Runner) SaveDescriptionCandidate(skill, text, note string, parent int) (model.DescriptionCandidate, error) {
+// PendingDescriptionPath is <skill>-workspace/pending-description.json.
+func (r *Runner) PendingDescriptionPath(skill string) string {
+	return filepath.Join(r.TriggerWorkspace(skill), "pending-description.json")
+}
+
+// PendingDescription reads the draft, if the workspace holds one.
+func (r *Runner) PendingDescription(skill string) (PendingDescription, bool) {
+	var p PendingDescription
+	if err := readJSONFile(r.PendingDescriptionPath(skill), &p); err != nil {
+		return PendingDescription{}, false
+	}
+	if strings.TrimSpace(p.Text) == "" {
+		return PendingDescription{}, false
+	}
+	return p, true
+}
+
+// SaveDescriptionCandidate stages a draft: the wording a run should measure next. It refuses the
+// shapes the lab cannot measure — empty text, over the format's ceiling, or a wording the runs
+// already recorded (a revision that changes nothing cannot be measured apart from its parent).
+func (r *Runner) SaveDescriptionCandidate(skill, text string) (PendingDescription, error) {
 	text = store.FoldText(text)
 	if text == "" {
-		return model.DescriptionCandidate{}, fmt.Errorf("the description is empty")
+		return PendingDescription{}, fmt.Errorf("the description is empty")
 	}
 	if n := len([]rune(text)); n > store.DescriptionLimit {
-		return model.DescriptionCandidate{}, fmt.Errorf("the description is %d chars — the limit is %d", n, store.DescriptionLimit)
+		return PendingDescription{}, fmt.Errorf("the description is %d chars — the limit is %d", n, store.DescriptionLimit)
 	}
-	ledger, _, err := r.Store.LoadDescriptionLedger(skill)
+	lab, err := r.DescriptionLab(skill)
 	if err != nil {
-		return model.DescriptionCandidate{}, err
-	}
-	if parent != 0 && ledger.Candidates != nil {
-		found := false
-		for _, c := range ledger.Candidates {
-			if c.ID == parent {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return model.DescriptionCandidate{}, fmt.Errorf("candidate #%d is not in this ledger", parent)
-		}
+		return PendingDescription{}, err
 	}
 	sha := store.HashText(text)
-	for _, c := range ledger.Candidates {
-		if store.HashText(c.Text) == sha {
-			return model.DescriptionCandidate{}, fmt.Errorf("#%d already carries this wording — a revision that changes nothing cannot be measured apart from it", c.ID)
+	if sha == lab.FileSHA {
+		return PendingDescription{}, fmt.Errorf("this is already the wording in SKILL.md — a revision that changes nothing cannot be measured apart from it")
+	}
+	for _, c := range lab.Candidates {
+		if c.SHA == sha {
+			return PendingDescription{}, fmt.Errorf("#%d already carries this wording — a revision that changes nothing cannot be measured apart from it", c.ID)
 		}
 	}
-	c := model.DescriptionCandidate{ID: r.Store.NextDescriptionCandidateID(skill), Parent: parent,
-		Origin: model.CandidateFromRevision, Note: strings.TrimSpace(note), Text: text, Created: timestamp()}
-	ledger.Skill = skill
-	ledger.Candidates = append(ledger.Candidates, c)
-	if err := r.Store.SaveDescriptionLedger(ledger); err != nil {
-		return model.DescriptionCandidate{}, err
+	p := PendingDescription{Text: text, At: timestamp()}
+	if err := os.MkdirAll(r.TriggerWorkspace(skill), 0o755); err != nil {
+		return PendingDescription{}, err
 	}
-	return c, nil
+	if err := writeJSONFile(r.PendingDescriptionPath(skill), p); err != nil {
+		return PendingDescription{}, err
+	}
+	return p, nil
+}
+
+// DiscardPending drops the staged draft.
+func (r *Runner) DiscardPending(skill string) error {
+	err := os.Remove(r.PendingDescriptionPath(skill))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // PrepareMeasure puts a candidate's wording into SKILL.md, because the router reads the file and
 // nothing else. It says what it replaced: a silent rewrite of the file the agent is about to be
 // given is the one administrative step a person must not have to wonder about.
 func (r *Runner) PrepareMeasure(skill string, id int) (string, error) {
-	ledger, _, err := r.Store.LoadDescriptionLedger(skill)
-	if err != nil {
-		return "", err
-	}
-	var text string
-	for _, c := range ledger.Candidates {
-		if c.ID == id {
-			text = c.Text
-		}
-	}
-	if text == "" {
-		return "", fmt.Errorf("candidate #%d is not in this ledger", id)
-	}
-	before := r.Store.SkillDescription(skill)
-	if store.HashText(before) == store.HashText(text) {
-		return fmt.Sprintf("#%d is already the description in SKILL.md", id), nil
-	}
-	if err := r.Store.SetSkillDescription(skill, text); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("#%d written into %s/SKILL.md (previous wording in .evalctl/backups/)", id, skill), nil
-}
-
-// ApplyDescription settles the loop on one candidate: the file is brought to that wording if some
-// later measurement left another one there, and the ledger records which iteration measured it.
-func (r *Runner) ApplyDescription(skill string, id int) (string, error) {
-	ledger, _, err := r.Store.LoadDescriptionLedger(skill)
-	if err != nil {
-		return "", err
-	}
-	var chosen *model.DescriptionCandidate
-	for i := range ledger.Candidates {
-		if ledger.Candidates[i].ID == id {
-			chosen = &ledger.Candidates[i]
-		}
-	}
-	if chosen == nil {
-		return "", fmt.Errorf("candidate #%d is not in this ledger", id)
-	}
 	lab, err := r.DescriptionLab(skill)
 	if err != nil {
 		return "", err
 	}
-	view := lab.Candidate(id)
-	if view == nil || view.Unmeasured() {
+	c := lab.Candidate(id)
+	if c == nil {
+		return "", fmt.Errorf("#%d is not one of this skill's wordings", id)
+	}
+	if c.InFile {
+		if c.Pending {
+			_ = r.DiscardPending(skill)
+		}
+		return fmt.Sprintf("#%d is already the description in SKILL.md", id), nil
+	}
+	if err := r.Store.SetSkillDescription(skill, c.Text); err != nil {
+		return "", err
+	}
+	note := fmt.Sprintf("#%d written into %s/SKILL.md (previous wording in .evalctl/backups/)", id, skill)
+	if c.Pending {
+		if err := r.DiscardPending(skill); err != nil {
+			return "", err
+		}
+		note += " — the draft became the file"
+	}
+	return note, nil
+}
+
+// ApplyDescription settles the loop on one wording: the file is brought to it if some later
+// measurement left another one there. Nothing is recorded anywhere — the file IS the record, and the
+// numbers travel in the commit message the caller prints, so git keeps what the workspace may lose.
+func (r *Runner) ApplyDescription(skill string, id int) (string, error) {
+	lab, err := r.DescriptionLab(skill)
+	if err != nil {
+		return "", err
+	}
+	c := lab.Candidate(id)
+	if c == nil {
+		return "", fmt.Errorf("#%d is not one of this skill's wordings", id)
+	}
+	if c.Unmeasured() {
 		return "", fmt.Errorf("#%d has not been measured — apply is a choice between measured descriptions", id)
 	}
 	// Each half of the loop is its own measurement, and which one ran last is an accident of the
 	// operator's order: asking the newest one for a train rate rejects a wording whose last run was
-	// the validation run, and records the wrong iteration when it does not.
-	train := view.MeasureOn(SplitTrain)
+	// the validation run.
+	train := c.MeasureOn(SplitTrain)
 	if train == nil || train.Train.Judged == 0 {
 		return "", fmt.Errorf("#%d was measured on no train rows — there is nothing to apply", id)
 	}
 	notes := []string{}
-	if !view.InFile {
-		if err := r.Store.SetSkillDescription(skill, chosen.Text); err != nil {
+	if !c.InFile {
+		if err := r.Store.SetSkillDescription(skill, c.Text); err != nil {
 			return "", err
 		}
 		notes = append(notes, fmt.Sprintf("#%d written into %s/SKILL.md", id, skill))
 	}
-	ledger.Applied = &model.AppliedDescription{Candidate: id, Iteration: train.Iteration,
-		SHA256: view.SHA, At: timestamp()}
-	if err := r.Store.SaveDescriptionLedger(ledger); err != nil {
-		return "", err
-	}
-	note := fmt.Sprintf("applied #%d · train %d/%d · measured in trigger-%d",
-		id, train.Train.Passed, train.Train.Judged, train.Iteration)
-	switch valid := view.MeasureOn(SplitValidation); {
+	subject := fmt.Sprintf("description #%d: train %s", id, pctOf(train.Train, true))
+	switch valid := c.MeasureOn(SplitValidation); {
 	case lab.Complete(valid):
-		note += fmt.Sprintf(" · validation %d/%d", valid.Validation.Passed, valid.Validation.Judged)
+		subject += fmt.Sprintf(" · validation %s", pctOf(valid.Validation, true))
+		notes = append(notes, fmt.Sprintf("applied #%d · train %d/%d · validation %d/%d",
+			id, train.Train.Passed, train.Train.Judged, valid.Validation.Passed, valid.Validation.Judged))
 	case valid != nil:
-		note += fmt.Sprintf(" · validation %d/%d of %d judged — a stopped batch, so the rate is unproven",
-			valid.Validation.Passed, valid.Validation.Judged, lab.ValidationRows)
+		subject += fmt.Sprintf(" · validation %d/%d of %d judged", valid.Validation.Passed, valid.Validation.Judged, lab.ValidationRows)
+		notes = append(notes, fmt.Sprintf("applied #%d · validation judged %d of %d — a stopped batch, so the rate is unproven",
+			id, valid.Validation.Judged, lab.ValidationRows))
 	default:
-		note += " · validation not measured"
+		subject += " · validation not measured"
+		notes = append(notes, fmt.Sprintf("applied #%d · validation not measured", id))
 	}
-	notes = append(notes, note)
+	notes = append(notes, "commit it: `"+subject+"`")
 	return strings.Join(notes, " — "), nil
 }
 
-// DeleteDescriptionCandidate removes one draft from the ledger; a candidate that was measured keeps
-// its iteration on disk, which is the point of never copying measurements into the ledger.
-func (r *Runner) DeleteDescriptionCandidate(skill string, id int) error {
-	ledger, _, err := r.Store.LoadDescriptionLedger(skill)
-	if err != nil {
-		return err
-	}
-	kept := make([]model.DescriptionCandidate, 0, len(ledger.Candidates))
-	found := false
-	for _, c := range ledger.Candidates {
-		if c.ID == id {
-			found = true
-			continue
-		}
-		kept = append(kept, c)
-	}
-	if !found {
-		return fmt.Errorf("candidate #%d is not in this ledger", id)
-	}
-	if ledger.Applied != nil && ledger.Applied.Candidate == id {
-		ledger.Applied = nil
-	}
-	ledger.Candidates = kept
-	return r.Store.SaveDescriptionLedger(ledger)
-}
-
-// AddHoldoutQuery appends a fresh query to the set, labelled holdout: measured once at the end of
-// the loop, never part of its rates.
+// AddHoldoutQuery appends a fresh query to one skill's set, labelled holdout: measured once at the
+// end of the loop, never part of its rates.
 func (r *Runner) AddHoldoutQuery(skill, query, why string, shouldTrigger bool) (int, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return 0, fmt.Errorf("the query is empty")
 	}
-	if !r.Store.TriggerOK {
-		return 0, fmt.Errorf("missing trigger/%s", store.TriggerFileName)
+	if _, ok := r.Store.TriggerOf(skill); !ok {
+		return 0, fmt.Errorf("missing %s/evals/%s", skill, store.TriggerFileName)
 	}
-	id := r.Store.NextTriggerID()
+	id := r.Store.NextTriggerID(skill)
 	q := model.TriggerQuery{ID: id, Skill: skill, ShouldTrigger: shouldTrigger, Split: store.SplitHoldout,
 		Why: strings.TrimSpace(why), Query: query}
-	if err := r.Store.AddTrigger(q); err != nil {
+	if err := r.Store.AddTrigger(skill, q); err != nil {
 		return 0, err
 	}
-	return id, r.Store.SaveTrigger()
+	return id, r.Store.SaveTrigger(skill)
 }
 
 // LiftedWords are the words a draft took straight out of the queries it is meant to fix. The guide

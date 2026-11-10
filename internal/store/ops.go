@@ -21,11 +21,11 @@ type RowRef struct {
 func (s *Store) DeleteRows(refs []RowRef, withFixture bool) ([]string, error) {
 	var changes []string
 	bySkill := map[string][]int{}
-	var triggerIdx []int
+	triggerBySkill := map[string][]int{}
 	for _, r := range refs {
 		switch r.Lane {
 		case LaneTrigger:
-			triggerIdx = append(triggerIdx, r.Index)
+			triggerBySkill[r.Skill] = append(triggerBySkill[r.Skill], r.Index)
 		case LaneOutput:
 			bySkill[r.Skill] = append(bySkill[r.Skill], r.Index)
 		default:
@@ -33,14 +33,18 @@ func (s *Store) DeleteRows(refs []RowRef, withFixture bool) ([]string, error) {
 		}
 	}
 
-	if len(triggerIdx) > 0 {
-		sort.Sort(sort.Reverse(sort.IntSlice(triggerIdx)))
-		for _, i := range triggerIdx {
-			if i < 0 || i >= len(s.Trigger.Queries) {
-				return changes, fmt.Errorf("trigger row %d is out of range", i)
+	for skill, indices := range triggerBySkill {
+		sk := s.Skill(skill)
+		if sk == nil {
+			return changes, fmt.Errorf("unknown skill %q", skill)
+		}
+		sort.Sort(sort.Reverse(sort.IntSlice(indices)))
+		for _, i := range indices {
+			if i < 0 || i >= len(sk.Trigger.Queries) {
+				return changes, fmt.Errorf("%s trigger row %d is out of range", skill, i)
 			}
-			q := s.Trigger.Queries[i]
-			s.Trigger.Queries = append(s.Trigger.Queries[:i], s.Trigger.Queries[i+1:]...)
+			q := sk.Trigger.Queries[i]
+			sk.Trigger.Queries = append(sk.Trigger.Queries[:i], sk.Trigger.Queries[i+1:]...)
 			changes = append(changes, fmt.Sprintf("removed trigger #%d (%s, %s, %s)",
 				q.ID, q.Skill, splitOrLabel(q), clip(q.Query, 60)))
 		}
@@ -70,47 +74,61 @@ func (s *Store) DeleteRows(refs []RowRef, withFixture bool) ([]string, error) {
 	return changes, nil
 }
 
-// AddTrigger appends a query, refusing duplicate ids.
-func (s *Store) AddTrigger(q model.TriggerQuery) error {
-	if err := s.checkTrigger(q, -1); err != nil {
+// AddTrigger appends a query to one skill's file, refusing duplicate ids and a row that names
+// another skill: the file a row sits in IS the skill under test.
+func (s *Store) AddTrigger(skill string, q model.TriggerQuery) error {
+	sk := s.Skill(skill)
+	if sk == nil {
+		return fmt.Errorf("unknown skill %q", skill)
+	}
+	q.Skill = skill
+	if err := s.checkTrigger(skill, q, -1); err != nil {
 		return err
 	}
-	s.Trigger.Queries = append(s.Trigger.Queries, q)
+	sk.Trigger.Queries = append(sk.Trigger.Queries, q)
+	sk.TriggerOK = true
 	return nil
 }
 
-// UpdateTrigger replaces the query at index, returning a fixture note when the row changed
-// skill (trigger rows never own fixtures, so the note is informational).
-func (s *Store) UpdateTrigger(index int, q model.TriggerQuery) error {
-	if index < 0 || index >= len(s.Trigger.Queries) {
-		return fmt.Errorf("trigger row %d is out of range", index)
+// UpdateTrigger replaces the query at index in one skill's file.
+func (s *Store) UpdateTrigger(skill string, index int, q model.TriggerQuery) error {
+	sk := s.Skill(skill)
+	if sk == nil {
+		return fmt.Errorf("unknown skill %q", skill)
 	}
-	if err := s.checkTrigger(q, index); err != nil {
+	if index < 0 || index >= len(sk.Trigger.Queries) {
+		return fmt.Errorf("%s trigger row %d is out of range", skill, index)
+	}
+	q.Skill = skill
+	if err := s.checkTrigger(skill, q, index); err != nil {
 		return err
 	}
-	s.Trigger.Queries[index] = q
+	sk.Trigger.Queries[index] = q
 	return nil
 }
 
-// SetTriggerRuns records how many times each query is measured. It is the set's own knob — the run
-// that reads it reads it from the file — so it is written where the queries are, not held for one
-// run and forgotten.
-func (s *Store) SetTriggerRuns(runs int) error {
+// SetTriggerRuns records how many times each of one skill's queries is measured. It is the set's own
+// knob — the run that reads it reads it from the file — so it is written where the queries are.
+func (s *Store) SetTriggerRuns(skill string, runs int) error {
 	if runs < 1 {
 		return fmt.Errorf("runs must be at least 1")
 	}
-	if !s.TriggerOK {
-		return fmt.Errorf("missing %s", s.TriggerPath)
+	sk := s.Skill(skill)
+	if sk == nil || !sk.TriggerOK {
+		return fmt.Errorf("missing %s", s.TriggerPathFor(skill))
 	}
-	s.Trigger.Runs = &runs
-	return s.SaveTrigger()
+	sk.Trigger.Runs = &runs
+	return s.SaveTrigger(skill)
 }
 
-func (s *Store) checkTrigger(q model.TriggerQuery, self int) error {
+func (s *Store) checkTrigger(skill string, q model.TriggerQuery, self int) error {
 	if q.ID <= 0 {
 		return fmt.Errorf("id must be a positive integer")
 	}
-	for i, other := range s.Trigger.Queries {
+	if q.Skill != "" && q.Skill != skill {
+		return fmt.Errorf("skill is %q but this row lives in %s/evals/%s — a row's skill is its file", q.Skill, skill, TriggerFileName)
+	}
+	for i, other := range s.QueriesOf(skill) {
 		if i != self && other.ID == q.ID {
 			return fmt.Errorf("id %d is already used by %s", q.ID, clip(other.Query, 40))
 		}
@@ -237,15 +255,19 @@ func (s *Store) checkOutput(skill string, c model.OutputCase, self int) error {
 	return nil
 }
 
-// RenumberTrigger closes id gaps and keeps the file's order. This breaks comparability with
-// earlier result dirs (q<id>-<skill>), which is why it is never automatic.
-func (s *Store) RenumberTrigger() []string {
+// RenumberTrigger closes id gaps inside one skill's file and keeps its order. This breaks
+// comparability with earlier result dirs (q<id>-<skill>), which is why it is never automatic.
+func (s *Store) RenumberTrigger(skill string) []string {
+	sk := s.Skill(skill)
+	if sk == nil {
+		return nil
+	}
 	var changes []string
-	for i := range s.Trigger.Queries {
+	for i := range sk.Trigger.Queries {
 		want := i + 1
-		if s.Trigger.Queries[i].ID != want {
-			changes = append(changes, fmt.Sprintf("trigger #%d -> #%d", s.Trigger.Queries[i].ID, want))
-			s.Trigger.Queries[i].ID = want
+		if sk.Trigger.Queries[i].ID != want {
+			changes = append(changes, fmt.Sprintf("%s trigger #%d -> #%d", skill, sk.Trigger.Queries[i].ID, want))
+			sk.Trigger.Queries[i].ID = want
 		}
 	}
 	return changes

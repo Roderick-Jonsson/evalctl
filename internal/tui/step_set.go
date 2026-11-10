@@ -244,11 +244,11 @@ func (m *Model) toggleRow(e store.Entry) tea.Cmd {
 	}
 	q := qs[e.Index]
 	q.ShouldTrigger = !q.ShouldTrigger
-	if err := m.store.UpdateTrigger(e.Index, q); err != nil {
+	if err := m.store.UpdateTrigger(m.skill, e.Index, q); err != nil {
 		m.setStatus(err.Error(), true)
 		return nil
 	}
-	if err := m.store.SaveTrigger(); err != nil {
+	if err := m.store.SaveTrigger(m.skill); err != nil {
 		m.setStatus(err.Error(), true)
 		return nil
 	}
@@ -284,7 +284,7 @@ func (m *Model) askDeleteEntry(e store.Entry, scope string, back screen, after f
 			m.setStatus(err.Error(), true)
 			return nil
 		}
-		if err := m.store.SaveTrigger(); err != nil {
+		if err := m.store.SaveTrigger(m.skill); err != nil {
 			m.setStatus(err.Error(), true)
 			return nil
 		}
@@ -423,7 +423,7 @@ func (m *Model) fillForm(f *formState, e *store.Entry) {
 		f.query = e.Text
 		f.why = e.Why
 	} else {
-		f.id = m.store.NextTriggerID()
+		f.id = m.store.NextTriggerID(m.skill)
 		f.label = true
 	}
 }
@@ -482,15 +482,15 @@ func (f *formState) apply(m *Model) tea.Cmd {
 			merged.ShouldTrigger, merged.Split, merged.Query, merged.Why = q.ShouldTrigger, q.Split, q.Query, q.Why
 			q = merged
 		}
-		err = m.store.UpdateTrigger(f.index, q)
+		err = m.store.UpdateTrigger(m.skill, f.index, q)
 	} else {
-		err = m.store.AddTrigger(q)
+		err = m.store.AddTrigger(m.skill, q)
 	}
 	if err != nil {
 		f.errMsg = err.Error()
 		return nil
 	}
-	if err = m.store.SaveTrigger(); err != nil {
+	if err = m.store.SaveTrigger(m.skill); err != nil {
 		f.errMsg = err.Error()
 		return nil
 	}

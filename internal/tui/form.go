@@ -193,7 +193,7 @@ func (f *formState) facts() string {
 	if f.editing {
 		verb = "rewrites"
 	}
-	return verb + " one row of trigger/trigger-evals.json · backed up first"
+	return verb + " one row of <skill>/evals/trigger-evals.json · backed up first"
 }
 
 func (f *formState) hints() []hint {

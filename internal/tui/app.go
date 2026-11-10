@@ -30,7 +30,7 @@ import (
 // workbench is a set you enter the workbench to look at.
 //
 // What the loop measures comes from internal/runner (the trigger lane) and what it writes comes from
-// internal/store (the ledger, SKILL.md, the query set), so the TUI holds no state of its own that a
+// internal/store (SKILL.md, the query set, the runs on disk), so the TUI holds no state of its own that a
 // file does not already carry: relaunching the binary reopens the step the disk says you are on.
 
 type screen int
@@ -144,7 +144,7 @@ func newModel(s *store.Store) *Model {
 // the disk, and the disk changes without asking this window.
 func (m *Model) Init() tea.Cmd { return watchEvery() }
 
-// reload re-reads what the loop knows: the skill's ledger and its measurements, and the rows of the
+// reload re-reads what the loop knows: the skill's trigger runs and their measurements, and the rows of the
 // split the current step is about. It is called after every write and every finished run, so no
 // screen shows a number that came from before the change.
 func (m *Model) reload() {
@@ -748,8 +748,6 @@ func (m *Model) region() string {
 			switch m.flow.focus {
 			case focusWording:
 				return "description"
-			case focusNote:
-				return "note"
 			}
 			return setRegionWord(true)
 		}
@@ -942,7 +940,7 @@ func (m *Model) helpLines() []string {
 			"  ← →        change the knob under the cursor: runs per query, or the dry run",
 			"  space      flip the dry run — it prints the commands and writes nothing",
 			"  enter      back to the table; the block writes its file as it is changed",
-			"  —          runs per query is the set's own number, in trigger/trigger-evals.json",
+			"  —          runs per query is the set's own number, in <skill>/evals/trigger-evals.json",
 		},
 		head("iteration — the workbench"),
 		[]string{
@@ -954,7 +952,7 @@ func (m *Model) helpLines() []string {
 			"  p          ask a model for a new description, from the train failures",
 			"               the pane shows the paragraph as a character diff — red is gone, green is new;",
 			"               y keeps it in the field (then edit, ctrl+s, enter), p asks again, esc drops it",
-			"  + -        runs per query, written into trigger/trigger-evals.json",
+			"  + -        runs per query, written into <skill>/evals/trigger-evals.json",
 			"  x          dry run: R prints the commands and spends nothing",
 			"  —          the key is never in the tree: $OLLAMA_API_KEY, or ~/.config/evalctl/env",
 		},

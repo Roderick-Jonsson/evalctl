@@ -28,7 +28,7 @@ func writeFile(t *testing.T, path, body string) {
 func newTree(t *testing.T) (*store.Store, string) {
 	t.Helper()
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "trigger", "trigger-evals.json"), `{
+	writeFile(t, filepath.Join(root, "slide-builder", "evals", "trigger-evals.json"), `{
   "runs": 3,
   "threshold": 0.5,
   "queries": [
@@ -51,6 +51,16 @@ func newTree(t *testing.T) (*store.Store, string) {
   "skill_name": "source-research",
   "evals": [
     {"id": 1, "slug": "src-1-new-topic", "prompt": "research this", "expected_output": "PS.md", "files": []}
+  ]
+}`)
+	writeFile(t, filepath.Join(root, "source-research", "evals", "trigger-evals.json"), `{
+  "runs": 3,
+  "threshold": 0.5,
+  "queries": [
+    {"id": 11, "skill": "source-research", "should_trigger": true, "split": "train", "query": "pull the facts out of these docs with links"},
+    {"id": 12, "skill": "source-research", "should_trigger": false, "split": "train", "query": "build me slides from this outline"},
+    {"id": 13, "skill": "source-research", "should_trigger": true, "split": "validation", "query": "research kubernetes operators"},
+    {"id": 14, "skill": "source-research", "should_trigger": false, "split": "validation", "query": "just paste the three numbers here"}
   ]
 }`)
 	s, err := store.Open(root)
@@ -99,7 +109,7 @@ func TestLoadCasesRefusesBadSlug(t *testing.T) {
 
 func TestTriggerSplitNeedsBothLabels(t *testing.T) {
 	_, root := newTree(t)
-	writeFile(t, filepath.Join(root, "trigger", "trigger-evals.json"), `{
+	writeFile(t, filepath.Join(root, "slide-builder", "evals", "trigger-evals.json"), `{
   "queries": [
     {"id": 1, "skill": "slide-builder", "should_trigger": true, "split": "train", "query": "a"},
     {"id": 2, "skill": "slide-builder", "should_trigger": true, "split": "train", "query": "b"},
@@ -120,7 +130,7 @@ func TestTriggerSplitNeedsBothLabels(t *testing.T) {
 func TestTriggerSelectionAndConfig(t *testing.T) {
 	s, _ := newTree(t)
 	r := New(s)
-	cfg := r.TriggerConfigOf()
+	cfg := r.TriggerConfigOf("slide-builder")
 	if cfg.Runs != 3 || cfg.Threshold != 0.5 {
 		t.Fatalf("config = %+v", cfg)
 	}
@@ -353,10 +363,8 @@ func TestDryRunPlansWithoutWriting(t *testing.T) {
 			t.Fatalf("plan line is not the real command: %q", line)
 		}
 	}
-	for _, dir := range []string{r.WorkspaceDir("slide-builder"), r.TriggerWorkspace()} {
-		if _, err := os.Stat(dir); !os.IsNotExist(err) {
-			t.Fatalf("a dry run wrote %s: %v", dir, err)
-		}
+	if dir := r.WorkspaceDir("slide-builder"); !os.IsNotExist(statErr(dir)) {
+		t.Fatalf("a dry run wrote %s", dir)
 	}
 
 	plan = nil
@@ -373,10 +381,8 @@ func TestDryRunPlansWithoutWriting(t *testing.T) {
 			t.Fatalf("trigger plan line is wrong: %q", line)
 		}
 	}
-	for _, dir := range []string{r.WorkspaceDir("slide-builder"), r.TriggerWorkspace()} {
-		if _, err := os.Stat(dir); !os.IsNotExist(err) {
-			t.Fatalf("a dry trigger run wrote %s: %v", dir, err)
-		}
+	if dir := r.WorkspaceDir("slide-builder"); !os.IsNotExist(statErr(dir)) {
+		t.Fatalf("a dry trigger run wrote %s", dir)
 	}
 }
 
@@ -390,7 +396,7 @@ func TestNextIterationAndListRuns(t *testing.T) {
 	writeFile(t, filepath.Join(root, "slide-builder-workspace", "iteration-2", "meta.json"),
 		`{"iteration":2,"skill":"slide-builder","model":"m","cases":["sb-1-slides"]}`)
 	writeFile(t, filepath.Join(root, "slide-builder-workspace", "iteration-2", "report.md"), "# x")
-	writeFile(t, filepath.Join(root, "trigger-workspace", "trigger-1", "trigger.json"),
+	writeFile(t, filepath.Join(root, "slide-builder-workspace", "trigger-1", "trigger.json"),
 		`{"score":{"threshold":0.5,"runs":3,"overall":{"judged":4,"passed":3,"rate":0.75}}}`)
 	if got := r.NextIteration(ws, "iteration"); got != 3 {
 		t.Fatalf("next iteration should be 3, got %d", got)
@@ -435,8 +441,8 @@ func TestNextIterationAndListRuns(t *testing.T) {
 	}
 }
 
-// ListRunsFor is the skill-scoped results view: its own output iterations, plus the trigger
-// iterations that measured it — scored from that skill's tally, not the iteration's overall one.
+// ListRunsFor is the skill-scoped results view: a skill's output iterations and its own trigger
+// iterations, and nothing that belongs to a sibling.
 func TestListRunsForScopesEveryLaneToOneSkill(t *testing.T) {
 	s, root := newTree(t)
 	r := New(s)
@@ -445,50 +451,58 @@ func TestListRunsForScopesEveryLaneToOneSkill(t *testing.T) {
 	writeFile(t, filepath.Join(root, "slide-builder-workspace", "iteration-2", "report.md"), "# x")
 	writeFile(t, filepath.Join(root, "source-research-workspace", "iteration-1", "meta.json"),
 		`{"iteration":1,"cases":["src-1-new-topic"]}`)
-	// One global trigger iteration: 4 slide-builder queries all passed, 10 source-research queries
-	// of which 9 passed, and a third skill that it never actually ran (rows 0).
-	writeFile(t, filepath.Join(root, "trigger-workspace", "trigger-1", "trigger.json"), `{"score":{
-  "threshold":0.5,"runs":3,
-  "overall":{"judged":14,"passed":13,"rate":0.93},
-  "skills":{
-    "slide-builder":{"all":{"rows":4,"judged":4,"passed":4,"rate":1}},
-    "source-research":{"all":{"rows":10,"judged":10,"passed":9,"rate":0.9}},
-    "learning-path":{"all":{"rows":0,"judged":0,"passed":0,"rate":null}}
-  }}}`)
+	// Each skill's trigger iteration holds its own rows: 4 all passed for slide-builder, 10 of which
+	// 9 passed for source-research.
+	writeFile(t, filepath.Join(root, "slide-builder-workspace", "trigger-1", "meta.json"),
+		`{"iteration":1,"skill":"slide-builder","lane":"trigger","runs":3,"threshold":0.5,
+		  "queries":["q01-slide-builder","q02-slide-builder","q03-slide-builder","q04-slide-builder"]}`)
+	writeFile(t, filepath.Join(root, "slide-builder-workspace", "trigger-1", "trigger.json"),
+		`{"score":{"threshold":0.5,"runs":3,"overall":{"judged":4,"passed":4,"rate":1}}}`)
+	writeFile(t, filepath.Join(root, "source-research-workspace", "trigger-1", "meta.json"),
+		`{"iteration":1,"skill":"source-research","lane":"trigger","runs":3,"threshold":0.5,
+		  "queries":["q11-source-research","q12-source-research","q13-source-research","q14-source-research",
+		             "q15-src","q16-src","q17-src","q18-src","q19-src","q20-src"]}`)
+	writeFile(t, filepath.Join(root, "source-research-workspace", "trigger-1", "trigger.json"),
+		`{"score":{"threshold":0.5,"runs":3,"overall":{"judged":10,"passed":9,"rate":0.9}}}`)
 
-	if all := r.ListRunsFor(""); len(all) != 3 {
+	if all := r.ListRunsFor(""); len(all) != 4 {
 		t.Fatalf("an empty scope is every run: %+v", all)
 	}
 
 	slide := r.ListRunsFor("slide-builder")
 	if len(slide) != 2 {
-		t.Fatalf("slide-builder should see its iteration and the trigger one: %+v", slide)
+		t.Fatalf("slide-builder should see its iteration and its trigger run: %+v", slide)
 	}
 	if slide[0].Ref() != "slide-builder@iteration-2" {
 		t.Fatalf("output run ref = %q", slide[0].Ref())
 	}
 	trigger := slide[1]
-	if trigger.Lane != LaneTrigger {
+	if trigger.Lane != LaneTrigger || trigger.Ref() != "slide-builder@trigger-1" {
 		t.Fatalf("second run = %+v", trigger)
 	}
-	// The skill's own number, not the iteration's 93%.
 	if trigger.Cases != 4 || trigger.Judged != 4 || trigger.Passed != 4 ||
 		trigger.PassRate == nil || *trigger.PassRate != 1 {
-		t.Fatalf("trigger run was not re-scored for slide-builder: %+v", trigger)
+		t.Fatalf("trigger run info = %+v", trigger)
 	}
 
-	if src := r.ListRunsFor("source-research"); len(src) != 2 || src[1].Cases != 10 {
+	src := r.ListRunsFor("source-research")
+	if len(src) != 2 || src[1].Cases != 10 || src[1].Ref() != "source-research@trigger-1" {
 		t.Fatalf("source-research scope = %+v", src)
 	}
-	// A skill an iteration never measured does not inherit its row: rows 0 is not a 0% pass.
+	// A skill with no runs of its own inherits nothing.
 	if lp := r.ListRunsFor("learning-path"); len(lp) != 0 {
-		t.Fatalf("learning-path was never measured, got %+v", lp)
+		t.Fatalf("learning-path has no runs, got %+v", lp)
 	}
-	// The unscoped list still reports the iteration as a whole.
+	// The unscoped list reports each iteration's own rate, never a bundle-wide one.
 	for _, info := range r.ListRuns() {
-		if info.Lane == LaneTrigger && (info.Judged != 14 || info.Passed != 13 ||
-			info.PassRate == nil || *info.PassRate != 0.93) {
-			t.Fatalf("the unscoped view must keep the global rate: %+v", info)
+		if info.Lane != LaneTrigger {
+			continue
+		}
+		if info.Skill == "slide-builder" && (info.Judged != 4 || info.Passed != 4) {
+			t.Fatalf("slide-builder trigger info = %+v", info)
+		}
+		if info.Skill == "source-research" && (info.Judged != 10 || info.Passed != 9) {
+			t.Fatalf("source-research trigger info = %+v", info)
 		}
 	}
 }
@@ -577,7 +591,7 @@ func TestACancelledBatchWritesNoMeasurement(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
-	entries, _ := os.ReadDir(r.TriggerWorkspace())
+	entries, _ := os.ReadDir(r.TriggerWorkspace("slide-builder"))
 	if len(entries) != 0 {
 		t.Fatalf("a cancelled batch wrote %d iteration dir(s): the lab would read them as measurements", len(entries))
 	}
@@ -588,7 +602,7 @@ func TestACancelledBatchWritesNoMeasurement(t *testing.T) {
 func TestAnAbortedBatchSaysWhyItStopped(t *testing.T) {
 	s, _ := newTree(t)
 	r := New(s)
-	dir := r.TriggerIterDir(21)
+	dir := r.TriggerIterDir("slide-builder", 21)
 	writeFile(t, filepath.Join(dir, "q01-slide-builder", "run-1", "query.txt"), "build me slides\n")
 	r.markAborted(dir, context.Canceled)
 
@@ -608,9 +622,15 @@ func TestAnAbortedBatchSaysWhyItStopped(t *testing.T) {
 	}
 
 	// An iteration dir that was never created is not created to hold a note about itself.
-	empty := r.TriggerIterDir(22)
+	empty := r.TriggerIterDir("slide-builder", 22)
 	r.markAborted(empty, context.Canceled)
 	if fileExists(empty) {
 		t.Fatal("markAborted created an iteration dir")
 	}
+}
+
+// statErr is os.Stat's error, for the not-exist assertions above.
+func statErr(path string) error {
+	_, err := os.Stat(path)
+	return err
 }

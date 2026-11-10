@@ -26,7 +26,7 @@ import (
 // problems — and it would put the description lane's cost behind the harness's model, which the
 // operator cannot point at a different model per lane.
 //
-// Nothing here writes the ledger or SKILL.md. A proposal is a proposal: `ReviseDescription` returns it
+// Nothing here writes SKILL.md. A proposal is a proposal: `ReviseDescription` returns it
 // and keeps it beside the iteration it answers, and accepting it is the screen's `y`, which puts the
 // text in the editable field and touches no file.
 
@@ -88,7 +88,7 @@ type DescriptionProposal struct {
 	Prompt  string   `json:"prompt_path,omitempty"`
 }
 
-// measuredCandidate is the ledger candidate and the train measurement its failures are about. Both
+// measuredCandidate is the wording and the train measurement its failures are about. Both
 // halves are needed: the candidate carries the wording the baseline is, and the measurement is the
 // only place the failures exist.
 func (r *Runner) measuredCandidate(skill string, candidate int) (*LabCandidate, *LabMeasure, error) {
@@ -98,7 +98,7 @@ func (r *Runner) measuredCandidate(skill string, candidate int) (*LabCandidate, 
 	}
 	c := lab.Candidate(candidate)
 	if c == nil {
-		return nil, nil, fmt.Errorf("#%d is not in %s's ledger", candidate, skill)
+		return nil, nil, fmt.Errorf("#%d is not one of %s's wordings", candidate, skill)
 	}
 	m := c.MeasureOn(store.SplitTrain)
 	if m == nil {
@@ -300,10 +300,6 @@ func descriptionPrompt(c *LabCandidate, m *LabMeasure, body string) (string, Des
 		plural(in.Passes, "request"), verb)
 	b.WriteString(pass.String())
 	b.WriteString("\n")
-	if note := strings.TrimSpace(c.Note); note != "" {
-		fmt.Fprintf(&b, "## Why this wording exists\nThe person tuning it wrote: %s\n\n", oneLineText(note))
-	}
-
 	b.WriteString("## The shape of a good answer\n\n")
 	b.WriteString("The smallest change that answers every failure. Keep what already works, and let one clause do the work:\n\n")
 	b.WriteString("  before  Search the web and summarise what you find.\n")
@@ -507,12 +503,12 @@ func (r *Runner) DescriptionProposalAt(skill string, iteration int) (*Descriptio
 // the workspace root is the fallback rather than a failure — the caller has already refused that case.
 func (r *Runner) descriptionDir(skill string, iteration int) string {
 	if iteration > 0 {
-		dir := r.TriggerIterDir(iteration)
+		dir := r.TriggerIterDir(skill, iteration)
 		if info, err := os.Stat(dir); err == nil && info.IsDir() {
 			return dir
 		}
 	}
-	return r.TriggerWorkspace()
+	return r.TriggerWorkspace(skill)
 }
 
 // describeProvider resolves the provider once, so the run screen can name the model and where the key
@@ -539,7 +535,7 @@ func describeProvider(o DescribeOptions) (llm.Config, error) {
 
 // parseDescriptionReply reads the paragraph between its markers. A reply without them is an error and
 // not a guess: the text this returns becomes a candidate that a run is spent on, and a whole reply
-// pasted into the ledger reads as a description the operator never saw.
+// pasted into a draft reads as a description the operator never saw.
 func parseDescriptionReply(text string) (why, body string, err error) {
 	const whyMark, descMark, endMark = "=== WHY ===", "=== DESCRIPTION ===", "=== END ==="
 	s := strings.ReplaceAll(text, "\r\n", "\n")

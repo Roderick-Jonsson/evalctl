@@ -51,7 +51,7 @@ func TestOneRegionHasTheKeys(t *testing.T) {
 	m.loadPick()
 	check("the work list", 1)
 
-	// The workbench: the set, the description, the note, and the fields under the set.
+	// The workbench: the set, the description, and the fields under the set.
 	m.openWork(pickRow{skill: "slide-builder", lane: store.LaneTrigger})
 	m.reload()
 	m.ensureDraft()
@@ -62,7 +62,6 @@ func TestOneRegionHasTheKeys(t *testing.T) {
 	}{
 		{"workbench · set", focusSet, 1},
 		{"workbench · description", focusWording, 0},
-		{"workbench · note", focusNote, 0},
 	} {
 		m.flow.focus = c.focus
 		m.flow.applyFocus()
@@ -94,10 +93,6 @@ func TestTheStatusRowNamesTheRegionWithTheKeys(t *testing.T) {
 	m.openWork(pickRow{skill: "slide-builder", lane: store.LaneTrigger})
 	m.reload()
 	m.ensureDraft()
-	m.flow.focus = focusNote
-	if got := m.region(); got != "note" {
-		t.Fatalf("region = %q, want the note", got)
-	}
 	m.flow.focus = focusSet
 	if got := m.region(); got != "train set" {
 		t.Fatalf("region = %q, want the set", got)
