@@ -93,21 +93,10 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 
 	if !o.DryRun {
 		target := profileNameTrigger
-		if line, err := r.Profiles.WriteEnv(target, false); err != nil {
+		if err := r.provisionSandboxes([]string{target}); err != nil {
 			return err
-		} else if line != "" {
-			r.message("%s", line)
 		}
-		if line, err := r.Profiles.Render(target, false); err != nil {
-			return err
-		} else {
-			r.message("%s", line)
-		}
-		if line, err := r.Profiles.Scrub(target, false); err != nil {
-			return err
-		} else {
-			r.message("%s", line)
-		}
+		defer r.releaseSandboxes([]string{target}, o.Keep)
 		line, err := r.Profiles.SyncSkills(target, r.Profiles.Skills, false)
 		if err != nil {
 			return err

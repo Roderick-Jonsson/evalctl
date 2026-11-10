@@ -206,3 +206,129 @@ func TestCheckNamesEveryDeviation(t *testing.T) {
 		t.Fatalf("pinned sandbox not reported: %v", problems)
 	}
 }
+
+// fakeHermesBin stands in for `hermes` on the two profile verbs: create makes a live profile (an
+// identity marker), delete removes it and leaves the tombstone Hermes leaves beside profiles/.
+func fakeHermesBin(t *testing.T) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "fake-hermes")
+	script := `#!/bin/sh
+eval "last=\${$#}"
+case "$1 $2" in
+  "profile create")
+    mkdir -p "$HERMES_ROOT/profiles/$3"
+    printf 'description: fake sandbox\n' > "$HERMES_ROOT/profiles/$3/profile.yaml"
+    rm -f "$HERMES_ROOT/profiles/.deleted/$3"
+    ;;
+  "profile delete")
+    rm -rf "$HERMES_ROOT/profiles/$last"
+    mkdir -p "$HERMES_ROOT/profiles/.deleted"
+    : > "$HERMES_ROOT/profiles/.deleted/$last"
+    ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+// TestLiveAsksForAnIdentityMarker: a directory is a profile only when it carries one of Hermes's
+// identity markers and has not been tombstoned. A crashed create leaves the first state and a
+// finished delete leaves the second, and both would be misread by os.Stat alone.
+func TestLiveAsksForAnIdentityMarker(t *testing.T) {
+	m, _ := testManager(t)
+	if m.Live(With) {
+		t.Fatal("a profile that was never created reads as live")
+	}
+	if err := os.MkdirAll(m.Home(With), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if m.Live(With) {
+		t.Fatal("an empty directory reads as a profile — that is the shell a crashed create leaves")
+	}
+	writeFile(t, filepath.Join(m.Home(With), "profile.yaml"), "description: x\n")
+	if !m.Live(With) {
+		t.Fatal("a directory carrying profile.yaml does not read as live")
+	}
+	writeFile(t, m.Tombstone(With), "deleted\n")
+	if m.Live(With) {
+		t.Fatal("a tombstoned directory still reads as live")
+	}
+}
+
+// TestRemoveOnlyEverDeletesASandbox: the teardown path must not be able to touch the real profile,
+// and it must go through `hermes profile delete` rather than removing the directory itself.
+func TestRemoveOnlyEverDeletesASandbox(t *testing.T) {
+	m, _ := testManager(t)
+	t.Setenv("HERMES_ROOT", m.Hermes)
+	m.Bin = fakeHermesBin(t)
+	writeFile(t, filepath.Join(m.Home(Real), "profile.yaml"), "description: real\n")
+
+	for _, name := range []string{Real, "default", "someone-elses-profile"} {
+		if _, err := m.Remove(name, false); err == nil {
+			t.Fatalf("remove %s was allowed", name)
+		}
+	}
+	if _, err := os.Stat(m.Home(Real)); err != nil {
+		t.Fatal("the refused remove deleted the real profile")
+	}
+	if line, err := m.Remove(With, false); err != nil || !strings.Contains(line, "not provisioned") {
+		t.Fatalf("removing a sandbox that is not there = %q, %v", line, err)
+	}
+}
+
+// TestRemoveTombstonesAndCreateReplaces: the pair is one cycle. Delete leaves Hermes's tombstone
+// behind, and create has to clear it — asking Live, not os.Stat, is what makes the second run of a
+// session possible at all.
+func TestRemoveTombstonesAndCreateReplaces(t *testing.T) {
+	m, _ := testManager(t)
+	t.Setenv("HERMES_ROOT", m.Hermes)
+	m.Bin = fakeHermesBin(t)
+	if _, err := m.Create(With, false); err != nil {
+		t.Fatal(err)
+	}
+	if !m.Live(With) {
+		t.Fatal("create did not produce a live profile")
+	}
+	if line, err := m.Remove(With, false); err != nil || line != "remove "+With {
+		t.Fatalf("remove = %q, %v", line, err)
+	}
+	if m.Live(With) {
+		t.Fatal("the profile is still live after remove")
+	}
+	if _, err := os.Stat(m.Tombstone(With)); err != nil {
+		t.Fatalf("remove left no tombstone — the delete did not go through hermes: %v", err)
+	}
+	if _, err := m.Create(With, false); err != nil {
+		t.Fatalf("create after remove: %v", err)
+	}
+	if !m.Live(With) {
+		t.Fatal("the recreated profile is not live")
+	}
+}
+
+// TestAMissingSandboxIsNotADeviation: with the cleanup default, `check` must be green between runs.
+// Only the real profile's absence is a problem.
+func TestAMissingSandboxIsNotADeviation(t *testing.T) {
+	m, _ := testManager(t)
+	if err := os.MkdirAll(m.MasterclassRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(m.Home(Real), "config.yaml"),
+		"\nmodel:\n  default: test-model\n\nterminal:\n  cwd: "+m.MasterclassRoot+"\n")
+	writeFile(t, filepath.Join(m.Home(Real), ".env"), "OLLAMA_API_KEY=x\n")
+	if _, err := m.Render(Real, false); err != nil {
+		t.Fatal(err)
+	}
+	rows, problems := m.Check([]string{Real, With, Without, Trigger, Revise})
+	for _, p := range problems {
+		if strings.Contains(p, "missing") {
+			t.Fatalf("a removed sandbox is reported as a problem: %v", problems)
+		}
+	}
+	if len(rows) != 5 || rows[1].Exists {
+		t.Fatalf("rows = %+v", rows)
+	}
+}

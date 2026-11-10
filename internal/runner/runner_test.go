@@ -67,6 +67,8 @@ func newTree(t *testing.T) (*store.Store, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Provisioning writes into the profile root: keep it out of the operator's ~/.hermes.
+	hermeticProfiles(t)
 	return s, root
 }
 

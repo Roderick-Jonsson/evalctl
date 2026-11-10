@@ -33,6 +33,8 @@ type ReviseOptions struct {
 	Budget time.Duration // wall-clock per call
 	Model  string
 	DryRun bool
+	// Keep leaves the reviser's sandbox behind for inspection, like Options.Keep.
+	Keep bool
 }
 
 // Revision is one proposal to rewrite a skill, with the evidence it was written from.
@@ -213,6 +215,12 @@ func (r *Runner) Revise(ctx context.Context, skill string, iteration int, o Revi
 	if o.DryRun {
 		return rev, nil
 	}
+	// The reviser gets its own clean room, created for this call when it is not there: it must not
+	// inherit the arms' skills (which would let it read the evals) or the last call's session.
+	if err := r.provisionSandboxes([]string{ReviseProfile}); err != nil {
+		return Revision{}, err
+	}
+	defer r.releaseSandboxes([]string{ReviseProfile}, o.Keep)
 	cmdArgs := r.buildReviseCmd(rev.Prompt, r.Store.Skill(skill).Dir, o)
 	callCtx, cancel := context.WithTimeout(ctx, o.Budget)
 	defer cancel()

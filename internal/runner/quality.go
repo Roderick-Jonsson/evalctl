@@ -53,28 +53,13 @@ func (r *Runner) RunQuality(ctx context.Context, o Options) error {
 
 	if !o.DryRun {
 		// Both arms run the same contract; the with arm holds exactly the skill under test, the
-		// baseline holds none, and neither keeps memory from a previous case.
-		profiles := map[string]bool{}
-		for _, arm := range o.Arms {
-			profiles[ArmProfiles[arm]] = true
+		// baseline holds none, and neither keeps memory from a previous case. The sandboxes are
+		// created here, when they are missing, and removed when the run that used them ends.
+		arms := armSandboxes(o.Arms)
+		if err := r.provisionSandboxes(arms); err != nil {
+			return err
 		}
-		for _, name := range keysOf(profiles) {
-			if line, err := r.Profiles.WriteEnv(name, false); err != nil {
-				return err
-			} else if line != "" {
-				r.message("%s", line)
-			}
-			if line, err := r.Profiles.Render(name, false); err != nil {
-				return err
-			} else {
-				r.message("%s", line)
-			}
-			if line, err := r.Profiles.Scrub(name, false); err != nil {
-				return err
-			} else {
-				r.message("%s", line)
-			}
-		}
+		defer r.releaseSandboxes(arms, o.Keep)
 	}
 
 	for _, group := range groupBySkill(cases, skills) {
@@ -316,7 +301,11 @@ func (r *Runner) gradeAfterRun(ctx context.Context, skill string, iteration int,
 	// run twice and the second pass reads as a hang.
 	r.emit(Event{Kind: EventPhase, Lane: LaneOutput, Phase: "grade",
 		Message: fmt.Sprintf("judging iteration %d — one judge call per arm", iteration)})
-	out, err := r.GradeIteration(ctx, skill, iteration, GradeOptions{Model: o.Model, Budget: DefaultGradeBudget})
+	out, err := r.GradeIteration(ctx, skill, iteration, GradeOptions{Model: o.Model, Budget: DefaultGradeBudget,
+		// The run owns both arms: they were provisioned above and are removed by the run's own
+		// teardown, after this pass. A judge that removed its clean room here would delete the
+		// baseline arm the next case of this same iteration may still have to run in.
+		Nested: true, Keep: o.Keep})
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			// The operator's x during the judge pass stops the pass and keeps the arms: the iteration is

@@ -33,6 +33,7 @@ type runCommand struct {
 	fill      bool
 	dryRun    bool
 	list      bool
+	keep      bool
 	iteration int
 	lane      string
 	logLevel  string
@@ -48,6 +49,7 @@ func (rc *runCommand) register(fs *flag.FlagSet) {
 		"output lane: write into the newest iteration while it is still open, instead of starting a new number")
 	fs.BoolVar(&rc.dryRun, "dry-run", false, "print the plan and the commands, change nothing")
 	fs.BoolVar(&rc.list, "list", false, "list the selected cases and exit")
+	fs.BoolVar(&rc.keep, "keep", false, "keep the sandbox profiles when the run ends (they are removed by default)")
 	fs.IntVar(&rc.iteration, "iteration", 0, "iteration number (default: next free)")
 	fs.StringVar(&rc.lane, "lane", store.LaneOutput, "lane: output (default) or trigger")
 	fs.StringVar(&rc.logLevel, "log", "full", "live agent activity on stderr: full, tools or off")
@@ -104,7 +106,7 @@ func runRun(args []string) int {
 		Split: *split, Arms: strings.Split(*arms, ","), Model: rc.model, Resume: rc.resume,
 		Force: rc.force, Fill: rc.fill, NoVerify: *noVerify, Isolate: *isolate, DryRun: rc.dryRun, List: rc.list,
 		Iteration: rc.iteration, Runs: *runs, Threshold: *threshold, MaxTurns: *maxTurns,
-		Grade: *grade && !*noGrade,
+		Grade: *grade && !*noGrade, Keep: rc.keep,
 	}
 	if rc.budget > 0 {
 		opts.Budget = time.Duration(rc.budget) * time.Second
@@ -357,7 +359,7 @@ func runProfiles(args []string) int {
 	var names []string
 	if len(rest) > 0 {
 		switch rest[0] {
-		case "status", "check", "ensure", "render", "sync", "scrub":
+		case "status", "check", "ensure", "render", "sync", "scrub", "reap":
 			command = rest[0]
 			names = rest[1:]
 		default:
@@ -371,6 +373,51 @@ func runProfiles(args []string) int {
 	}
 
 	switch command {
+	case "reap":
+		// Teardown for a run that died before its own cleanup. Every sandbox on disk is a leftover
+		// by definition — a live one belongs to a run that is using it — which is why this takes
+		// the run lock before touching anything.
+		unlock, err := lockRun(c.s.Root)
+		if err != nil {
+			return fail(err)
+		}
+		defer unlock()
+		var reaped []string
+		for _, name := range targets {
+			if name == profile.Real {
+				// The real profile is not a sandbox. Named by hand it is a mistake worth refusing;
+				// reached through the default list it is simply not this verb's business.
+				if len(names) > 0 {
+					return fail(fmt.Errorf("reap %s: refused — the real profile is not a sandbox", name))
+				}
+				continue
+			}
+			if !m.Live(name) {
+				// Nothing to delete, or a ghost a crashed create left: name it, never rmtree it.
+				if _, err := os.Stat(m.Home(name)); err != nil {
+					continue
+				}
+				fmt.Println(styleWarn.Render(fmt.Sprintf("  ✗ %s: %s is not a profile — remove that directory by hand",
+					name, m.Home(name))))
+				continue
+			}
+			line, err := m.Remove(name, *dryRun)
+			if err != nil {
+				return fail(err)
+			}
+			fmt.Println(line)
+			reaped = append(reaped, name)
+		}
+		if len(reaped) == 0 {
+			fmt.Println(styleDim.Render("nothing to reap — no sandbox is on disk"))
+			return 0
+		}
+		if *dryRun {
+			return 0
+		}
+		fmt.Println(styleDim.Render(fmt.Sprintf("%d sandbox(es) removed — the next run creates what it needs",
+			len(reaped))))
+		return 0
 	case "check":
 		rows, problems := m.Check(targets)
 		if *asJSON {
@@ -458,6 +505,11 @@ func runProfiles(args []string) int {
 func printProfileTable(m *profile.Manager, rows []profile.Status) {
 	var tableRows [][]string
 	for _, row := range rows {
+		if !row.Exists {
+			// A sandbox that is not on disk is the normal state between runs, not a broken one.
+			tableRows = append(tableRows, []string{row.Profile, "—", "—", "—", "—", "—"})
+			continue
+		}
 		contract := "STALE"
 		if row.ContractCurrent {
 			contract = "ok"

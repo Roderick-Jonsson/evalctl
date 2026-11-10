@@ -156,17 +156,25 @@ contract — but re-sync the skills, which the lane does itself before the first
 
 ## Profiles
 
-Four profiles, all rendered from the one contract. `evalctl profiles check` is the
-authority on their state: it fails when a `SOUL.md` holds a stale contract, when the two arms'
-`SOUL.md` differ, when `eval-vcc-without` holds any skill, when an eval sandbox kept memories,
-or when a sandbox pins a working directory (only the real profile pins one).
+Five profiles, all rendered from the one contract: the real one and four sandboxes. The sandboxes
+are created by the operation that spends in them and removed when it ends — a `run` (both arms),
+a `grade` (the judge's room), a `revise` (the reviser's), a trigger iteration (the trigger arm) —
+so between runs there is nothing of the eval in `~/.hermes` at all. `--keep` holds them, `profiles
+reap` removes what a killed run left behind, `profiles ensure` provisions them on purpose.
+
+`evalctl profiles check` is the authority on their state where they exist: it fails when a
+`SOUL.md` holds a stale contract, when the two arms' `SOUL.md` differ, when `eval-vcc-without`
+holds any skill, when an eval sandbox kept memories, or when a sandbox pins a working directory
+(only the real profile pins one). A sandbox that is not on disk is not a problem — that is the
+state after every run.
 
 | Profile | Skills | Notes |
 |---|---|---|
 | `video-course-creator` | all four | the real one; `--no-skills` plus the four stage skills, no gateway of its own; working directory pinned to the production root (`terminal.cwd`) |
 | `eval-vcc-with` | exactly the skill under test (re-synced per case) | with-skill arm |
-| `eval-vcc-without` | none | baseline arm |
+| `eval-vcc-without` | none (stripped at provisioning: `--no-skills` alone still leaves Hermes's essential bundle) | baseline arm, and the judge's room |
 | `eval-vcc-trigger` | all four | trigger lane — one skill installed cannot test misselection |
+| `eval-vcc-revise` | none | writes a SKILL.md revision; no skills, so it cannot read the evals |
 
 Why separate profiles instead of one: a same-profile baseline is dishonest. Every session's system
 prompt lists the profile's skills and carries that profile's memories, so a "without" run inside
@@ -221,8 +229,9 @@ profiles. There is no second runner: the Python originals (`run.py`, `profiles.p
 their rules now live only in `evalctl`.
 
 ```bash
-evalctl profiles check                      # profiles in their intended state
-evalctl profiles ensure                     # create/render/sync/pin whatever is missing
+evalctl profiles check                      # the real profile's state (a missing sandbox is normal)
+evalctl profiles ensure                     # provision the four sandboxes on purpose
+evalctl profiles reap                      # remove sandboxes a killed run left behind
 evalctl run --list                          # cases + prompts (+ where a fixture was promoted from)
 evalctl run --dry-run                       # plan + exact hermes commands, writes nothing
 evalctl run --skill source-research         # one stage, next free iteration-N

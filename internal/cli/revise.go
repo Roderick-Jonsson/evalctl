@@ -26,6 +26,7 @@ func runRevise(args []string) int {
 	budget := fs.Int("budget", 0, "wall-clock seconds for the call (default 300)")
 	apply := fs.Bool("apply", false, "write the proposal into SKILL.md (backed up first)")
 	dryRun := fs.Bool("dry-run", false, "print the prompt and the command, write nothing")
+	keep := fs.Bool("keep", false, "keep the reviser's sandbox profile when the call ends (removed by default)")
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
 	}
@@ -44,7 +45,7 @@ func runRevise(args []string) int {
 	if iter == 0 {
 		return fail(fmt.Errorf("%s has no iteration to revise from — run one first", *skill))
 	}
-	opts := runner.ReviseOptions{Model: *model, DryRun: *dryRun, Budget: 300 * time.Second}
+	opts := runner.ReviseOptions{Model: *model, DryRun: *dryRun, Budget: 300 * time.Second, Keep: *keep}
 	if *budget > 0 {
 		opts.Budget = time.Duration(*budget) * time.Second
 	}

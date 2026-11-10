@@ -100,6 +100,11 @@ type Options struct {
 	Grade bool
 	// Log is how much of the agent's own stream reaches activity.log and the progress view.
 	Log ActivityLevel
+	// Keep leaves the sandboxes behind when the run ends, for a person who wants to look inside
+	// the room the arms actually ran in. The default is to remove them: a sandbox that outlives
+	// its run carries the run's caches and sessions into the next measurement, and every surface
+	// that enumerates profiles would list it as a worker.
+	Keep bool
 }
 
 // Normalize fills in the lane defaults: a trigger run gets the trigger lane's shorter budget.

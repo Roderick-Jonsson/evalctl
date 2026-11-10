@@ -60,12 +60,18 @@ const usage = `evalctl — manage and run the eval sets: trigger queries and out
   evalctl trigger [flags]            trigger lane: does the right skill load?
   evalctl runs [--lane] [--skill]     iterations per workspace, with pass rates
   evalctl report <run>               an iteration's report.md, rendered (--raw for the source)
-  evalctl profiles [cmd]             status/check/ensure/render/sync/scrub the eval profiles
+  evalctl profiles [cmd]             status/check/ensure/reap/render/sync/scrub the eval profiles
   evalctl theme [name]               the colour schemes, with each role's contrast on its background
 
 Run flags: --skill, --case, --iteration, --arms, --model, --budget, --resume, --force, --no-grade,
-           --no-verify, --isolate=false, --dry-run, --list, --log full|tools|off
+           --no-verify, --isolate=false, --dry-run, --list, --keep, --log full|tools|off
 Trigger:   --query, --split, --runs, --threshold, --max-turns (same shared flags)
+
+The four eval sandboxes are created by the run that needs them and removed when it ends: a sandbox
+that outlives its run carries that run's caches and sessions into the next measurement, and every
+profile picker lists it as a worker. --keep holds them for inspection; "profiles reap" removes what
+a killed run left behind, and "profiles ensure" provisions them on purpose (a manual chat in an
+arm, a "profiles check" diff).
 
 --log full (default) streams each arm's tool calls and prose to stderr while it runs, and writes
 the same lines to activity.log beside stream.jsonl; tools drops the prose, off writes nothing.

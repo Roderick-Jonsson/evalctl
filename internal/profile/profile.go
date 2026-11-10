@@ -1,10 +1,14 @@
 // Package profile provisions the Hermes profiles the eval sandboxes run in — the Go port of
 // Python's profiles.py, which it replaced once the port matched.
 //
-// One contract, four profiles: the real one and three sandboxes (with-skill, baseline,
-// trigger). `contract.md` is the only hand-written source of profile state; `Render` stamps it
+// One contract, five profiles: the real one and four sandboxes (with-skill, baseline, trigger,
+// revision). `contract.md` is the only hand-written source of profile state; `Render` stamps it
 // into each profile's SOUL.md under the Hermes persona and records the contract hash there, so
 // the two arms are provably byte-identical and nobody edits a profile by hand.
+//
+// The four sandboxes are created and removed around the operation that spends in them: a clean
+// room that survives its run is not a clean room. `profiles ensure` is how a person provisions
+// them on purpose, and `profiles reap` removes what a crash left behind.
 //
 // The workspace root is the run's working directory (the contract's Workspace rule), so where
 // production masterclasses live is a provisioning fact, not contract text: `PinCwd` pins the
@@ -19,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -39,7 +44,17 @@ const (
 
 // EvalProfiles are the throwaway sandboxes: memories are wiped between iterations, and none of
 // them may pin a working directory.
+//
+// They are throwaway in the strong sense: a sandbox is created for the operation that spends in
+// it and removed when that operation ends (see runner/provision.go). A sandbox that outlives its
+// run carries the run's caches, sessions and skill copies into the next measurement, and it shows
+// up in every surface that enumerates profiles — the pickers, the gateway's served set and the
+// kanban roster.
 var EvalProfiles = []string{With, Without, Trigger, Revise}
+
+// identityMarkers mirrors hermes_constants._PROFILE_IDENTITY_MARKERS: a directory under profiles/
+// is a profile only when one of them is a file. Anything else is a runtime leftover.
+var identityMarkers = []string{"config.yaml", ".env", "SOUL.md", "profile.yaml", "auth.json", "state.db"}
 
 // SkillParts are the parts of a stage skill that get installed. evals/, .git and .DS_Store stay
 // behind — the installed skill must run, not test.
@@ -636,9 +651,38 @@ func orUnset(s string) string {
 
 // ---------------------------------------------------------------- profiles
 
+// Tombstone is where Hermes records a deleted profile — a marker beside the profile dirs, not
+// inside one, so it survives the directory's removal.
+func (m *Manager) Tombstone(name string) string {
+	return filepath.Join(m.Hermes, "profiles", ".deleted", name)
+}
+
+// Live reports whether Hermes would resolve this profile: a directory carrying an identity marker
+// that has not been tombstoned.
+//
+// Never decide this with os.Stat alone. A crashed `profile create` leaves an empty shell that
+// `profile list` does not show, `-p` refuses to start, and `profile create` refuses to replace
+// unless it was tombstoned first — so "the directory is there" is not the question, and answering
+// it that way is how a sandbox ends up half-provisioned and unrecoverable.
+func (m *Manager) Live(name string) bool {
+	home := m.Home(name)
+	if info, err := os.Stat(home); err != nil || !info.IsDir() {
+		return false
+	}
+	if _, err := os.Lstat(m.Tombstone(name)); err == nil {
+		return false
+	}
+	for _, marker := range identityMarkers {
+		if info, err := os.Stat(filepath.Join(home, marker)); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
 // Create makes the profile with no skills and no alias.
 func (m *Manager) Create(name string, dry bool) (string, error) {
-	if info, err := os.Stat(m.Home(name)); err == nil && info.IsDir() {
+	if m.Live(name) {
 		return fmt.Sprintf("create %s: exists", name), nil
 	}
 	if dry {
@@ -650,7 +694,38 @@ func (m *Manager) Create(name string, dry bool) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("hermes profile create %s failed:\n%s", name, out)
 	}
+	if !m.Live(name) {
+		return "", fmt.Errorf("hermes profile create %s reported success but %s is not a profile", name, m.Home(name))
+	}
 	return "create " + name, nil
+}
+
+// Remove deletes one sandbox through `hermes profile delete`, which is the only path that stops
+// the profile's backends, tombstones the directory and purges its session identity. Removing the
+// directory by hand leaves a marker-less shell that `profile create` then refuses to replace, so
+// this verb is the teardown, never `rm -rf`.
+func (m *Manager) Remove(name string, dry bool) (string, error) {
+	if name == Real {
+		return "", fmt.Errorf("remove %s: refused — the real profile is not a sandbox", name)
+	}
+	if !slices.Contains(EvalProfiles, name) {
+		return "", fmt.Errorf("remove %s: refused — not an eval sandbox (one of %s)",
+			name, strings.Join(EvalProfiles, ", "))
+	}
+	if _, err := os.Stat(m.Home(name)); err != nil {
+		return fmt.Sprintf("remove %s: not provisioned", name), nil
+	}
+	if dry {
+		return fmt.Sprintf("remove %s (hermes profile delete -y)", name), nil
+	}
+	out, err := exec.Command(m.Bin, "profile", "delete", "-y", name).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("hermes profile delete %s failed:\n%s", name, out)
+	}
+	if m.Live(name) {
+		return "", fmt.Errorf("hermes profile delete %s reported success but %s is still a live profile", name, m.Home(name))
+	}
+	return "remove " + name, nil
 }
 
 // Ensure brings one profile to its intended state: created, described, env, SOUL, skills, cwd,
@@ -740,10 +815,7 @@ func (m *Manager) Status(name string) Status {
 		}
 		sort.Strings(memories)
 	}
-	exists := false
-	if info, err := os.Stat(m.Home(name)); err == nil && info.IsDir() {
-		exists = true
-	}
+	exists := m.Live(name)
 	return Status{
 		Profile:         name,
 		Exists:          exists,
@@ -798,6 +870,11 @@ func (m *Manager) Check(names []string) ([]Status, []string) {
 		row := m.Status(name)
 		rows = append(rows, row)
 		if !row.Exists {
+			// A sandbox exists only for the operation that is using it, so "missing" is the state
+			// after every run and not a deviation. The real profile is the one that must be there.
+			if name != Real {
+				continue
+			}
 			problems = append(problems, name+": profile missing")
 			continue
 		}

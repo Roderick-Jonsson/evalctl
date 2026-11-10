@@ -22,6 +22,9 @@ func qualityStore(t *testing.T, cases string) *store.Store {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A tree is never hermetic on its own: rendering a SOUL.md, wiping memories and creating or
+	// removing a sandbox all write into the profile root, which would be the operator's ~/.hermes.
+	hermeticProfiles(t)
 	return s
 }
 
@@ -243,11 +246,7 @@ func TestTwoCasesRunOneAtATimeMakeOneIteration(t *testing.T) {
 	s := qualityStore(t, `{"skill_name":"dummy","evals":[
 	  {"id":1,"slug":"d1","prompt":"Roll one.","expected_output":"a face","files":[],"assertions":["a"]},
 	  {"id":2,"slug":"d2","prompt":"Roll two.","expected_output":"two faces","files":[],"assertions":["a"]}]}`)
-	bin := filepath.Join(t.TempDir(), "fake-hermes")
-	script := "#!/bin/sh\nprintf '{\"type\":\"result\",\"text\":\"ok\",\"duration_ms\":5,\"tokens\":{\"total\":10}}\\n'\n"
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	bin := fakeHermes(t)
 	t.Setenv("HERMES_BIN", bin)
 	write(t, filepath.Join(s.Root, "contract.md"), "# contract\n")
 

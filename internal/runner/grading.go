@@ -41,6 +41,12 @@ type GradeOptions struct {
 	Force   bool // re-grade arms that already carry verdicts
 	DryRun  bool // print the judge commands and write nothing
 	Budget  time.Duration
+	// Keep leaves the judge's sandbox behind for inspection, like Options.Keep.
+	Keep bool
+	// Nested says the caller already owns the sandbox: a `run --grade` provisions both arms for
+	// the whole operation and removes them after the judge pass, so the judge must not tear down
+	// what its caller is still using.
+	Nested bool
 }
 
 // GradeRun is what one invocation did, for the CLI line and the --json form.
@@ -77,6 +83,14 @@ func (r *Runner) GradeIteration(ctx context.Context, skill string, iteration int
 		return GradeRun{}, err
 	}
 	out := GradeRun{Skill: skill, Iteration: iteration, Path: iterDir}
+	// The judge runs in a clean room of its own: created for this pass when it is not there, so a
+	// grade run days after the run it reads costs a create, not a failed call.
+	if !o.DryRun && !o.Nested {
+		if err := r.provisionSandboxes([]string{GradeProfile}); err != nil {
+			return out, err
+		}
+		defer r.releaseSandboxes([]string{GradeProfile}, o.Keep)
+	}
 	for _, c := range cases {
 		caseDir := filepath.Join(iterDir, c.Slug)
 		if info, err := os.Stat(caseDir); err != nil || !info.IsDir() {

@@ -25,6 +25,7 @@ func runGrade(args []string) int {
 	force := fs.Bool("force", false, "re-grade arms that already carry verdicts")
 	dryRun := fs.Bool("dry-run", false, "print the judge commands, write nothing")
 	budget := fs.Int("budget", 0, "wall-clock seconds per judge call (default 180)")
+	keep := fs.Bool("keep", false, "keep the judge's sandbox profile when the pass ends (removed by default)")
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
@@ -35,10 +36,17 @@ func runGrade(args []string) int {
 	if c.s.Skill(*skill) == nil {
 		return fail(fmt.Errorf("unknown skill %q (known: %s)", *skill, strings.Join(c.s.SkillNames(), ", ")))
 	}
-	opts := runner.GradeOptions{Model: *model, CaseIDs: ids(*cases), Force: *force, DryRun: *dryRun}
+	opts := runner.GradeOptions{Model: *model, CaseIDs: ids(*cases), Force: *force, DryRun: *dryRun, Keep: *keep}
 	if *budget > 0 {
 		opts.Budget = time.Duration(*budget) * time.Second
 	}
+	// A grade recreates the judge's sandbox and removes it, so it is a writer like a run: the same
+	// lock keeps it off a live run's profiles and off a concurrent reap.
+	unlock, err := lockRun(c.s.Root)
+	if err != nil {
+		return fail(err)
+	}
+	defer unlock()
 	r := runner.New(c.s)
 	level, _ := runner.ParseActivity("off")
 	r.Emit = progressPrinter(os.Stdout, os.Stderr, level)
