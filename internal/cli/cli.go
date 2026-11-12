@@ -171,6 +171,12 @@ func Run(args []string) int {
 		return runProfiles(rest)
 	case "theme", "themes", "colour", "color":
 		return runTheme(rest)
+	case "completion", "completions":
+		return runCompletion(rest)
+	case "__complete":
+		// The completion callback. Hidden from help on purpose: it is plumbing the shell calls,
+		// not a command a person types.
+		return runComplete(rest)
 	default:
 		return unknownVerb(cmd)
 	}

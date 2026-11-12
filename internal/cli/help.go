@@ -249,6 +249,15 @@ var helpDocs = map[string]helpDoc{
 			"evalctl tui --skill slide-builder --lane output",
 		},
 	},
+	"completion": {
+		summary: "print a shell completion script: bash, zsh or fish",
+		usage:   []string{"evalctl completion bash|zsh|fish"},
+		examples: []string{
+			`eval "$(evalctl completion bash)"        # in ~/.bashrc`,
+			`eval "$(evalctl completion zsh)"         # in ~/.zshrc`,
+			"evalctl completion fish > ~/.config/fish/completions/evalctl.fish",
+		},
+	},
 	"version": {
 		summary: "which build this is: version, commit, dirty tree, go",
 		usage:   []string{"evalctl version [--short] [--json]"},
@@ -419,6 +428,7 @@ var helpAliases = map[string]string{
 	"runs": "runs", "results": "runs", "report": "report",
 	"profiles": "profiles", "profile": "profiles",
 	"theme": "theme", "themes": "theme", "colour": "theme", "color": "theme",
+	"completion": "completion", "completions": "completion",
 }
 
 func canonicalVerb(v string) string {
@@ -949,9 +959,10 @@ var indexGroups = []struct {
 		{"evalctl runs", "iterations per workspace, with pass rates and report state"},
 		{"evalctl report <run>", "an iteration's report.md, rendered (--raw for the source)"},
 	}},
-	{"PROFILES AND COLOUR", []indexEntry{
+	{"PROFILES, COLOUR AND SHELL", []indexEntry{
 		{"evalctl profiles [cmd]", "status/check/ensure/reap/render/sync/scrub/link/attach"},
 		{"evalctl theme [name]", "the colour schemes, with each role's contrast on its background"},
+		{"evalctl completion SH", "a shell completion script for bash, zsh or fish"},
 	}},
 }
 

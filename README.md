@@ -1005,6 +1005,9 @@ evalctl profiles attach [PROFILE]          # name the tree this profile is measu
 evalctl profiles render                    # after editing the real SOUL.md: copy it to the arms
 evalctl profiles sync eval-video-course-creator-with --skills source-research
 evalctl profiles scrub                     # wipe sandbox memories between iterations
+
+evalctl completion bash                    # or zsh, fish — print the script
+eval "$(evalctl completion zsh)"           # install it in ~/.zshrc
 ```
 
 Every read command takes `--json` where it makes sense (`ls`, `show`, `validate`, `stats`,
@@ -1014,7 +1017,7 @@ Every read command takes `--json` where it makes sense (`ls`, `show`, `validate`
 Every verb answers `-h` with its own page — what it is for, the grammar, examples, and the flags that
 verb actually parses — and `--help` adds the prose that would otherwise make it a wall (what a
 sandbox is, `promote`'s three modes, what the profiles link does). `evalctl help <verb>` is the `-h`
-page (`evalctl help` alone is the index above, in six groups). The page is a two-column layout, one
+page (`evalctl help` alone is the index above, in seven groups). The page is a two-column layout, one
 line per flag: flags are grouped under headings that say what they are for (`WHICH ROWS`,
 `EXECUTION`, `GRADING` …), each carries its allowed values and its default or environment variable
 as a bracket (`[possible values: trigger, output, both] [default: both]`, `[env: EVALCTL_ROOT]`),
@@ -1022,6 +1025,12 @@ the four global ones appear once at the foot rather than inside every list, head
 take their colour from the active theme, and the layout follows `COLUMNS` when the page is piped.
 `--no-input` turns off prompting everywhere; a command that would have asked says which flag to pass
 instead.
+
+Shell completion is a script plus a callback: `evalctl completion bash|zsh|fish` prints the script,
+and the hidden `__complete` verb answers it — the command list with its one-line summaries, each
+verb's flags, the declared values of `--lane`/`--label`/`--split`/`--arms`/`--log`, the palette
+names, the `profiles` sub-verbs, and the tree's own skills for `--skill`. It reads nothing else and
+never fails, because an error in a completion is painted across the command line you were typing.
 
 Exit codes are meant to be branched on: `0` done · `1` drift (`profiles check`) · `2` refused (bad
 usage, unknown ref, nothing selected, a prompt with no terminal) · `3` validation findings · `130`
