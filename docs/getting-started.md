@@ -23,6 +23,20 @@ evalctl init --skill meeting-notes --profile notes
 graded against. If you leave it out, evalctl measures whichever profile you are standing in, or
 Hermes's default — and it says so, loudly, at the start of every run.
 
+The same thing happens in the TUI: run `evalctl` in an empty folder and the door opens a *start a
+project* screen (skill name, folder, profile) that writes exactly this and then opens the loop.
+`init` is the scriptable spelling of it.
+
+If the folder **already holds skills**, neither is what you want — they exist, they just have no eval
+sets. `evalctl` in that folder opens *declare this folder*: it lists the skills it found, all
+selected, and one ctrl+s adds the missing sets (never touching a `SKILL.md`), names the profile, and
+creates it if it does not exist. The scriptable spelling:
+
+```bash
+evalctl adopt                          # every skill the folder holds
+evalctl adopt --profile notes-lab --link   # + create the profile if needed and link it
+```
+
 You get:
 
 ```

@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -47,6 +48,48 @@ func (m *Manager) LinkedTo(name, dir string) bool {
 		}
 	}
 	return false
+}
+
+// All lists the live profiles on this machine, by name: the default profile when the Hermes home is
+// one, then the named ones. Eval sandboxes are left out — they exist for the length of a run.
+func (m *Manager) All() []string {
+	var out []string
+	if info, err := os.Stat(filepath.Join(m.Hermes, "SOUL.md")); err == nil && !info.IsDir() {
+		out = append(out, DefaultReal)
+	}
+	entries, err := os.ReadDir(filepath.Join(m.Hermes, "profiles"))
+	if err != nil {
+		return out
+	}
+	var named []string
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() || strings.HasPrefix(name, ".") || SandboxShape(name) {
+			continue
+		}
+		if m.Live(name) {
+			named = append(named, name)
+		}
+	}
+	sort.Strings(named)
+	return append(out, named...)
+}
+
+// CreateIfMissing makes the profile when it is missing, and says whether it had to. A tree may name a
+// profile nobody has created yet; the first run then has somewhere to measure instead of a refusal.
+//
+// It is not `Ensure`: that brings a profile to the state a *sandbox* needs (skills synced, memories
+// wiped). This one creates the identity and nothing else — Hermes writes the SOUL.md and the model
+// default, which is exactly what a profile made by hand would start from.
+func (m *Manager) CreateIfMissing(name string, dry bool) (line string, created bool, err error) {
+	if name == "" {
+		return "", false, nil
+	}
+	if m.Live(name) {
+		return "profile " + name + ": exists", false, nil
+	}
+	line, err = m.Create(name, dry)
+	return line, true, err
 }
 
 // Link points a profile at a folder to scan for skills. It is the lab half of the split: the profile

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,6 +29,7 @@ import (
 const usage = `evalctl — manage and run a skill's eval sets: trigger queries and output cases.
 
   evalctl init [--skill S] [--dir D]  start a project: evalctl.json + one skill with both sets
+  evalctl adopt [--profile P] [--link]  declare an existing folder: add the sets its skills miss
   evalctl                            the TUI: trigger optimization, step by step
   evalctl tui [--skill S] [--lane L]  skip the door, or start on the output lane
   evalctl skills                     the set by skill: cases, fixtures, trigger rows, health
@@ -132,7 +134,7 @@ func verbFirst(args []string) []string {
 // bad flag rather than being silently reordered.
 func knownVerb(v string) bool {
 	switch v {
-	case "help", "-h", "--help", "version", "--version", "tui", "init", "new", "scaffold",
+	case "help", "-h", "--help", "version", "--version", "tui", "init", "new", "scaffold", "adopt",
 		"skills", "skill", "ls", "list", "show", "add", "edit", "rm", "delete", "mv", "move",
 		"promote", "dupes", "duplicates", "stats", "validate", "check", "renumber", "run",
 		"trigger", "lab", "grade", "revise", "describe", "runs", "results", "report",
@@ -172,6 +174,8 @@ func Run(args []string) int {
 		return runTUI(rest, store.LaneTrigger)
 	case "init", "new", "scaffold":
 		return runInit(rest)
+	case "adopt":
+		return runAdopt(rest)
 	case "skills", "skill":
 		return runSkills(rest)
 	case "ls", "list":
@@ -746,15 +750,38 @@ func runTUI(args []string, lane string) int {
 	if root == "" {
 		root = "."
 	}
+	// No terminal (piped output, a cron job, an agent's shell): point at the CLI rather than
+	// dying inside bubbletea's TTY setup. Asked before the tree is opened, because the answer to
+	// "no tree here" is a screen.
+	interactive := false
+	if info, err := os.Stdout.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
+		interactive = true
+	}
+	if !interactive {
+		fmt.Fprintln(os.Stderr, "evalctl: the TUI needs an interactive terminal — use `evalctl init`, `evalctl ls`, `evalctl stats` or `evalctl validate` instead")
+		return 2
+	}
 	s, err := store.Open(root)
 	if err != nil {
-		return fail(err)
-	}
-	// No terminal (piped output, a cron job, an agent's shell): point at the CLI rather than
-	// dying inside bubbletea's TTY setup.
-	if info, err := os.Stdout.Stat(); err == nil && info.Mode()&os.ModeCharDevice == 0 {
-		fmt.Fprintln(os.Stderr, "evalctl: the TUI needs an interactive terminal — use `evalctl ls`, `evalctl stats`, `evalctl dupes` or `evalctl validate` instead")
-		return 2
+		// Nothing here is a tree: the door's first step is starting one, in the same terminal.
+		// A profile is not that case — its error says to attach a tree, and scaffolding inside a
+		// profile is exactly what the tool refuses.
+		if errors.Is(err, store.ErrNoTree) {
+			abs, aerr := filepath.Abs(root)
+			if aerr != nil {
+				return fail(aerr)
+			}
+			dir, ok := tui.NewProject(abs)
+			if !ok {
+				return 2
+			}
+			root = dir
+			if s, err = store.Open(dir); err != nil {
+				return fail(err)
+			}
+		} else {
+			return fail(err)
+		}
 	}
 	if *skillFlag != "" && s.Skill(*skillFlag) == nil {
 		return fail(fmt.Errorf("unknown skill %q (known: %s)", *skillFlag, strings.Join(s.KnownSkills(), ", ")))

@@ -58,6 +58,11 @@ type Store struct {
 	Skills    []*Skill
 }
 
+// ErrNoTree is "nothing here is a tree, and nothing above it is either". It is a sentinel because a
+// caller can act on it — the interactive door offers to write a starter tree — while the profile
+// error below is not: standing in a profile is answered by attaching one, not by scaffolding.
+var ErrNoTree = errors.New("no eval tree")
+
 // TreeMarker is the file a profile uses to name the tree it is measured from: one absolute path.
 // It is what makes starting the tool inside a profile work — the profile's own skills are installs,
 // and the sets they are measured on live in the tree.
@@ -188,9 +193,9 @@ func FindRoot(start string) (string, error) {
 				return "", fmt.Errorf("%s is a Hermes profile, and a profile's skills carry no eval sets — "+
 					"name the tree it is measured from: evalctl profiles attach <tree> (or --root <tree>)", sawProfile)
 			}
-			return "", fmt.Errorf("no eval tree found at or above %s (expected <skill>/evals/evals.json, "+
+			return "", fmt.Errorf("%w found at or above %s (expected <skill>/evals/evals.json, "+
 				"<skill>/evals/%s, or a %s naming one) — `evalctl init --skill <name>` creates one here",
-				abs, TriggerFileName, TreeMarker)
+				ErrNoTree, abs, TriggerFileName, TreeMarker)
 		}
 		dir = parent
 	}
