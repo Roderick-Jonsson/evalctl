@@ -25,8 +25,9 @@ import (
 // usage is the whole command surface. It is the one place an operator finds a verb they half
 // remember, so it stays complete — but every line states a grammar and nothing else, and it is only
 // printed for `evalctl help`, never after an error (that is one line plus a pointer).
-const usage = `evalctl — manage and run the eval sets: trigger queries and output cases.
+const usage = `evalctl — manage and run a skill's eval sets: trigger queries and output cases.
 
+  evalctl init [--skill S] [--dir D]  start a project: evalctl.json + one skill with both sets
   evalctl                            the TUI: trigger optimization, step by step
   evalctl tui [--skill S] [--lane L]  skip the door, or start on the output lane
   evalctl skills                     the set by skill: cases, fixtures, trigger rows, health
@@ -60,7 +61,7 @@ const usage = `evalctl — manage and run the eval sets: trigger queries and out
   evalctl trigger [flags]            trigger lane: does the right skill load?
   evalctl runs [--lane] [--skill]     iterations per workspace, with pass rates
   evalctl report <run>               an iteration's report.md, rendered (--raw for the source)
-  evalctl profiles [cmd]             status/check/ensure/reap/render/sync/scrub the eval profiles
+  evalctl profiles [cmd] [--real]     status/check/ensure/reap/render/sync/scrub/link/unlink/attach
   evalctl theme [name]               the colour schemes, with each role's contrast on its background
 
 Run flags: --skill, --case, --iteration, --arms, --model, --budget, --resume, --force, --no-grade,
@@ -71,7 +72,13 @@ The four eval sandboxes are created by the run that needs them and removed when 
 that outlives its run carries that run's caches and sessions into the next measurement, and every
 profile picker lists it as a worker. --keep holds them for inspection; "profiles reap" removes what
 a killed run left behind, and "profiles ensure" provisions them on purpose (a manual chat in an
-arm, a "profiles check" diff).
+arm, a "profiles check" diff). ensure/sync/render/scrub leave the real profile alone unless --real
+is passed: those verbs write, and the real profile is where you actually work.
+
+"profiles link [PROFILE]" is the other half of that: it makes a profile scan this project folder
+via skills.external_dirs, so the profile you open in the desktop holds the same skills evalctl
+measures — by reference, with nothing copied. Eval sandboxes never get a link: they are throwaway
+copies with the evals stripped.
 
 --log full (default) streams each arm's tool calls and prose to stderr while it runs, and writes
 the same lines to activity.log beside stream.jsonl; tools drops the prose, off writes nothing.
@@ -84,6 +91,57 @@ Exit codes: 0 done · 1 interrupted · 2 refused (bad usage, unknown ref, valida
 Every write to the sets is atomic and leaves a copy in .evalctl/backups/.
 `
 
+// verbFirst moves a verb that follows global flags in front of them: `--root DIR validate --json`
+// becomes `validate --root DIR --json`. Flags that belong to the TUI alone (`--glyphs`, an unknown
+// flag) leave the line untouched — a line with no verb is the TUI, and the TUI parses its own.
+func verbFirst(args []string) []string {
+	global := map[string]bool{"--root": true, "--theme": true}
+	var flags, rest []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			rest = append(rest, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(a, "-") {
+			rest = append(rest, args[i:]...)
+			break
+		}
+		name, _, hasValue := strings.Cut(a, "=")
+		if !global[name] || name == a && hasValue {
+			return args
+		}
+		if hasValue {
+			flags = append(flags, a)
+			continue
+		}
+		flags = append(flags, a)
+		if i+1 < len(args) {
+			flags = append(flags, args[i+1])
+			i++
+		}
+	}
+	if len(rest) == 0 || !knownVerb(rest[0]) {
+		return args
+	}
+	out := append([]string{rest[0]}, flags...)
+	return append(out, rest[1:]...)
+}
+
+// knownVerb is the dispatch table's own list, so `--root X nonsense` stays a TUI invocation with a
+// bad flag rather than being silently reordered.
+func knownVerb(v string) bool {
+	switch v {
+	case "help", "-h", "--help", "version", "--version", "tui", "init", "new", "scaffold",
+		"skills", "skill", "ls", "list", "show", "add", "edit", "rm", "delete", "mv", "move",
+		"promote", "dupes", "duplicates", "stats", "validate", "check", "renumber", "run",
+		"trigger", "lab", "grade", "revise", "describe", "runs", "results", "report",
+		"profiles", "profile", "theme", "themes", "colour", "color":
+		return true
+	}
+	return false
+}
+
 // Run dispatches a command line and returns the process exit code.
 func Run(args []string) int {
 	// Colour is process-wide, so the global --theme is taken out here, before any flag set sees
@@ -95,6 +153,10 @@ func Run(args []string) int {
 	if len(args) == 0 {
 		return runTUI(nil, store.LaneTrigger)
 	}
+	// Global flags may precede the verb (`evalctl --root DIR validate`), which is how every other
+	// CLI reads, so the verb is moved in front of them before dispatch. A line with no verb at all
+	// is the TUI with global flags, not a command named "--root".
+	args = verbFirst(args)
 	// `evalctl --root DIR` is the TUI with a global flag, not a command named "--root".
 	if strings.HasPrefix(args[0], "-") && args[0] != "-h" && args[0] != "--help" && args[0] != "--version" {
 		return runTUI(args, store.LaneTrigger)
@@ -108,6 +170,8 @@ func Run(args []string) int {
 		return runVersion(rest)
 	case "tui":
 		return runTUI(rest, store.LaneTrigger)
+	case "init", "new", "scaffold":
+		return runInit(rest)
 	case "skills", "skill":
 		return runSkills(rest)
 	case "ls", "list":
@@ -171,7 +235,7 @@ type common struct {
 func newFS(name string) (*flag.FlagSet, *common) {
 	c := &common{}
 	fs := flag.NewFlagSet("evalctl "+name, flag.ContinueOnError)
-	fs.StringVar(&c.root, "root", "", "project root (default: nearest dir holding the eval tree)")
+	fs.StringVar(&c.root, "root", "", "the eval tree, or a profile naming one (default: nearest dir holding it)")
 	return fs, c
 }
 

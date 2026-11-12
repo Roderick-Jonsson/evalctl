@@ -29,10 +29,10 @@ import (
 // much shorter than a run — but it is still a model call with tools.
 const DefaultGradeBudget = 180 * time.Second
 
-// GradeProfile is the sandbox the judge runs in: no skills installed, no pinned working directory,
+// gradeProfile is the sandbox the judge runs in: no skills installed, no pinned working directory,
 // memories wiped like every eval sandbox. It reads like the baseline arm because it is the same
 // clean room; the grading rules arrive in the prompt, never in a persona.
-const GradeProfile = profile.Without
+func (r *Runner) gradeProfile() string { return r.Profiles.Name(profile.ArmWithout) }
 
 // GradeOptions is one grading invocation.
 type GradeOptions struct {
@@ -86,10 +86,10 @@ func (r *Runner) GradeIteration(ctx context.Context, skill string, iteration int
 	// The judge runs in a clean room of its own: created for this pass when it is not there, so a
 	// grade run days after the run it reads costs a create, not a failed call.
 	if !o.DryRun && !o.Nested {
-		if err := r.provisionSandboxes([]string{GradeProfile}); err != nil {
+		if err := r.provisionSandboxes([]string{r.gradeProfile()}); err != nil {
 			return out, err
 		}
-		defer r.releaseSandboxes([]string{GradeProfile}, o.Keep)
+		defer r.releaseSandboxes([]string{r.gradeProfile()}, o.Keep)
 	}
 	for _, c := range cases {
 		caseDir := filepath.Join(iterDir, c.Slug)
@@ -177,7 +177,7 @@ func (r *Runner) latestIteration(workspace string) int {
 // buildJudgeCmd is the grading call, printed verbatim by --dry-run. --in is the arm's directory:
 // outputs/ is what the judge reads, and the harness's own evidence sits beside it.
 func (r *Runner) buildJudgeCmd(promptFile, armDir string, o GradeOptions) []string {
-	cmd := []string{r.Profiles.Bin, "-p", GradeProfile, "chat"}
+	cmd := []string{r.Profiles.Bin, "-p", r.gradeProfile(), "chat"}
 	if o.Model != "" {
 		cmd = append(cmd, "-m", o.Model)
 	}
@@ -268,7 +268,7 @@ func (r *Runner) judgeArm(ctx context.Context, c Case, armDir string, cmdArgs []
 		Summary:          &summary,
 		Checks:           existing.Checks,
 		Response:         existing.Response,
-		Judge:            &JudgeInfo{Profile: GradeProfile, Model: o.Model, Started: started},
+		Judge:            &JudgeInfo{Profile: r.gradeProfile(), Model: o.Model, Started: started},
 	}
 	if err := writeJSONFile(filepath.Join(armDir, "grading.json"), grading); err != nil {
 		return Grading{}, err

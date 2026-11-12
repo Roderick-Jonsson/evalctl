@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"evalctl/internal/profile"
 	"evalctl/internal/store"
 )
 
@@ -24,6 +25,14 @@ func fakeHermes(t *testing.T) string {
 	script := `#!/bin/sh
 if [ -n "$HERMES_CALLS" ]; then printf '%s\n' "$*" >> "$HERMES_CALLS"; fi
 eval "last=\${$#}"
+# evalctl launches hermes with -p NAME chat ... so the verb is not $1: both the probe
+# and the launch are recognised from the whole line.
+case "$*" in
+  *"chat --help"*)
+    printf '%s\n' "--oneshot --query-file --format --in --yolo --max-turns"
+    exit 0
+    ;;
+esac
 case "$1" in
   profile)
     case "$2" in
@@ -39,7 +48,9 @@ case "$1" in
         ;;
     esac
     ;;
-  chat)
+esac
+case "$*" in
+  *" chat "*)
     printf '{"type":"result","text":"ok","duration_ms":5,"tokens":{"total":10}}\n'
     ;;
 esac
@@ -51,6 +62,25 @@ exit 0
 	return bin
 }
 
+// testProfile is the profile the runner tests measure in. It is set through $EVALCTL_PROFILE, which
+// is the same lever an operator has: nothing about it is compiled in.
+const testProfile = "test-profile"
+
+// writeContract is the real profile's SOUL.md — the contract every arm reads a copy of. It is the
+// one hand-written input of a measurement, so a tree without it cannot provision an arm.
+func writeContract(t *testing.T) {
+	t.Helper()
+	write(t, filepath.Join(os.Getenv("HERMES_ROOT"), "profiles", testProfile, "SOUL.md"), "# contract\n")
+	// An arm signs in with what this profile carries; a profile with nothing cannot provision one.
+	write(t, filepath.Join(os.Getenv("HERMES_ROOT"), "profiles", testProfile, ".env"), "EVALCTL_TEST_KEY=test\n")
+}
+
+// sandbox is the profile an arm of this run runs in, derived the way the tool derives it.
+func sandbox(t *testing.T, r *Runner, arm string) string {
+	t.Helper()
+	return r.Profiles.Name(arm)
+}
+
 // hermeticProfiles points the runner at a fake hermes and a throwaway profile root, so a test that
 // runs the real code path still writes nothing into ~/.hermes.
 func hermeticProfiles(t *testing.T) string {
@@ -58,6 +88,7 @@ func hermeticProfiles(t *testing.T) string {
 	home := filepath.Join(t.TempDir(), "hermes")
 	calls := filepath.Join(t.TempDir(), "hermes-calls.txt")
 	t.Setenv("HERMES_ROOT", home)
+	t.Setenv("EVALCTL_PROFILE", testProfile)
 	t.Setenv("HERMES_BIN", fakeHermes(t))
 	t.Setenv("HERMES_CALLS", calls)
 	return calls
@@ -141,7 +172,7 @@ func mustExist(t *testing.T, path, what string) {
 func TestARunCreatesItsSandboxesAndRemovesThem(t *testing.T) {
 	s := qualityStore(t, `{"skill_name":"dummy","evals":[
 	  {"id":1,"slug":"d1","prompt":"Roll one.","expected_output":"a face","files":[],"assertions":["a"]}]}`)
-	write(t, filepath.Join(s.Root, "contract.md"), "# contract\n")
+	writeContract(t)
 	calls := os.Getenv("HERMES_CALLS")
 
 	// A run that grades is one operation and two passes: the judge must not remove the arms its own
@@ -153,7 +184,7 @@ func TestARunCreatesItsSandboxesAndRemovesThem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"eval-vcc-with", "eval-vcc-without"} {
+	for _, name := range []string{sandbox(t, r, profile.ArmWith), sandbox(t, r, profile.ArmWithout)} {
 		if !sawCall(hermesCalls(t, calls), "profile create "+name) {
 			t.Fatalf("%s was never created — the run borrowed a sandbox it did not own", name)
 		}
@@ -169,7 +200,7 @@ func TestARunCreatesItsSandboxesAndRemovesThem(t *testing.T) {
 func TestKeepLeavesTheSandboxesBehind(t *testing.T) {
 	s := qualityStore(t, `{"skill_name":"dummy","evals":[
 	  {"id":1,"slug":"d1","prompt":"Roll one.","expected_output":"a face","files":[],"assertions":["a"]}]}`)
-	write(t, filepath.Join(s.Root, "contract.md"), "# contract\n")
+	writeContract(t)
 
 	r := New(s)
 	err := r.RunQuality(context.Background(), Options{Lane: store.LaneOutput, Skills: []string{"dummy"},
@@ -178,11 +209,11 @@ func TestKeepLeavesTheSandboxesBehind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustExist(t, profileDir(t, "eval-vcc-with"), "the kept with-skill sandbox")
-	if _, err := r.Profiles.Remove("eval-vcc-with", false); err != nil {
+	mustExist(t, profileDir(t, sandbox(t, r, profile.ArmWith)), "the kept with-skill sandbox")
+	if _, err := r.Profiles.Remove(sandbox(t, r, profile.ArmWith), false); err != nil {
 		t.Fatalf("a kept sandbox is not removable: %v", err)
 	}
-	mustNotExist(t, profileDir(t, "eval-vcc-with"), "eval-vcc-with after remove")
+	mustNotExist(t, profileDir(t, sandbox(t, r, profile.ArmWith)), "the with sandbox after remove")
 }
 
 // TestAStandaloneGradeProvisionsItsOwnRoom: grading is its own spend, days after the run it reads,
@@ -191,7 +222,7 @@ func TestKeepLeavesTheSandboxesBehind(t *testing.T) {
 func TestAStandaloneGradeProvisionsItsOwnRoom(t *testing.T) {
 	s := qualityStore(t, `{"skill_name":"dummy","evals":[
 	  {"id":1,"slug":"d1","prompt":"Roll one.","expected_output":"a face","files":[],"assertions":["a"]}]}`)
-	write(t, filepath.Join(s.Root, "contract.md"), "# contract\n")
+	writeContract(t)
 
 	r := New(s)
 	if err := r.RunQuality(context.Background(), Options{Lane: store.LaneOutput, Skills: []string{"dummy"},
@@ -206,15 +237,15 @@ func TestAStandaloneGradeProvisionsItsOwnRoom(t *testing.T) {
 	last := hermesCalls(t, os.Getenv("HERMES_CALLS"))
 	var created, removed bool
 	for _, c := range last {
-		if strings.HasPrefix(c, "profile create eval-vcc-without --no") {
+		if strings.HasPrefix(c, "profile create "+sandbox(t, r, profile.ArmWithout)+" --no") {
 			created = true
 		}
-		if c == "profile delete -y eval-vcc-without" {
+		if c == "profile delete -y "+sandbox(t, r, profile.ArmWithout) {
 			removed = true
 		}
 	}
 	if !created || !removed {
 		t.Fatalf("the judge did not provision and release its own room: %v", last)
 	}
-	mustNotExist(t, profileDir(t, "eval-vcc-without"), "the judge's sandbox after the pass")
+	mustNotExist(t, profileDir(t, sandbox(t, r, profile.ArmWithout)), "the judge's sandbox after the pass")
 }

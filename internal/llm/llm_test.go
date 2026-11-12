@@ -62,7 +62,7 @@ func TestTheEnvironmentBeatsTheFile(t *testing.T) {
 func TestTheFileAnswersWhenTheEnvironmentIsSilent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "evalctl.env")
-	if err := os.WriteFile(path, []byte("OLLAMA_API_KEY=from-the-file\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(EnvKey+"=from-the-file\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(EnvFileVar, path)
@@ -180,5 +180,42 @@ func TestCompleteReportsAnEmptyAnswer(t *testing.T) {
 	c := Config{BaseURL: srv.URL, Model: "m", APIKey: "k"}
 	if _, err := c.Complete(context.Background(), "s", "u", time.Second); err == nil {
 		t.Fatal("an empty answer is an error, not a proposal")
+	}
+}
+
+// TestAProviderThatIsNotOllamaIsNotAskedForOllamasVariable: the describe call is one HTTP request,
+// so its key is configuration. An OpenAI user points at their own key instead of renaming it.
+func TestTheDescribeKeyIsNotAnOllamaVariable(t *testing.T) {
+	t.Setenv(EnvFileVar, filepath.Join(t.TempDir(), "nothing-here"))
+	t.Setenv(EnvKey, "")
+	t.Setenv(EnvBaseURL, "https://api.openai.com/v1")
+	t.Setenv("OPENAI_API_KEY", "sk-from-openai")
+	c, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.APIKey != "sk-from-openai" || c.KeyName != "OPENAI_API_KEY" {
+		t.Fatalf("key = %q from %q, want OPENAI_API_KEY", c.APIKey, c.KeyName)
+	}
+
+	// A variable the user already exports is named, not copied.
+	t.Setenv(EnvKeyVar, "MY_PROVIDER_KEY")
+	t.Setenv("MY_PROVIDER_KEY", "from-my-variable")
+	c, err = FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.APIKey != "from-my-variable" || c.KeyName != "MY_PROVIDER_KEY" {
+		t.Fatalf("key = %q from %q, want MY_PROVIDER_KEY", c.APIKey, c.KeyName)
+	}
+
+	// With no candidate at all the error names what it looked for, so the fix is on the page.
+	t.Setenv(EnvKeyVar, "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OLLAMA_API_KEY", "")
+	_, err = FromEnv()
+	if err == nil || !strings.Contains(err.Error(), "EVALCTL_DESCRIBE_KEY") ||
+		!strings.Contains(err.Error(), "OPENAI_API_KEY") {
+		t.Fatalf("a missing key must name the variables it looked for, got %v", err)
 	}
 }

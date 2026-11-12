@@ -1,12 +1,17 @@
 # evalctl
 
-The whole eval toolchain for this repo in one Go binary: it manages the two eval lanes, runs
-them, and browses the results. No Python at runtime.
+An eval runner for Hermes skills, in one Go binary: it manages the two eval lanes, runs them against
+a Hermes profile, and browses the results. It knows no project — the skills, the tree's conventions
+and the profile are all read from where you point it.
 
 - **trigger lane** — `<skill>/evals/trigger-evals.json` (does the right skill load?)
 - **output lane** — `<skill>/evals/evals.json` plus the fixture dirs `<skill>/evals/files/<slug>/`
 
 Built with Bubble Tea, Bubbles, Lip Gloss and Huh, and Glamour for the reports.
+
+**Starting a project?** [docs/getting-started.md](docs/getting-started.md) is the front door: one
+command scaffolds the tree, and the page walks the first trigger run, the first output run, the
+credentials an eval sandbox needs, and what it expects from the Hermes install.
 
 ```bash
 cd evalctl
@@ -36,8 +41,122 @@ stale-binary warning — never a failed commit. It rebuilds **both** copies: the
 `./bin/evalctl`, because both get run — refreshing only PATH is how `./bin/evalctl` ended up two
 commits behind the screen someone was looking at. It is per-clone: run it once after cloning.
 
-`--root` picks the tree (default: walk up for the eval tree, or `$EVALCTL_ROOT`). Running it from
-inside the repo just works, installed or not.
+`--root` picks the tree (default: walk up for the eval tree, or `$EVALCTL_ROOT`), and global flags
+may come before the verb: `evalctl --root DIR validate`. Running it from inside the tree just works,
+installed or not.
+
+## Starting a tree
+
+```bash
+mkdir notes-evals && cd notes-evals
+evalctl init --skill meeting-notes --profile notes
+evalctl validate
+evalctl trigger --skill meeting-notes --dry-run
+```
+
+`init` writes the four files a skill needs (`SKILL.md`, `evals/evals.json`,
+`evals/trigger-evals.json`, an empty `evals/files/`) plus an `evalctl.json` for the tree. The starter
+is valid as written: `validate` is clean on it, so the first run is one edit away and not a scavenger
+hunt. The placeholders say what a real row looks like; `--force` replaces an existing skill.
+
+## What a run says before it spends
+
+Every non-dry run prints four things first, because each one used to be a silent assumption:
+
+```
+hermes Hermes Agent v0.23.1 … · evalctl v0.12.0 · /path/to/hermes
+contract: SOUL.md of profile notes (evalctl.json) · arms sign in with env OLLAMA_API_KEY
+```
+
+- **the hermes it drives** — `hermes chat --help` is asked for the flags evalctl launches with
+  (`--oneshot`, `--query-file`, `--format`, `--in`, `--yolo`, `--max-turns`); a missing one is a
+  refusal that names it, not an iteration of zeros;
+- **which profile's SOUL.md is the contract, and why** — `$EVALCTL_PROFILE`, the profile you are
+  standing in, the tree's `evalctl.json`, the tree's own directory, or Hermes's default. The default
+  is the one that used to be a guess, so it is called out as one;
+- **what the eval sandboxes sign in with** — every `.env` key the profile carries, and every login
+  file a browser sign-in left behind, which are copied into the sandbox byte for byte: the profile's
+  own (`google_token.json`, `*_credentials.json`, `*_token.json`, `*_client_secret.json`) and the
+  Hermes root's shared `auth.json`, which holds the provider credential pool. No credentials at all
+  is a refusal, not a run;
+- **nothing readable back** — an arm that emits no tool call and no `result` frame is an error with
+  the harness's stderr under it; a credential failure is named as one. Neither is scored as a zero.
+
+## Platforms
+
+macOS, Linux and Windows build from the same source: the two platform-specific pieces (ending a run's
+child processes, and the exclusive run lock) sit behind build tags, and `GOOS=windows go build ./...`
+is part of the check. The terminal-background probe is a no-op on Windows, which falls back to
+`COLORFGBG` and the dark palette.
+
+## Skills may be grouped
+
+A skill is any directory with `SKILL.md` and an `evals/` set, up to four levels down: at the tree's
+top level, in group folders (`groups/kitchen/recipe-notes`), or inside a plugin bundle
+(`plugins/<plugin>/skills/<skill>`). The folder name is the skill's name — a workspace, a profile
+install and a trigger row's `skill` field all key on it — so two folders with one name is an error
+that names both paths.
+
+A tree whose skills are grouped declares itself: its own `evalctl.json` (which `init` writes) is what
+makes the walk from inside `groups/kitchen/recipe-notes` find the tree and not the group folder. Deep
+layouts are only scanned for a directory that says it is a project — our own marker, a `.git`, or a
+`plugins/` folder — so a shared parent (`/tmp`, a home directory) never reads as somebody's tree.
+
+**A tree is a project folder, and only a project folder.** A Hermes profile is not one: its `skills/`
+is where Hermes installs skills, so a set kept in there would be the same files in a second home,
+with no `evalctl.json` anybody could share and the profile's own `SOUL.md` standing in as the
+contract. `evalctl init` refuses to scaffold inside a profile, and `evalctl` inside one refuses to
+read it, naming the two ways forward.
+
+The bridge between the two is `.evalctl-tree`: one line, written by `evalctl profiles attach <name>`
+from the project folder, which lets `cd ~/.hermes/profiles/<name> && evalctl` measure that folder's
+sets under that profile's rules. The profile supplies the contract (`SOUL.md`) and the credentials;
+the folder supplies the skills and holds the results. No profile name is compiled in: the profile you
+are standing in wins, `$EVALCTL_PROFILE` overrides it, and a run says which of those it used.
+
+**Provisioning verbs are opt-in on the real profile.** `profiles ensure`, `sync`, `render` and
+`scrub` write; without `--real` (or naming it) they touch only the eval sandboxes and print that the
+real profile was left alone. The run lock is keyed on the measured profile rather than the tree, so
+two checkouts measuring one profile wait for each other instead of sharing a sandbox.
+
+**The measured profile is also your lab.** A profile with no skills is useless to open by hand, which
+is what made it look like clutter in the picker. `evalctl profiles link` fixes that by reference, not
+by copy:
+
+```bash
+evalctl profiles link                       # the tree's profile scans this folder (skills.external_dirs)
+evalctl profiles status                     # says whether it scans the folder, and where
+evalctl profiles unlink                     # back to its own skills/ only
+```
+
+Hermes scans that folder beside `~/.hermes/skills/`, so the profile's index holds the same skills
+evalctl measures — edit the tree and the profile sees the edit, with nothing to re-sync. Two costs,
+both deliberate: the desktop agent can read the tree's `evals/` (fine for a lab, which is why eval
+sandboxes never get a link) and it can edit the tree (edits land in git). A folder that later moves is
+reported by `profiles check` — Hermes itself skips a missing external dir without a word.
+
+## A tree's own conventions
+
+The tool is a general eval runner: it names no skill, document or folder. Whatever a project means by
+"a run's output", "the order of its skills" or "a workspace" is declared in an optional
+`evalctl.json` at the tree's root:
+
+```json
+{
+  "profile": "video-course-creator",
+  "skill_order": ["source-research", "learning-path", "slide-builder", "av-production"],
+  "skill_outputs": { "slide-builder": ["SL-*.md", "pages"] },
+  "containment_prefixes": ["MC-", "_archive/"],
+  "workspace_prefixes": ["MC-"],
+  "env_keys": ["OLLAMA_API_KEY"]
+}
+```
+
+Every field is optional and empty means "no convention" — alphabetical skills, nothing recognised as
+an answer, anything inside the run root, the whole produced tree carried, the real profile's `.env`.
+`profile` is what a tree started from outside its profile says, so the contract and the sandbox names
+are that profile's. The sandbox names themselves are always derived: `eval-<profile>-with|without|
+trigger|revise`.
 
 `--glyphs auto|unicode|ascii` (`$EVALCTL_GLYPHS` as the default) picks the marks the frame draws
 itself: the cursor, the block in front of the region that has the keys, the rail's marks for a step that
@@ -82,6 +201,10 @@ before the port from its own `trigger.json` records and compares every verdict, 
 checkable against what the old loop produced.
 
 ## TUI
+
+Every screen below comes from one sample project; `slide-builder` is that project's skill, and the
+names in the screenshots (`SL-*.md`, `MC-…`) are that project's conventions in its own
+`evalctl.json`. Nothing in the tool knows any of them.
 
 It walks one loop and asks one question at a time: **which optimization**, **which skill**, **which
 of the skill's two activities**, then that activity's own screens. There is no table to sort, no column
@@ -446,7 +569,7 @@ way. What a run costs is decided before, on the section's pane — the runs per 
 run are there, beside the rows they multiply — so the one thing left to read is the run itself:
 
 ```
-  trigger eval 11 · 10 quer(y/ies) × 3 run(s) · threshold 0.5 · profile eval-vcc-trigger
+  trigger eval 11 · 10 quer(y/ies) × 3 run(s) · threshold 0.5 · profile eval-video-course-creator-trigger
   ────────────────────────────────────────────────────────────────────────────────────
   q01 · slide-builder · should_trigger=true · train          ✓ ✓ ✓
   q02 · slide-builder · should_trigger=false · train         ✓ ✗ ✓
@@ -853,10 +976,11 @@ evalctl report 3 --raw                      # the markdown source, exactly as wr
 evalctl report 3 | head -20                 # a pipe gets the source, not the ANSI
 evalctl profiles                            # status table of the four profiles
 evalctl profiles check                      # exits 1 if anything drifted
-evalctl profiles ensure --dry-run           # what create/render/sync/pin would do
-evalctl profiles ensure
-evalctl profiles render                    # after editing contract.md: re-stamp every SOUL.md
-evalctl profiles sync eval-vcc-with --skills source-research
+evalctl profiles ensure --dry-run           # what create/env/soul/sync would do (sandboxes only)
+evalctl profiles ensure                     # the four sandboxes; --real adds the real profile
+evalctl profiles attach [PROFILE]          # name the tree this profile is measured from
+evalctl profiles render                    # after editing the real SOUL.md: copy it to the arms
+evalctl profiles sync eval-video-course-creator-with --skills source-research
 evalctl profiles scrub                     # wipe sandbox memories between iterations
 ```
 
@@ -999,7 +1123,7 @@ carry the same information.
 ## What a run writes
 
 ```
-<skill>-workspace/iteration-N/meta.json                 contract + SOUL + skill-tree + fixture hashes
+<skill>-workspace/iteration-N/meta.json                 SOUL (the contract) + per-arm skill tree + fixture hashes
 <skill>-workspace/iteration-N/<slug>/prompt.txt
 <skill>-workspace/iteration-N/<slug>/judge-prompt.txt    what the judge was asked, verbatim
 <skill>-workspace/iteration-N/<slug>/<arm>/             the arm dir
@@ -1040,7 +1164,7 @@ the human's own note per case, and the lab counts a non-empty one as review done
 Errors — the tree would be rejected or could not be staged:
 
 - trigger `id` is a positive integer, unique; `split` ∈ {train, validation, holdout}; `query` non-empty
-- trigger `skill` must be a stage skill with an `evals/evals.json`
+- trigger `skill` must be a skill in the tree with an `evals/evals.json`
 - **each split must carry both labels** — deleting the last negative of a split is the classic
   trim accident, so it is reported as an error rather than silently saved-and-forgotten; the
   holdout is exempt, because it is a handful of fresh queries rather than a measuring instrument
@@ -1085,13 +1209,14 @@ for, two identical query strings.
 - **The parent grades; the child is never asked.** Containment, the production-root fingerprint,
   the load evidence and the skill's own `verify` are all read from disk and the process exit —
   a child's self-report is not evidence.
-- **Two containment checks per arm**: everything written sits under `MC-*/` or `_archive/`, and the
-  production masterclasses root is fingerprinted before and after every arm, so a run that writes
-  outside its run root fails instead of scoring clean.
+- **Two containment checks per arm**: everything written is inside the arm's run root, and the
+  production root (the real profile's `terminal.cwd`) is fingerprinted before and after every arm, so
+  a run that writes outside its run root fails instead of scoring clean. A tree that declares
+  top-level prefixes in `evalctl.json` (this one does: `MC-`, `_archive/`) gets a third reading.
 - **A launch that died is not a miss.** A trigger run that emitted no tool call is reported as
   unmeasured with its stderr and excluded from the rate.
 - **Trigger runs are stopped the moment the skill loads.** A positive stops on its own skill, a
-  negative on *any* stage skill (in a four-skill bundle the first load is the routing decision);
+  negative on *any* skill in the tree (the first load is the routing decision);
   negatives also run with a 3-turn cap. Without this, one negative query cost ~160s instead of ~5s.
 - **No grading, no assertions.** `grading.json` is evidence, not a verdict.
 - **A reference is shipped, not measured.** Promoting into `<skill>/references/` changes the tree
@@ -1107,7 +1232,7 @@ evalctl/
   internal/store/    discovery, load/save (atomic + backups), fixtures, validation, dupes, the
                      per-skill summary both faces open on
   internal/runner/   the loop: cases, staging, arms, trigger lane, scoring, reports, results
-  internal/profile/  the four profiles: contract render, env, skills sync, scrub, cwd pin, check
+  internal/profile/  the four sandboxes: SOUL copy, env, skills sync, scrub, check, attach
   internal/cli/      ls, show, add, edit, rm, mv, promote, dupes, stats, validate, renumber, run,
                      trigger, runs, report, profiles
   internal/tui/      the loop: door, skill chooser, the two sections and their steps, the query form,
@@ -1134,10 +1259,11 @@ duplicate-slug refusal, staging escape
 refusal, prompt-only staging, containment, `changes.json`, the benchmark delta, the trigger pass
 rule (above/below threshold, unmeasured excluded), load evidence (prose is not a load), the folded
 frontmatter description, next-iteration numbering, and a **dry run of both lanes that must print
-the real commands and write nothing**. The profile port adds: SOUL rendered byte-identical for both
-arms and idempotent on re-render, persona preserved, tree hash blind to `evals/` and `.DS_Store`,
-skills synced to exactly the wanted set, scrub never touching `SOUL.md`, and `check` naming a stale
-contract or a pinned sandbox.
+the real commands and write nothing**. The profile port adds: the real profile's `SOUL.md` copied
+byte-identically into both arms and never written back, tree hash blind to `evals/` and `.DS_Store`,
+skills synced to exactly the wanted set, scrub never touching `SOUL.md`, `check` naming an arm whose
+`SOUL.md` is not the contract or a sandbox that pins a working directory, and the profile layout
+(`skills/<skill>`, the real profile resolved from the cwd, `.evalctl-tree`) opening as a tree.
 
 `EVALCTL_PARITY_ROOT=/path/to/project go test ./internal/runner -run Rescore -v` re-scores a
 Python-written trigger iteration from its own `trigger.json` records and compares every verdict;

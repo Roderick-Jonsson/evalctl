@@ -12,6 +12,14 @@ import (
 	"evalctl/internal/version"
 )
 
+// dash is an empty field said out loud, for a report written before a value existed.
+func dash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
 // CollectedRun is one case read back from an iteration directory.
 type CollectedRun struct {
 	Skill          string               `json:"skill"`
@@ -353,16 +361,16 @@ func Report(runs []CollectedRun, bench Benchmark, skill string, iteration int) s
 			fmt.Fprintf(&b, "- files changed: %d (new %d, modified %d, deleted %d)\n", data.Changes.Count,
 				len(data.Changes.New), len(data.Changes.Modified), len(data.Changes.Deleted))
 			if cont.OK {
-				b.WriteString("- containment: ok — everything inside MC-*/ or _archive/\n")
+				b.WriteString("- containment: ok — everything inside the run root\n")
 			} else {
 				fmt.Fprintf(&b, "- containment: FAILED — wrote outside the workspace: %s\n",
 					strings.Join(cont.Outside, ", "))
 			}
 			if guard.OK || guard.Root == "" {
-				b.WriteString("- real masterclass root: untouched\n")
+				b.WriteString("- production root: untouched\n")
 			} else {
 				touched := append(append(append([]string{}, guard.Added...), guard.Changed...), guard.Removed...)
-				fmt.Fprintf(&b, "- real masterclass root: TOUCHED — %s\n", strings.Join(touched, ", "))
+				fmt.Fprintf(&b, "- production root: TOUCHED — %s\n", strings.Join(touched, ", "))
 			}
 			if len(loaded) == 0 {
 				b.WriteString("- skills loaded: none\n")
@@ -554,6 +562,7 @@ type SkillScore struct {
 
 // TriggerScore is the lane's verdict for an iteration.
 type TriggerScore struct {
+	Profile     string                `json:"profile"`
 	Threshold   float64               `json:"threshold"`
 	Runs        int                   `json:"runs"`
 	Rows        []ScoreRow            `json:"rows"`
@@ -760,7 +769,7 @@ func TriggerReport(score TriggerScore, iteration int, lint []LintRow) string {
 	}
 	fmt.Fprintf(&b, "# Trigger eval %d\n\n", iteration)
 	fmt.Fprintf(&b, "Generated %s · %d queries × %d runs · pass threshold %v · profile `%s` (all four skills installed) · evalctl %s\n\n",
-		timestamp(), score.Overall.Rows, score.Runs, trimFloat(score.Threshold), profileNameTrigger, version.Resolve())
+		timestamp(), score.Overall.Rows, score.Runs, trimFloat(score.Threshold), dash(score.Profile), version.Resolve())
 	fmt.Fprintf(&b, "**Pass rate %s** — train %s, validation %s. A query passes when its trigger rate is "+
 		"above the threshold (should-trigger) or below it (should-not-trigger).\n\n",
 		pct(score.Overall), pct(score.Splits["train"]), pct(score.Splits["validation"]))
@@ -781,7 +790,7 @@ func TriggerReport(score TriggerScore, iteration int, lint []LintRow) string {
 		b.WriteString("\n")
 	}
 	if !score.RootGuardOK {
-		b.WriteString("**The production masterclass root was touched by a run.**\n\n")
+		b.WriteString("**The production root was touched by a run.**\n\n")
 	}
 
 	b.WriteString("## By skill\n\n| Skill | Should trigger | Should not trigger | All |\n|---|---|---|---|\n")

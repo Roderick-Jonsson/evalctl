@@ -42,12 +42,12 @@ func runGrade(args []string) int {
 	}
 	// A grade recreates the judge's sandbox and removes it, so it is a writer like a run: the same
 	// lock keeps it off a live run's profiles and off a concurrent reap.
-	unlock, err := lockRun(c.s.Root)
+	r := runner.New(c.s)
+	unlock, err := lockRun(r.LockPath(), r.ProfileName())
 	if err != nil {
 		return fail(err)
 	}
 	defer unlock()
-	r := runner.New(c.s)
 	level, _ := runner.ParseActivity("off")
 	r.Emit = progressPrinter(os.Stdout, os.Stderr, level)
 

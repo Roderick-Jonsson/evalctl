@@ -31,7 +31,7 @@ type ReferenceRequest struct {
 	Run         string   // provenance: iteration-2
 	Case        string   // provenance: the run's case slug
 	Arm         string   // provenance: with_skill
-	Workspace   string   // MC-dir inside the arm (empty: the only one, or an error)
+	Workspace   string   // workspace dir inside the arm (empty: the only one, or an error)
 	File        []string // workspace-relative paths; empty = the stage's own outputs
 	All         bool     // take the whole workspace instead
 	As          string   // destination inside references/ — a rename, or a dir when several files
@@ -76,7 +76,7 @@ func (s *Store) ReferenceLogPath() string {
 // ReferencesDir is <skill>/references — installed with the skill (profile.SkillParts), so
 // whatever lands here is what the agent sees on its next run.
 func (s *Store) ReferencesDir(skill string) string {
-	return filepath.Join(s.Root, skill, "references")
+	return filepath.Join(s.SkillDir(skill), "references")
 }
 
 // PromoteReferences copies a run's own stage outputs into the skill's references/ dir.
@@ -154,15 +154,15 @@ func (s *Store) referencePlan(req ReferenceRequest) (Reference, string, error) {
 	}
 	src = armOutputs(src)
 	run := RefOf(req.SourceSkill, req.Run)
-	workspaces := WorkspaceDirs(src)
+	workspaces := WorkspaceDirs(src, s.Rules)
 	if len(workspaces) == 0 {
-		return Reference{}, "", fmt.Errorf("nothing to promote: %s holds no MC-*/ workspace", src)
+		return Reference{}, "", fmt.Errorf("nothing to promote: %s holds no workspace dir", src)
 	}
 	ws, err := pickWorkspace(src, workspaces, req.Workspace)
 	if err != nil {
 		return Reference{}, "", err
 	}
-	files, skipped, err := selectReferences(ws, req)
+	files, skipped, err := selectReferences(ws, req, s.Rules)
 	if err != nil {
 		return Reference{}, "", err
 	}
@@ -183,9 +183,9 @@ func (s *Store) referencePlan(req ReferenceRequest) (Reference, string, error) {
 	return out, ws, nil
 }
 
-// WorkspaceDirs lists the MC-* dirs a run's arm produced, sorted. It reads the arm's outputs/ dir
-// (the older layout kept MC-*/ in the arm dir itself, and that still reads).
-func WorkspaceDirs(dir string) []string {
+// WorkspaceDirs lists the dirs a run's arm produced that the tree calls workspaces, sorted. It reads
+// the arm's outputs/ dir (the older layout kept them in the arm dir itself, and that still reads).
+func WorkspaceDirs(dir string, rules stage.Rules) []string {
 	dir = armOutputs(dir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -193,7 +193,7 @@ func WorkspaceDirs(dir string) []string {
 	}
 	var out []string
 	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), "MC-") {
+		if e.IsDir() && rules.Carries(e.Name()) {
 			out = append(out, e.Name())
 		}
 	}
@@ -202,7 +202,7 @@ func WorkspaceDirs(dir string) []string {
 }
 
 // pickWorkspace resolves which workspace a promotion is about. One is the common case; several
-// means the run wrote more than one masterclass, and guessing one would ship the wrong example.
+// means the run wrote more than one workspace, and guessing one would ship the wrong example.
 func pickWorkspace(src string, workspaces []string, want string) (string, error) {
 	want = strings.TrimSpace(want)
 	if want != "" {
@@ -221,9 +221,9 @@ func pickWorkspace(src string, workspaces []string, want string) (string, error)
 }
 
 // selectReferences returns what to take from the workspace and what it deliberately leaves: the
-// stage's own outputs (stage.Outputs) by default, one path with File, everything with All.
-func selectReferences(ws string, req ReferenceRequest) (taken, skipped []string, err error) {
-	defaults := stage.Outputs[req.Skill]
+// skill's own outputs (the tree's table) by default, one path with File, everything with All.
+func selectReferences(ws string, req ReferenceRequest, rules stage.Rules) (taken, skipped []string, err error) {
+	defaults := rules.Outputs[req.Skill]
 	switch {
 	case len(req.File) > 0:
 		for _, name := range req.File {
@@ -245,11 +245,12 @@ func selectReferences(ws string, req ReferenceRequest) (taken, skipped []string,
 		}
 		taken = all
 	case len(defaults) == 0:
-		return nil, nil, fmt.Errorf("no stage output table for %q (internal/stage) — pass --file <path> or --all", req.Skill)
+		return nil, nil, fmt.Errorf("the tree declares no outputs for %q (%s) — pass --file <path> or --all",
+			req.Skill, stage.FileName)
 	default:
 		// The patterns are matched against what this workspace holds: the documents are
 		// <PREFIX>-<topic>.md, so the entry names, not the patterns, are what collectFiles takes.
-		for _, name := range stage.Present(ws, req.Skill) {
+		for _, name := range rules.Present(ws, req.Skill) {
 			found, err := collectFiles(ws, name)
 			if err != nil {
 				continue // this stage did not write that artifact

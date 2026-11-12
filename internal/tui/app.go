@@ -134,7 +134,7 @@ func newModel(s *store.Store) *Model {
 	m := &Model{store: s, ver: info.Short(), built: info.Clock(), mode: screenPick, lane: store.LaneTrigger}
 	// The stamp the store was opened at: a screen drawn from it is current until the tree says
 	// otherwise. A tree that cannot be stamped reads as changed, and the first tick re-reads it.
-	m.stamp, _ = store.TreeStamp(s.Root)
+	m.stamp, _ = store.TreeStamp(s.SkillsDir)
 
 	m.loadPick()
 	return m
@@ -241,7 +241,9 @@ func watchEvery() tea.Cmd {
 // syncTree is the app's answer to "is what I am showing still the disk?" It costs one stat walk and
 // re-reads nothing while the stamp holds — which is almost every second.
 func (m *Model) syncTree() {
-	stamp, err := store.TreeStamp(m.store.Root)
+	// SkillsDir, not Root: inside a profile the root also holds sessions, caches and state.db, and a
+	// stamp that moved every second would re-read a tree nothing on screen had changed.
+	stamp, err := store.TreeStamp(m.store.SkillsDir)
 	if err != nil {
 		m.noteStatus("cannot read the tree: "+err.Error(), true)
 		return

@@ -125,9 +125,11 @@ func runRun(args []string) int {
 	return execute(c.s, r, opts)
 }
 
-// execute runs a lane under the exclusive lock, with Ctrl-C wired to cancellation.
+// execute runs a lane under the exclusive lock, with Ctrl-C wired to cancellation. The lock is the
+// measured profile's, so a second checkout measuring the same profile waits rather than grading a
+// half-synced sandbox.
 func execute(s *store.Store, r *runner.Runner, opts runner.Options) int {
-	unlock, err := lockRun(s.Root)
+	unlock, err := lockRun(r.LockPath(), r.ProfileName())
 	if err != nil {
 		return fail(err)
 	}
@@ -152,25 +154,49 @@ func execute(s *store.Store, r *runner.Runner, opts runner.Options) int {
 	return 0
 }
 
-// lockRun keeps two runners off one profile home at a time: an eval arm writes skills/ and
-// memories/ inside its sandbox, so a second concurrent run would grade a half-synced profile.
-func lockRun(root string) (func(), error) {
-	dir := filepath.Join(root, ".evalctl")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+// lockRun keeps two runners off one profile at a time: an eval arm writes skills/ and memories/
+// inside its sandbox, so a second concurrent run would grade a half-synced profile. The file is the
+// profile's (see Runner.LockPath), which is what makes two trees measuring one profile collide.
+func lockRun(lockPath, profileName string) (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "run.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockFile(f); err != nil {
 		f.Close()
-		return nil, fmt.Errorf("another evalctl run is in progress (lock: .evalctl/run.lock)")
+		return nil, fmt.Errorf("another evalctl run is already measuring profile %s (lock: %s) — wait for it, "+
+			"or `evalctl profiles reap` if it was killed", profileName, lockPath)
 	}
 	_ = f.Truncate(0)
 	_, _ = f.WriteString(fmt.Sprintf("%d\n", os.Getpid()))
 	return func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = unlockFile(f)
+		f.Close()
+	}, nil
+}
+
+// lockTree is the write lock for changes to the sets themselves (a promotion writes fixtures a run
+// might be staging). It is separate from the run lock, which belongs to the profile: two trees can
+// promote at once, but not while a run is measuring either of them.
+func lockTree(root string) (func(), error) {
+	dir := filepath.Join(root, ".evalctl")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dir, "tree.lock")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := lockFile(f); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("another evalctl writer is editing this tree (lock: %s)", path)
+	}
+	return func() {
+		_ = unlockFile(f)
 		f.Close()
 	}, nil
 }
@@ -351,6 +377,7 @@ func runProfiles(args []string) int {
 	skills := fs.String("skills", "", "sync: comma-separated skill names")
 	dryRun := fs.Bool("dry-run", false, "print the plan, change nothing")
 	asJSON := fs.Bool("json", false, "machine-readable output (status, check)")
+	includeReal := fs.Bool("real", false, "ensure/sync/render/scrub: also write into the real profile (default: sandboxes only)")
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
 	}
@@ -359,17 +386,72 @@ func runProfiles(args []string) int {
 	var names []string
 	if len(rest) > 0 {
 		switch rest[0] {
-		case "status", "check", "ensure", "render", "sync", "scrub", "reap":
+		case "status", "check", "ensure", "render", "sync", "scrub", "reap", "attach", "link", "unlink":
 			command = rest[0]
 			names = rest[1:]
 		default:
 			names = rest
 		}
 	}
-	m := profile.New(c.s.Root, c.s.SkillNames())
+	m := profile.New(c.s.Root, c.s.SkillNames(), c.s.Rules)
+
+	// attach names the tree a profile is measured from. It runs before targets are resolved: the
+	// profile it is given need not be one of the five (a profile with skills of its own can be
+	// measured too), and the file it writes is the only thing that lets `evalctl` started inside a
+	// profile find the sets instead of walking up to an empty folder.
+	if command == "attach" {
+		target := m.Real
+		if len(names) > 0 {
+			target = names[0]
+		}
+		path := filepath.Join(m.Home(target), store.TreeMarker)
+		if _, err := os.Stat(m.Home(target)); err != nil {
+			return fail(fmt.Errorf("attach %s: no profile at %s", target, m.Home(target)))
+		}
+		msg := fmt.Sprintf("%s ← %s", path, c.s.Root)
+		if *dryRun {
+			fmt.Println(msg)
+			return 0
+		}
+		if err := os.WriteFile(path, []byte(c.s.Root+"\n"), 0o644); err != nil {
+			return fail(err)
+		}
+		fmt.Println(msg)
+		fmt.Println(styleDim.Render(fmt.Sprintf(
+			"  evalctl started anywhere in %s now opens %s", target, c.s.Root)))
+		return 0
+	}
+
 	targets, err := m.Named(names)
 	if err != nil {
 		return fail(err)
+	}
+
+	// Provisioning verbs write. The real profile is where somebody actually works, so it is opt-in
+	// by name or by --real: `ensure` used to copy skills into it without saying so in its own name.
+	// link/unlink write config.yaml, so they obey the same rule as the other writers: the real
+	// profile is opt-in, and here it is the whole point — the link exists to make it usable by hand.
+	switch command {
+	case "link", "unlink":
+		if len(names) == 0 {
+			names = []string{m.Real}
+			targets = []string{m.Real}
+		}
+	case "ensure", "sync", "render", "scrub":
+		if !*includeReal {
+			var kept []string
+			for _, name := range targets {
+				if name != m.Real {
+					kept = append(kept, name)
+				}
+			}
+			if len(kept) != len(targets) {
+				fmt.Println(styleDim.Render(fmt.Sprintf(
+					"  %s: the real profile %s is left alone — pass --real (or name it) to write there",
+					command, m.Real)))
+			}
+			targets = kept
+		}
 	}
 
 	switch command {
@@ -377,14 +459,21 @@ func runProfiles(args []string) int {
 		// Teardown for a run that died before its own cleanup. Every sandbox on disk is a leftover
 		// by definition — a live one belongs to a run that is using it — which is why this takes
 		// the run lock before touching anything.
-		unlock, err := lockRun(c.s.Root)
+		unlock, err := lockRun(m.LockPath(), m.Real)
 		if err != nil {
 			return fail(err)
 		}
 		defer unlock()
+		if len(names) == 0 {
+			targets = m.ReapTargets()
+		}
+		owned := map[string]bool{}
+		for _, name := range m.Sandboxes() {
+			owned[name] = true
+		}
 		var reaped []string
 		for _, name := range targets {
-			if name == profile.Real {
+			if name == m.Real {
 				// The real profile is not a sandbox. Named by hand it is a mistake worth refusing;
 				// reached through the default list it is simply not this verb's business.
 				if len(names) > 0 {
@@ -399,6 +488,24 @@ func runProfiles(args []string) int {
 				}
 				fmt.Println(styleWarn.Render(fmt.Sprintf("  ✗ %s: %s is not a profile — remove that directory by hand",
 					name, m.Home(name))))
+				continue
+			}
+			if !owned[name] {
+				// Sandbox-shaped but not this tree's: another project may be measuring in it right
+				// now, so it is only removed when its own lock is free.
+				unlock, err := lockRun(m.LockPathFor(name), name)
+				if err != nil {
+					fmt.Println(styleWarn.Render(fmt.Sprintf("  · %s: not this tree's and in use — left alone", name)))
+					continue
+				}
+				fmt.Println(styleDim.Render(fmt.Sprintf("  · %s: another tree's leftover sandbox", name)))
+				line, err := m.Remove(name, *dryRun)
+				unlock()
+				if err != nil {
+					return fail(err)
+				}
+				fmt.Println(line)
+				reaped = append(reaped, name)
 				continue
 			}
 			line, err := m.Remove(name, *dryRun)
@@ -453,6 +560,15 @@ func runProfiles(args []string) int {
 			return 0
 		}
 		printProfileTable(m, rows)
+		// The lab half of the split: a profile with no link is a profile you cannot work in, which
+		// is what made it look like clutter.
+		if m.LinkedTo(m.Real, c.s.Root) {
+			fmt.Println(styleDim.Render(fmt.Sprintf("  %s scans %s (external skills — no copy)", m.Real, c.s.Root)))
+		} else if len(m.ExternalDirs(m.Real)) == 0 {
+			fmt.Println(styleDim.Render(fmt.Sprintf(
+				"  %s carries no project skills — `evalctl profiles link %s` makes it the lab you work in by hand",
+				m.Real, m.Real)))
+		}
 		return 0
 	case "sync":
 		wanted := []string{}
@@ -470,6 +586,26 @@ func runProfiles(args []string) int {
 				return fail(err)
 			}
 			fmt.Println(line)
+		}
+		return 0
+	case "link", "unlink":
+		for _, name := range targets {
+			var line string
+			var err error
+			if command == "link" {
+				line, err = m.Link(name, c.s.Root, *dryRun)
+			} else {
+				line, err = m.Unlink(name, *dryRun)
+			}
+			if err != nil {
+				return fail(err)
+			}
+			fmt.Println(line)
+		}
+		if command == "link" && !*dryRun {
+			fmt.Println(styleDim.Render(fmt.Sprintf(
+				"  %s now scans this folder beside its own skills — open it in the desktop to work by hand; "+
+					"eval sandboxes are unaffected (they are copies)", targets[0])))
 		}
 		return 0
 	case "scrub", "render":
@@ -507,24 +643,24 @@ func printProfileTable(m *profile.Manager, rows []profile.Status) {
 	for _, row := range rows {
 		if !row.Exists {
 			// A sandbox that is not on disk is the normal state between runs, not a broken one.
-			tableRows = append(tableRows, []string{row.Profile, "—", "—", "—", "—", "—"})
+			tableRows = append(tableRows, []string{row.Profile, "—", "—", "—", "—", "—", "—"})
 			continue
 		}
-		contract := "STALE"
-		if row.ContractCurrent {
+		contract := "differs"
+		if row.SoulOK {
 			contract = "ok"
 		}
+		// CWD is a reading, not a rule: a profile's working directory is its own, and the harness
+		// only cares that a sandbox has none.
 		cwd := "—"
 		if row.TerminalCwd != "" {
-			cwd = "pinned"
-			if row.TerminalCwd != m.MasterclassRoot {
-				cwd = row.TerminalCwd
-			}
+			cwd = row.TerminalCwd
 		}
 		skills := fmt.Sprintf("%d", len(row.Skills))
 		memories := fmt.Sprintf("%d", len(row.Memories))
-		tableRows = append(tableRows, []string{row.Profile, skills, memories, contract, row.Model, cwd})
+		auth := fmt.Sprintf("%d", len(row.AuthFiles))
+		tableRows = append(tableRows, []string{row.Profile, skills, memories, contract, auth, row.Model, cwd})
 	}
-	table(os.Stdout, []string{"PROFILE", "SKILLS", "MEMORIES", "CONTRACT", "MODEL", "CWD"}, tableRows,
-		[]int{0, 0, 0, 0, 0, 0})
+	table(os.Stdout, []string{"PROFILE", "SKILLS", "MEMORIES", "SOUL", "LOGIN", "MODEL", "CWD"}, tableRows,
+		[]int{0, 0, 0, 0, 0, 0, 0})
 }

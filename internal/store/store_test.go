@@ -294,11 +294,13 @@ func TestValidateCatchesRunPyFailures(t *testing.T) {
 	issues := s.Validate()
 	var splitErr, fileErr bool
 	for _, i := range issues {
-		if i.Severity != SeverityError {
+		if i.Severity == SeverityWarning && strings.Contains(i.Msg, "train split has no should-not-trigger") {
+			// A one-sided split is measured, not refused — the warning is the whole rule.
+			splitErr = true
 			continue
 		}
-		if strings.Contains(i.Msg, "train split has no should-not-trigger") {
-			splitErr = true
+		if i.Severity != SeverityError {
+			continue
 		}
 		if strings.Contains(i.Msg, "in/missing.md") {
 			fileErr = true

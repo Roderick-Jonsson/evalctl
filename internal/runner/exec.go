@@ -9,9 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
-	"syscall"
 	"time"
+
+	"evalctl/internal/profile"
 )
 
 // Timing is one arm's cost, written to timing.json.
@@ -121,7 +121,7 @@ type TriggerRecord struct {
 
 // buildArmCmd is the shell command a quality arm runs — printed verbatim by --dry-run.
 func (r *Runner) buildArmCmd(promptFile, runRoot, arm string, o Options) []string {
-	cmd := []string{r.Profiles.Bin, "-p", ArmProfiles[arm], "chat"}
+	cmd := []string{r.Profiles.Bin, "-p", r.ArmProfile(arm), "chat"}
 	if o.Model != "" {
 		cmd = append(cmd, "-m", o.Model)
 	}
@@ -131,7 +131,7 @@ func (r *Runner) buildArmCmd(promptFile, runRoot, arm string, o Options) []strin
 
 // buildTriggerCmd is one trigger observation: the trigger profile, a turn cap, an empty root.
 func (r *Runner) buildTriggerCmd(promptFile, runRoot string, o Options, maxTurns int) []string {
-	cmd := []string{r.Profiles.Bin, "-p", profileNameTrigger, "chat"}
+	cmd := []string{r.Profiles.Bin, "-p", r.Profiles.Name(profile.ArmTrigger), "chat"}
 	if o.Model != "" {
 		cmd = append(cmd, "-m", o.Model)
 	}
@@ -191,7 +191,7 @@ func (r *Runner) RunArm(ctx context.Context, c Case, arm, armDir string, o Optio
 	cmd := exec.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
 	cmd.Dir = runRoot
 	cmd.Env = append(os.Environ(), "HERMES_EVAL_ARM="+arm)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureProcess(cmd)
 	out, err := os.Create(stream)
 	if err != nil {
 		return ArmResult{}, err
@@ -204,7 +204,7 @@ func (r *Runner) RunArm(ctx context.Context, c Case, arm, armDir string, o Optio
 	defer errFile.Close()
 	cmd.Stdout, cmd.Stderr = out, errFile
 
-	guardBefore := RootSnapshot(r.Profiles.MasterclassRoot)
+	guardBefore := RootSnapshot(r.Profiles.Production)
 	started := time.Now()
 
 	runCtx, cancel := context.WithTimeout(ctx, o.Budget)
@@ -249,7 +249,15 @@ loop:
 	}
 	act.close()
 
-	guard := RootGuard(guardBefore, RootSnapshot(r.Profiles.MasterclassRoot), r.Profiles.MasterclassRoot)
+	// What the launch actually produced, before anything writes it down: no stream, no score. A
+	// credential failure is named as one instead of being recorded as a skill that did not work.
+	events := IterEvents(stream)
+	result := FindResult(stream)
+	if prob := StreamProblem(events, result, readText(filepath.Join(armDir, "stderr.txt"))); prob != nil {
+		return ArmResult{}, fmt.Errorf("%s case %d · %s: %w", c.Skill, c.ID, arm, prob)
+	}
+
+	guard := RootGuard(guardBefore, RootSnapshot(r.Profiles.Production), r.Profiles.Production)
 	after, err := Inventory(runRoot)
 	if err != nil {
 		return ArmResult{}, err
@@ -260,7 +268,6 @@ loop:
 		}
 	}
 
-	result := FindResult(stream)
 	if result == nil {
 		result = map[string]any{}
 	}
@@ -281,9 +288,8 @@ loop:
 	if err := writeJSONFile(filepath.Join(armDir, "changes.json"), changes); err != nil {
 		return ArmResult{}, err
 	}
-	events := IterEvents(stream)
 	checks := Checks{
-		Containment:  CheckContainment(before, after),
+		Containment:  CheckContainment(before, after, r.Store.Rules),
 		RootGuard:    guard,
 		SkillsLoaded: LoadedFromEvents(events, r.Profiles.Skills),
 		Verify:       r.verifyWorkspaces(c.Skill, armDir, o),
@@ -337,7 +343,7 @@ func reloadArm(armDir string) ArmResult {
 // verifyWorkspaces runs the skill's own mechanical checks when it ships a scripts/ CLI. It reads
 // the tree the run produced (armDir/outputs), not the harness's evidence next to it.
 func (r *Runner) verifyWorkspaces(skill, armDir string, o Options) []VerifyEntry {
-	if o.NoVerify || !fileExists(filepath.Join(r.Root, skill, "scripts", "go.mod")) {
+	if o.NoVerify || !fileExists(filepath.Join(r.Store.SkillDir(skill), "scripts", "go.mod")) {
 		return []VerifyEntry{}
 	}
 	outputs := filepath.Join(armDir, "outputs")
@@ -347,11 +353,11 @@ func (r *Runner) verifyWorkspaces(skill, armDir string, o Options) []VerifyEntry
 	}
 	out := []VerifyEntry{}
 	for _, e := range entries {
-		if !e.IsDir() || !strings.HasPrefix(e.Name(), "MC-") {
+		if !e.IsDir() || !r.Store.Rules.Carries(e.Name()) {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
-		cmd := exec.CommandContext(ctx, "go", "run", "-C", filepath.Join(r.Root, skill, "scripts"), ".",
+		cmd := exec.CommandContext(ctx, "go", "run", "-C", filepath.Join(r.Store.SkillDir(skill), "scripts"), ".",
 			"verify", e.Name(), "--root", outputs)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -383,9 +389,8 @@ func (r *Runner) verifyWorkspaces(skill, armDir string, o Options) []VerifyEntry
 
 // ---------------------------------------------------------------- trigger observation
 
-// profileNameTrigger is eval-vcc-trigger; kept as a constant so the command builder reads like
+// The trigger arm's profile is derived from the tree's real profile (see Runner.ArmProfile), so the
 // the Python it replaces.
-const profileNameTrigger = "eval-vcc-trigger"
 
 // RunTriggerCase is one observation: the query in an empty run root, stopped as soon as the
 // skill loads.
@@ -421,7 +426,7 @@ func (r *Runner) RunTriggerCase(ctx context.Context, c TriggerCase, runDir strin
 
 	stream := filepath.Join(runDir, "stream.jsonl")
 	started := time.Now()
-	guardBefore := RootSnapshot(r.Profiles.MasterclassRoot)
+	guardBefore := RootSnapshot(r.Profiles.Production)
 
 	// What ends the observation early. A should-trigger query is decided by its own skill being
 	// opened; a should-not-trigger query is decided as soon as *any* stage skill is opened,
@@ -440,7 +445,7 @@ func (r *Runner) RunTriggerCase(ctx context.Context, c TriggerCase, runDir strin
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
 	cmd.Dir = runRoot
 	cmd.Env = append(os.Environ(), "HERMES_EVAL_ARM=trigger")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureProcess(cmd)
 	out, err := os.Create(stream)
 	if err != nil {
 		return TriggerRecord{}, err
@@ -501,7 +506,7 @@ loop:
 		exitCode = &code
 	}
 
-	guard := RootGuard(guardBefore, RootSnapshot(r.Profiles.MasterclassRoot), r.Profiles.MasterclassRoot)
+	guard := RootGuard(guardBefore, RootSnapshot(r.Profiles.Production), r.Profiles.Production)
 	events := IterEvents(stream)
 	loaded := LoadedFromEvents(events, r.Profiles.Skills)
 	if loaded == nil {
@@ -517,10 +522,8 @@ loop:
 			others = append(others, s)
 		}
 	}
-	stderr := ""
-	if b, err := os.ReadFile(filepath.Join(runDir, "stderr.txt")); err == nil {
-		stderr = truncateText(string(b), 600)
-	}
+	stderr := truncateText(readText(filepath.Join(runDir, "stderr.txt")), 600)
+	problem := StreamProblem(events, result, stderr)
 	record := TriggerRecord{
 		ID:            c.ID,
 		Skill:         c.Skill,
@@ -537,7 +540,7 @@ loop:
 		ExitCode:    exitCode,
 		DurationMS:  duration(result, started),
 		TotalTokens: anyInt(tokensOf(result)["total"]),
-		Error:       firstNonEmpty(runErr, anyString(result["error"])),
+		Error:       firstNonEmpty(runErr, anyString(result["error"]), errorText(problem)),
 		Stderr:      stderr,
 		RootGuard:   guard,
 		RunRoot:     runRoot,
@@ -580,28 +583,9 @@ func (p *process) exitCode() (int, bool) {
 	}
 }
 
-// stop terminates the child's whole process group: a hermes run starts its own children, and a
-// bare SIGTERM to the leader leaves them writing into the run root.
-func (p *process) stop() {
-	select {
-	case <-p.done:
-		return
-	default:
-	}
-	pid := p.cmd.Process.Pid
-	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil {
-		_ = p.cmd.Process.Kill()
-		<-p.done
-		return
-	}
-	select {
-	case <-p.done:
-		return
-	case <-time.After(10 * time.Second):
-	}
-	_ = syscall.Kill(-pid, syscall.SIGKILL)
-	<-p.done
-}
+// stop terminates the child and everything it started. The platform decides how (a process group on
+// Unix, taskkill /T on Windows, see proc_*.go): the tree, never just the leader.
+func (p *process) stop() { terminate(p) }
 
 // ---------------------------------------------------------------- helpers
 
@@ -648,6 +632,15 @@ func anyStringValue(v any) string {
 	return ""
 }
 
+// errorText is an error as the optional string the records carry, nil when there is none.
+func errorText(err error) *string {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	return &msg
+}
+
 func firstNonEmpty(values ...*string) *string {
 	for _, v := range values {
 		if v != nil && *v != "" {
@@ -674,6 +667,16 @@ func writeJSONFile(path string, v any) error {
 		return err
 	}
 	return os.WriteFile(path, append(b, '\n'), 0o644)
+}
+
+// readText is a file's contents as a string, "" when it cannot be read: a missing stderr is the
+// normal case for a launch that had nothing to complain about.
+func readText(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 func readJSONFile(path string, v any) error {

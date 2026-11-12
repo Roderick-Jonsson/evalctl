@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"evalctl/internal/profile"
 	"evalctl/internal/version"
 )
 
@@ -67,6 +68,13 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 		return nil
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := r.Preflight(o); err != nil {
+		return err
+	}
+
 	iteration := o.Iteration
 	if iteration == 0 {
 		iteration = r.NextIteration(r.TriggerWorkspace(skill), "trigger")
@@ -85,14 +93,14 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 	}
 
 	start := fmt.Sprintf("trigger eval %s/trigger-%d · %d quer(y/ies) × %d run(s) · threshold %v · profile %s · evalctl %s",
-		skill, iteration, len(cases), o.Runs, trimFloat(o.Threshold), profileNameTrigger, version.Resolve().Short())
+		skill, iteration, len(cases), o.Runs, trimFloat(o.Threshold), r.Profiles.Name(profile.ArmTrigger), version.Resolve().Short())
 	if o.DryRun {
 		start += " · DRY RUN"
 	}
 	r.emit(Event{Kind: EventStart, Lane: LaneTrigger, Message: start})
 
 	if !o.DryRun {
-		target := profileNameTrigger
+		target := r.Profiles.Name(profile.ArmTrigger)
 		if err := r.provisionSandboxes([]string{target}); err != nil {
 			return err
 		}
@@ -163,6 +171,9 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 			if !record.Evidence {
 				extra += ", no evidence"
 			}
+			if record.Error != nil && *record.Error != "" {
+				extra += " — " + clip(*record.Error, 200)
+			}
 			r.message("  run %d: %s%s, %.1fs", n, mark, extra, float64(record.DurationMS)/1000)
 		}
 	}
@@ -188,6 +199,23 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 		return err
 	}
 	records := r.CollectTriggerRuns(allCases, iterDir, o.Runs)
+	// Every record on disk but none with evidence is the failure this lane used to report as a rate
+	// of zero: the launches happened, nothing the harness can read came back. Refuse to score it.
+	evidence := 0
+	for _, list := range records {
+		for _, rec := range list {
+			if rec != nil && rec.Evidence {
+				evidence++
+			}
+		}
+	}
+	if evidence == 0 {
+		err := fmt.Errorf("no run produced evidence — every launch came back with no tool call and no result. "+
+			"Run one by hand: hermes -p %s chat --oneshot --query-file … --format stream-json",
+			r.Profiles.Name(profile.ArmTrigger))
+		r.markAborted(iterDir, err)
+		return err
+	}
 	scored := make([]TriggerCase, 0, len(allCases))
 	for _, c := range allCases {
 		for _, rec := range records[c.ID] {
@@ -198,6 +226,7 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 		}
 	}
 	score := r.ScoreTrigger(scored, records, o.Runs, o.Threshold)
+	score.Profile = r.Profiles.Name(profile.ArmTrigger)
 	lint := r.LintDescriptions(sortedSkills(scored))
 
 	triggerJSON := struct {
@@ -246,9 +275,10 @@ func (r *Runner) RunTrigger(ctx context.Context, o Options) error {
 	}
 	meta.Provenance.ContractSHA256 = contractSHA
 	meta.Provenance.TriggerEvalsSHA256 = triggerFileSHA
-	meta.Provenance.Profile.Name = profileNameTrigger
-	meta.Provenance.Profile.SoulSHA256 = r.Profiles.SoulSHA(profileNameTrigger)
-	meta.Provenance.Profile.Skills = r.Profiles.InstalledSkills(profileNameTrigger)
+	triggerName := r.Profiles.Name(profile.ArmTrigger)
+	meta.Provenance.Profile.Name = triggerName
+	meta.Provenance.Profile.SoulSHA256 = r.Profiles.SoulSHA(triggerName)
+	meta.Provenance.Profile.Skills = r.Profiles.InstalledSkills(triggerName)
 	meta.Provenance.Descriptions = descriptions
 	meta.Provenance.SkillTreeSHA256 = treeSHA
 	meta.Provenance.Tool = toolInfo()

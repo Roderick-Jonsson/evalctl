@@ -172,8 +172,10 @@ func (r *Runner) LoadTriggerQueries(skills []string, only map[int]bool, split st
 			cases = append(cases, TriggerCase{ID: q.ID, Skill: skill, Query: strings.TrimSpace(q.Query),
 				ShouldTrigger: q.ShouldTrigger, Split: q.Split, Why: q.Why})
 		}
-		// Each half has to carry both labels or the pass rates measure different things. The rule is
-		// per file: one skill's split with a single label is that skill's problem.
+		// A half carrying one label still measures — it just measures one side of the decision, and
+		// the rate it produces is the label it already knows. That is worth a line at the start of
+		// the run, not a refusal: a first set is usually two query types away from balanced, and a
+		// tool that will not run it until it is balanced teaches nothing.
 		for _, name := range LoopSplits {
 			labels := map[bool]bool{}
 			for _, c := range cases {
@@ -181,13 +183,16 @@ func (r *Runner) LoadTriggerQueries(skills []string, only map[int]bool, split st
 					labels[c.ShouldTrigger] = true
 				}
 			}
+			if len(labels) == 0 {
+				continue
+			}
 			if !labels[true] {
-				return nil, fmt.Errorf("%s: split %q needs should-trigger AND should-not-trigger queries, "+
-					"found none that should trigger", skill, name)
+				r.message("! %s: split %q has no should-trigger query — its rate can only measure the "+
+					"false positives. Add one to measure whether the description is ever chosen.", skill, name)
 			}
 			if !labels[false] {
-				return nil, fmt.Errorf("%s: split %q needs should-trigger AND should-not-trigger queries, "+
-					"found none that should not trigger", skill, name)
+				r.message("! %s: split %q has no should-not-trigger query — its rate can only measure "+
+					"missed triggers. Add one to measure whether the description is chosen too often.", skill, name)
 			}
 		}
 	}

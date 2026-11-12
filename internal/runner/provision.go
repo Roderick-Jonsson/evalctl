@@ -32,7 +32,7 @@ func (r *Runner) provisionSandbox(name string) ([]string, error) {
 	}
 	lines = append(lines, line)
 	for _, step := range []func(string, bool) (string, error){
-		r.Profiles.WriteEnv, r.Profiles.Render, r.Profiles.Scrub,
+		r.Profiles.WriteEnv, r.Profiles.CopyAuth, r.Profiles.Render, r.Profiles.Scrub,
 	} {
 		line, err := step(name, false)
 		if err != nil {
@@ -104,12 +104,10 @@ func sortedNames(names []string) []string {
 }
 
 // armSandboxes is the set of sandboxes a run with these arms needs.
-func armSandboxes(arms []string) []string {
+func (r *Runner) armSandboxes(arms []string) []string {
 	names := make([]string, 0, len(arms))
 	for _, arm := range arms {
-		if name, ok := ArmProfiles[arm]; ok {
-			names = append(names, name)
-		}
+		names = append(names, r.ArmProfile(arm))
 	}
 	return sortedNames(names)
 }

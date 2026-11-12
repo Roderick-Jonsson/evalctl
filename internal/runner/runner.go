@@ -4,11 +4,11 @@
 // Two lanes, one driver:
 //
 //	output (default)  every case in <skill>/evals/evals.json runs twice — with the skill and
-//	                  without it — in two dedicated profiles (eval-vcc-with / eval-vcc-without)
+//	                  without it — in two dedicated sandboxes (eval-<profile>-with / -without)
 //	                  into fresh run roots, then timing, mechanical checks and a report are
 //	                  written into the skill's own workspace (<skill>-workspace/iteration-N/).
 //	trigger           one skill's rows in <skill>/evals/trigger-evals.json run N times against
-//	                  eval-vcc-trigger (all four skills installed) in an empty run root, and the
+//	                  eval-<profile>-trigger (every skill installed) in an empty run root, and the
 //	                  lane scores whether the right skill's SKILL.md got loaded — the
 //	                  agentskills.io description-optimization loop, into <skill>-workspace/trigger-N/.
 //
@@ -48,8 +48,15 @@ const (
 	ArmWithout = "without_skill"
 )
 
-// ArmProfiles maps an arm to the sandbox it runs in.
-var ArmProfiles = map[string]string{ArmWith: profile.With, ArmWithout: profile.Without}
+// ArmProfile is the sandbox an arm runs in. It is derived from the profile the tree is measured in,
+// so it is a fact about the run, not a constant about the project.
+func (r *Runner) ArmProfile(arm string) string {
+	identity := profile.ArmWith
+	if arm == ArmWithout {
+		identity = profile.ArmWithout
+	}
+	return r.Profiles.Name(identity)
+}
 
 // AllArms is the default arm set, in run order.
 var AllArms = []string{ArmWith, ArmWithout}
@@ -125,7 +132,7 @@ func (o *Options) Normalize() error {
 		o.Arms = append([]string(nil), AllArms...)
 	}
 	for _, arm := range o.Arms {
-		if _, ok := ArmProfiles[arm]; !ok {
+		if arm != ArmWith && arm != ArmWithout {
 			return fmt.Errorf("unknown arm %q (want %s)", arm, strings.Join(AllArms, ", "))
 		}
 	}
@@ -196,10 +203,16 @@ func New(s *store.Store) *Runner {
 	return &Runner{
 		Root:     s.Root,
 		Store:    s,
-		Profiles: profile.New(s.Root, skills),
+		Profiles: profile.New(s.Root, skills, s.Rules),
 		Emit:     func(Event) {},
 	}
 }
+
+// LockPath is the profile lock a run holds (see profile.Manager.LockPath).
+func (r *Runner) LockPath() string { return r.Profiles.LockPath() }
+
+// ProfileName is the profile whose SOUL.md is this run's contract.
+func (r *Runner) ProfileName() string { return r.Profiles.Real }
 
 func (r *Runner) emit(e Event) {
 	if r.Emit != nil {
@@ -211,10 +224,11 @@ func (r *Runner) message(format string, args ...any) {
 	r.emit(Event{Kind: EventMessage, Message: fmt.Sprintf(format, args...)})
 }
 
-// WorkspaceDir is <root>/<skill>-workspace — the workspace folder the guide puts beside the skill
-// directory. It holds that skill's iterations and nothing else.
+// WorkspaceDir is <skills>/<skill>-workspace — the workspace folder the guide puts beside the skill
+// directory, wherever the layout keeps the skills (a checkout's root, or a profile's skills/).
+// It holds that skill's iterations and nothing else.
 func (r *Runner) WorkspaceDir(skill string) string {
-	return filepath.Join(r.Root, skill+"-workspace")
+	return filepath.Join(r.Store.SkillsDir, skill+"-workspace")
 }
 
 // TriggerWorkspace is <root>/<skill>-workspace, the same folder the output lane writes into: a

@@ -34,6 +34,12 @@ Both eval sets belong to the skill, and so do both kinds of run: a trigger itera
 skill's rows, in that skill's own workspace. Nothing sits above the skills any more — no
 `trigger/`, no `trigger-workspace/` — so a folder in the tree is a skill or a skill's results.
 
+The tree is either a checkout (skills at its root) or a Hermes profile (skills under `skills/`):
+`evalctl` reads both layouts the same way, and a profile's workspaces sit beside its skills. A
+profile whose installed skills carry no sets — the normal case — names the checkout it is measured
+from in `.evalctl-tree`, one line written by `evalctl profiles attach`, and the real profile is
+whichever one the tool was started in (`$EVALCTL_PROFILE` overrides it).
+
 Two consequences worth naming, because they are rules, not accidents:
 
 - **Iteration numbers are per workspace.** `learning-path@iteration-3` and
@@ -80,10 +86,32 @@ ungraded until `evalctl grade` (or `g`) finishes it.
 > first real iteration should wait until a skill is out of draft, otherwise the delta measures a
 > sketch.
 
+## A tree is not this project
+
+The harness names no skill, no document and no folder. What is a project's own is declared in an
+optional `evalctl.json` at the tree's root:
+
+```json
+{
+  "profile": "video-course-creator",
+  "skill_order": ["source-research", "learning-path", "slide-builder", "av-production"],
+  "skill_outputs": { "learning-path": ["LP-*.md", "PO-RevA-*.md", "PO-RevB-*.md"] },
+  "containment_prefixes": ["MC-", "_archive/"],
+  "workspace_prefixes": ["MC-"],
+  "env_keys": ["OLLAMA_API_KEY"]
+}
+```
+
+Every field is optional, and empty always means "no convention": skills are listed alphabetically,
+nothing is recognised as an answer, anything inside the run root is allowed, a promotion carries
+the whole produced tree, and an arm inherits the real profile's `.env`. A tree with no
+`evalctl.json` therefore works — that is the point — and the CLI says what it assumed when a
+promotion has no output table to read.
+
 ## The harness rules (deliberately NOT in the contract)
 
-A run must never be told it is being evaluated, so none of this lives in `contract.md` /
-`SOUL.md` — it lives here:
+A run must never be told it is being evaluated, so none of this lives in the profile's `SOUL.md`
+(the contract) — it lives here:
 
 - An eval run gets an explicit run root; the run root contains the normal workspace structure,
   unmodified, and the run never touches any other root.
@@ -91,7 +119,7 @@ A run must never be told it is being evaluated, so none of this lives in `contra
   artifact presence is the staging mechanism.
 - The previous stage's *real* output can be seeded instead of a hand-made artifact, and
   `evalctl promote` is that copy: it takes one arm dir out of a skill's workspace, keeps the
-  `MC-[topic]/` workspace, drops the arm dir's own runner artifacts and drops the target stage's
+  workspace dirs the tree declares, drops the arm dir's own runner artifacts and drops the target skill's
   own outputs (the table in `internal/stage`), so the fixture holds inputs, never answers. It
   always writes a **new** slug — a promotion that overwrote `lp-1-outline` would void every earlier
   learning-path iteration and lose the hand-made reference input.
@@ -150,41 +178,44 @@ the descriptions change. A filtered or resumed invocation still
 scores every query that has data on disk in that iteration, so `--query`/`--split` slices accumulate
 into one comparable report instead of overwriting it with a fragment.
 
-A description edit does not touch `contract.md` (the contract is stage rules, not trigger text), so
-`evalctl profiles render` is not part of this loop — a description edit does not touch the
-contract — but re-sync the skills, which the lane does itself before the first run.
+A description edit does not touch the contract (`SOUL.md` is stage rules, not trigger text), so
+`evalctl profiles render` is not part of this loop — but re-sync the skills, which the lane does
+itself before the first run.
 
 ## Profiles
 
-Five profiles, all rendered from the one contract: the real one and four sandboxes. The sandboxes
+Five profiles, all reading one contract — the real profile's `SOUL.md`, copied byte for byte into
+each sandbox: the real one and four sandboxes. The sandboxes
 are created by the operation that spends in them and removed when it ends — a `run` (both arms),
 a `grade` (the judge's room), a `revise` (the reviser's), a trigger iteration (the trigger arm) —
 so between runs there is nothing of the eval in `~/.hermes` at all. `--keep` holds them, `profiles
 reap` removes what a killed run left behind, `profiles ensure` provisions them on purpose.
 
-`evalctl profiles check` is the authority on their state where they exist: it fails when a
-`SOUL.md` holds a stale contract, when the two arms' `SOUL.md` differ, when `eval-vcc-without`
-holds any skill, when an eval sandbox kept memories, or when a sandbox pins a working directory
-(only the real profile pins one). A sandbox that is not on disk is not a problem — that is the
-state after every run.
+`evalctl profiles check` is the authority on their state where they exist: it fails when an arm's
+`SOUL.md` is not byte-identical to the real profile's, when the baseline sandbox holds any skill, when
+an eval sandbox kept memories, or when a sandbox pins a working directory (the harness's `--in`
+decides a sandbox's root; the real profile's own cwd is its business). A sandbox that is not on disk is not a problem — that is the state after every run.
 
 | Profile | Skills | Notes |
 |---|---|---|
-| `video-course-creator` | all four | the real one; `--no-skills` plus the four stage skills, no gateway of its own; working directory pinned to the production root (`terminal.cwd`) |
-| `eval-vcc-with` | exactly the skill under test (re-synced per case) | with-skill arm |
-| `eval-vcc-without` | none (stripped at provisioning: `--no-skills` alone still leaves Hermes's essential bundle) | baseline arm, and the judge's room |
-| `eval-vcc-trigger` | all four | trigger lane — one skill installed cannot test misselection |
-| `eval-vcc-revise` | none | writes a SKILL.md revision; no skills, so it cannot read the evals |
+| the real profile (`video-course-creator` here) | every skill in the tree | `--no-skills` plus the tree's skills, no gateway of its own; its own `terminal.cwd` is the production root |
+| `eval-<profile>-with` | exactly the skill under test (re-synced per case) | with-skill arm |
+| `eval-<profile>-without` | none (stripped at provisioning: `--no-skills` alone still leaves Hermes's essential bundle) | baseline arm, and the judge's room |
+| `eval-<profile>-trigger` | every skill in the tree | trigger lane — one skill installed cannot test misselection |
+| `eval-<profile>-revise` | none | writes a SKILL.md revision; no skills, so it cannot read the evals |
+
+The sandbox names are derived from the real profile (`eval-<profile>-<arm>`), never configured: a
+tree measured in `cooking` gets `eval-cooking-with`, and two projects cannot share one sandbox.
 
 Why separate profiles instead of one: a same-profile baseline is dishonest. Every session's system
 prompt lists the profile's skills and carries that profile's memories, so a "without" run inside
 the with-profile still sees the skill and still inherits whatever the agent wrote there. The
 baseline has to inherit the *contract* though, or the delta measures the contract instead of the
-procedure — which is why both `SOUL.md` files are rendered from the same file and hashed into
-`meta.json`.
+procedure — which is why every arm's `SOUL.md` is a byte copy of the real profile's and why its
+hash goes into `meta.json`.
 
-`eval-vcc-with` carries one skill at a time, so a case can only ever be helped by the skill it
-tests. Skills are installed without `evals/`, `.git` and `.DS_Store`: the installed skill must run,
+The with-skill sandbox carries one skill at a time, so a case can only ever be helped by the skill
+it tests. Skills are installed without `evals/`, `.git` and `.DS_Store`: the installed skill must run,
 not test.
 
 ## Cases
@@ -282,14 +313,15 @@ Four things worth knowing:
   ablation, which wrecks the comparison. `--no-isolate` exists for debugging only.
 - **The arms run sequentially**, never two processes on one profile home at a time.
 - **Provisioning is part of the run.** Before each case the runner re-renders the contract, syncs
-  that case's skill into `eval-vcc-with` and wipes both arms' memories, so iteration N+1 cannot
+  that case's skill into the with-skill sandbox and wipes both arms' memories, so iteration N+1 cannot
   inherit iteration N's lessons. Two runs cannot overlap: the run takes `.evalctl/run.lock`. The skill reaches the arm the way it reaches a real user:
   installed in the profile, loaded by the agent on its own (which is also what makes the trigger
   evidence meaningful).
-- **Two containment checks per arm**: everything written sits under `MC-*/` or `_archive/`, and the
-  production masterclasses root (the real profile's pinned working directory) is fingerprinted
+- **Two containment checks per arm**: everything written is inside the arm's run root, and the
+  production root (the real profile's `terminal.cwd`; skipped when it has none) is fingerprinted
   before and after the run, so a run that writes outside its run root fails instead of scoring
-  clean.
+  clean. A tree that also declares top-level prefixes in `evalctl.json` gets a third reading: any
+  file outside them is named.
 
 Mechanical checks per arm also include the skill's own `go run -C <skill>/scripts . verify` when it
 ships a `scripts/` CLI (`--no-verify` to skip). These are evidence, not assertions — declaring a
@@ -307,7 +339,7 @@ change the skill → rerun into `iteration-<N+1>/` → compare; stop when it is 
 is the same judge on its own — for an iteration made with `--no-grade`, and to re-grade one whose
 assertions changed (`--iteration` defaults to the newest; `--force` re-grades arms that already
 carry verdicts). The
-judge is a Hermes call in `eval-vcc-without` — no skill installed, no pinned cwd, memories wiped —
+judge is a Hermes call in the baseline sandbox — no skill installed, no pinned cwd, memories wiped —
 launched with `--in <arm dir>`, so it can read `outputs/`. Its prompt carries the case's prompt, the
 expected output, the declared assertions and the arm's final reply, and it never says which arm it
 is reading: the comparison is blind. It must answer with one JSON object

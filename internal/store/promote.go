@@ -232,8 +232,8 @@ func promptWhy(req PromotePromptRequest, source string, cse model.OutputCase) st
 	}
 }
 
-// PromoteOutput turns a run's output into the next stage's fixture: it copies the MC-[topic]/
-// workspaces the arm produced, leaves the target stage's own outputs (stage.Outputs) behind,
+// PromoteOutput turns a run's output into another skill's fixture: it copies the workspace dirs
+// the arm produced, leaves the target skill's own outputs (the tree's table) behind,
 // appends a case carrying the provenance, and never overwrites an existing fixture dir.
 //
 // The case is only appended in memory; the caller saves. A dry run reads the source and reports
@@ -256,12 +256,12 @@ func (s *Store) PromoteOutput(req PromoteRequest) (Promotion, error) {
 	}
 	src = armOutputs(src)
 
-	content, files, skipped, workspaces, err := readPromotion(src, req.Skill)
+	content, files, skipped, workspaces, err := readPromotion(src, req.Skill, s.Rules)
 	if err != nil {
 		return Promotion{}, err
 	}
 	if len(files) == 0 {
-		return Promotion{}, fmt.Errorf("nothing to promote: %s holds no MC-*/ workspace (or the target stage's outputs are all of it)", src)
+		return Promotion{}, fmt.Errorf("nothing to promote: %s holds no workspace dir (or the target skill's outputs are all of it)", src)
 	}
 	dir := s.FixtureDir(req.Skill, req.Slug)
 	if s.FixtureExists(req.Skill, req.Slug) {
@@ -316,7 +316,7 @@ func (s *Store) PromoteOutput(req PromoteRequest) (Promotion, error) {
 // PromotionPreview is the read-only half of a promotion: what a copy of src into skill's fixture
 // would stage and what it would leave behind. It touches nothing, so an interactive form can
 // call it on every change of the source.
-func PromotionPreview(src, skill string) (Promotion, error) {
+func PromotionPreview(src, skill string, rules stage.Rules) (Promotion, error) {
 	abs, err := filepath.Abs(src)
 	if err != nil {
 		return Promotion{}, err
@@ -324,7 +324,7 @@ func PromotionPreview(src, skill string) (Promotion, error) {
 	if info, err := os.Stat(abs); err != nil || !info.IsDir() {
 		return Promotion{}, fmt.Errorf("source run dir not found: %s", src)
 	}
-	_, files, skipped, workspaces, err := readPromotion(abs, skill)
+	_, files, skipped, workspaces, err := readPromotion(abs, skill, rules)
 	if err != nil {
 		return Promotion{}, err
 	}
@@ -332,7 +332,7 @@ func PromotionPreview(src, skill string) (Promotion, error) {
 }
 
 // armOutputs is where a run's produced tree lives: <arm>/outputs. A run from the older layout kept
-// its MC-*/ workspaces directly in the arm dir, and those still read.
+// its workspace dirs directly in the arm dir, and those still read.
 func armOutputs(dir string) string {
 	outputs := filepath.Join(dir, "outputs")
 	if info, err := os.Stat(outputs); err == nil && info.IsDir() {
@@ -341,11 +341,11 @@ func armOutputs(dir string) string {
 	return dir
 }
 
-// readPromotion reads a run's produced tree into memory: only MC-*/ workspaces are carried (the arm
-// dir also holds the runner's own artifacts), and `_archive/` stays behind because a fixture is
-// a run's input, not its history. The target stage's own outputs (stage.Own) are skipped: they
-// are the stage's answers, and a fixture must hold only its inputs.
-func readPromotion(src, skill string) (content map[string][]byte, files, skipped, workspaces []string, err error) {
+// readPromotion reads a run's produced tree into memory: the dirs the tree calls workspaces are
+// carried (the arm dir also holds the runner's own artifacts), and the target skill's own outputs
+// are skipped — they are its answers, and a fixture must hold only its inputs. A tree that declares
+// neither carries the whole produced tree and denies nothing, and the CLI says so.
+func readPromotion(src, skill string, rules stage.Rules) (content map[string][]byte, files, skipped, workspaces []string, err error) {
 	content = map[string][]byte{}
 	src = armOutputs(src)
 	entries, err := os.ReadDir(src)
@@ -353,7 +353,7 @@ func readPromotion(src, skill string) (content map[string][]byte, files, skipped
 		return nil, nil, nil, nil, err
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "MC-") {
+		if !entry.IsDir() || !rules.Carries(entry.Name()) {
 			continue
 		}
 		root := filepath.Join(src, entry.Name())
@@ -367,7 +367,7 @@ func readPromotion(src, skill string) (content map[string][]byte, files, skipped
 			}
 			name := rel(root, path)
 			key := filepath.ToSlash(filepath.Join(entry.Name(), name))
-			if stage.Own(skill, d.Name()) {
+			if rules.Own(skill, d.Name()) {
 				if d.IsDir() {
 					skipped = append(skipped, key+"/")
 					return fs.SkipDir

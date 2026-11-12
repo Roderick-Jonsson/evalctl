@@ -248,7 +248,7 @@ func TestTwoCasesRunOneAtATimeMakeOneIteration(t *testing.T) {
 	  {"id":2,"slug":"d2","prompt":"Roll two.","expected_output":"two faces","files":[],"assertions":["a"]}]}`)
 	bin := fakeHermes(t)
 	t.Setenv("HERMES_BIN", bin)
-	write(t, filepath.Join(s.Root, "contract.md"), "# contract\n")
+	writeContract(t)
 
 	r := New(s)
 	for _, id := range []int{1, 2} {

@@ -19,13 +19,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
 
 const (
-	// EnvKey is the standard variable Ollama Cloud reads, and the one the harness already uses.
-	EnvKey = "OLLAMA_API_KEY"
+	// EnvKey is this tool's own key: the value itself, so a provider that is not Ollama does not have
+	// to borrow another product's variable name. EnvKeyVar names a variable to read instead, for a
+	// machine that already exports OPENAI_API_KEY and would rather point at it than copy it.
+	EnvKey    = "EVALCTL_DESCRIBE_KEY"
+	EnvKeyVar = "EVALCTL_DESCRIBE_KEY_ENV"
 	// EnvBaseURL and EnvModel are this tool's own knobs, so a different model or a local server does
 	// not mean editing a file.
 	EnvBaseURL = "EVALCTL_DESCRIBE_BASE_URL"
@@ -51,26 +55,68 @@ const (
 )
 
 // Config is one provider, resolved. KeyFrom is a path or "the environment": it exists so a screen can
-// say which file answered without ever saying what it answered with.
+// say which file answered without ever saying what it answered with. KeyName is the variable that
+// answered, so an error can name it instead of guessing which provider's name was meant.
 type Config struct {
 	BaseURL string
 	Model   string
 	APIKey  string
+	KeyName string
 	KeyFrom string
 }
 
 // MissingKeyError is the key's absence, said in one line and with the place to fix it. The detail
-// (which files were read) is on the type so a shell can print it under the line.
+// (which variables were looked for, which files were read) is on the type so a shell can print it
+// under the line.
 type MissingKeyError struct {
-	Files []string
+	BaseURL string
+	Names   []string
+	Files   []string
 }
 
 func (e *MissingKeyError) Error() string {
-	add := "~/.config/evalctl/env"
+	where := "~/.config/evalctl/env"
 	if len(e.Files) > 0 {
-		add = e.Files[len(e.Files)-1]
+		where = e.Files[len(e.Files)-1]
 	}
-	return fmt.Sprintf("%s is not set — add `%s=…` to %s, or export it", EnvKey, EnvKey, add)
+	names := e.Names
+	if len(names) == 0 {
+		names = []string{EnvKey}
+	}
+	return fmt.Sprintf("no API key for %s — set %s, name the variable that holds one with %s=<NAME>, "+
+		"or put one of %s in %s", e.BaseURL, EnvKey, EnvKeyVar, strings.Join(names, " / "), where)
+}
+
+// KeyCandidates is the variables a key is looked for, in order: the tool's own value, the variable
+// named by EnvKeyVar, the provider's conventional name, and then the names this machine is most
+// likely to already carry. A non-Ollama provider is a first-class case, not a borrowed variable name.
+func KeyCandidates(baseURL string) []string {
+	if name := strings.TrimSpace(os.Getenv(EnvKeyVar)); name != "" {
+		return []string{name}
+	}
+	var out []string
+	add := func(name string) {
+		for _, have := range out {
+			if have == name {
+				return
+			}
+		}
+		out = append(out, name)
+	}
+	add(EnvKey)
+	switch {
+	case strings.Contains(baseURL, "openai.com"):
+		add("OPENAI_API_KEY")
+	case strings.Contains(baseURL, "anthropic"):
+		add("ANTHROPIC_API_KEY")
+	case strings.Contains(baseURL, "openrouter"):
+		add("OPENROUTER_API_KEY")
+	case strings.Contains(baseURL, "ollama"):
+		add("OLLAMA_API_KEY")
+	}
+	add("OLLAMA_API_KEY")
+	add("OPENAI_API_KEY")
+	return out
 }
 
 // FromEnv resolves the provider: the key from the environment or an env file, the base URL and the
@@ -84,12 +130,25 @@ func FromEnv() (Config, error) {
 		c.Model = v
 	}
 	c.BaseURL = strings.TrimRight(c.BaseURL, "/")
-	key, from := envValue(EnvKey)
-	if key == "" {
-		return Config{}, &MissingKeyError{Files: searchedEnvFiles()}
+	names := KeyCandidates(c.BaseURL)
+	for _, name := range names {
+		key, from := envValue(name)
+		if key == "" {
+			continue
+		}
+		c.APIKey, c.KeyName, c.KeyFrom = key, name, from
+		return c, nil
 	}
-	c.APIKey, c.KeyFrom = key, from
-	return c, nil
+	return Config{}, &MissingKeyError{BaseURL: c.BaseURL, Names: names, Files: searchedEnvFiles()}
+}
+
+// keyName is the variable that answered, or the tool's own name when a Config was built by hand
+// (a test, or a caller that set the key itself).
+func (c Config) keyName() string {
+	if c.KeyName != "" {
+		return c.KeyName
+	}
+	return EnvKey
 }
 
 // ChatURL is where one completion is posted.
@@ -134,7 +193,7 @@ type chatResponse struct {
 // why it has nothing.
 func (c Config) Complete(ctx context.Context, system, user string, budget time.Duration) (string, error) {
 	if c.APIKey == "" {
-		return "", &MissingKeyError{Files: searchedEnvFiles()}
+		return "", &MissingKeyError{BaseURL: c.BaseURL, Names: KeyCandidates(c.BaseURL), Files: searchedEnvFiles()}
 	}
 	if budget <= 0 {
 		budget = 3 * time.Minute
@@ -212,7 +271,7 @@ func statusError(code int, body []byte, c Config) error {
 	}
 	switch code {
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return fmt.Errorf("%s refused the key (HTTP %d) — %s from %s may be wrong or expired", c.BaseURL, code, EnvKey, c.KeyFrom)
+		return fmt.Errorf("%s refused the key (HTTP %d) — %s from %s may be wrong or expired", c.BaseURL, code, c.keyName(), c.KeyFrom)
 	case http.StatusNotFound:
 		return fmt.Errorf("%s has no such model or endpoint (HTTP 404) — check %s=%s and %s", c.BaseURL, EnvModel, c.Model, EnvBaseURL)
 	case http.StatusTooManyRequests:

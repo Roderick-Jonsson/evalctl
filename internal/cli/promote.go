@@ -14,18 +14,18 @@ import (
 const promoteUsage = `usage: evalctl promote --from <run>/<case>[/<arm>] --skill <skill> --slug <new-slug>
                             [--id N] [--prompt <text|->] [--expected <text|->] [--dry-run]
 
-Turn a finished run's output into the next stage's fixture: the MC-[topic]/ workspace is copied
-into <skill>/evals/files/<new-slug>/, the target stage's own outputs are left behind, and a case
-carrying the provenance is appended. <run> is 2, iteration-2 or source-research@2 (the skill's
+Turn a finished run's output into the next skill's fixture: the workspace dirs the tree declares
+are copied into <skill>/evals/files/<new-slug>/, the target skill's own outputs are left behind, and
+a case carrying the provenance is appended. <run> is 2, iteration-2 or source-research@2 (the skill's
 workspace the run lives in), <arm> defaults to with_skill.
 
        evalctl promote --to-references --from <run>/<case>[/<arm>] [--skill S]
                             [--file <path>]... [--as <name|dir/>] [--all]
-                            [--workspace MC-x] [--force] [--dry-run]
+                            [--workspace <dir>] [--force] [--dry-run]
 
-Turn a run's own stage output into a worked example in the skill's references/: PS-<topic>.md + sources/
-for source-research, LP-<topic>.md + the PO-Rev*-<topic>.md files for learning-path, and so on. That is the file an agent
-reads to learn the shape of a run — promote it, adapt it by hand, and the next run sees it.
+Turn a run's own output into a worked example in the skill's references/ — the files its own
+evalctl.json declares as its outputs. That is the file an agent reads to learn the shape of a run:
+promote it, adapt it by hand, and the next run sees it.
 --skill defaults to the case's own skill; --file narrows to one path, --all takes the workspace;
 --as renames (or names a dir for several files). An existing reference is never replaced without
 --force, and every promotion is logged in .evalctl/references.json.
@@ -70,8 +70,8 @@ func runPromote(args []string) int {
 	toTrigger := fs.Bool("to-trigger", false, "promote a case's prompt into a trigger query instead of a fixture")
 	toRefs := fs.Bool("to-references", false, "promote the run's own stage output into the skill's references/ (a worked example)")
 	as := fs.String("as", "", "--to-references: destination inside references/ (rename, or a dir for several files)")
-	all := fs.Bool("all", false, "--to-references: take the whole MC-*/ workspace, not just the stage's outputs")
-	workspace := fs.String("workspace", "", "--to-references: which MC-x to take when the arm wrote several")
+	all := fs.Bool("all", false, "--to-references: take the whole workspace, not just the skill's own outputs")
+	workspace := fs.String("workspace", "", "--to-references: which workspace dir to take when the arm wrote several")
 	force := fs.Bool("force", false, "--to-references: replace an existing reference (old bytes in .evalctl/backups/)")
 	dryRun := fs.Bool("dry-run", false, "print the plan, write nothing")
 	var files refFiles
@@ -112,7 +112,7 @@ func runPromote(args []string) int {
 
 	// A promotion writes fixture dirs a concurrent run could be staging, so it takes the same
 	// exclusive lock the runner does.
-	unlock, err := lockRun(c.s.Root)
+	unlock, err := lockTree(c.s.Root)
 	if err != nil {
 		return fail(err)
 	}
@@ -125,7 +125,7 @@ func runPromote(args []string) int {
 		if id == 0 {
 			id = c.s.NextCaseID(*skill)
 		}
-		adoptWarning(c.s.Root, store.LaneOutput, *skill, id)
+		adoptWarning(c.s.SkillsDir, store.LaneOutput, *skill, id)
 	}
 
 	res, err := c.s.PromoteOutput(cse)
@@ -175,7 +175,7 @@ func promotePrompt(c *common, from, skill, split, label, why string, id int, dry
 		return fail(err)
 	}
 
-	unlock, err := lockRun(c.s.Root)
+	unlock, err := lockTree(c.s.Root)
 	if err != nil {
 		return fail(err)
 	}
@@ -191,7 +191,7 @@ func promotePrompt(c *common, from, skill, split, label, why string, id int, dry
 	if qid == 0 {
 		qid = c.s.NextTriggerID(targetSkill)
 	}
-	adoptWarning(c.s.Root, store.LaneTrigger, targetSkill, qid)
+	adoptWarning(c.s.SkillsDir, store.LaneTrigger, targetSkill, qid)
 
 	res, err := c.s.PromotePrompt(req)
 	if err != nil {
@@ -232,7 +232,7 @@ func promoteReferences(c *common, src promoSource, req referenceRequest) int {
 	if req.Skill == "" {
 		return fail(fmt.Errorf("--skill is required: %q is not a case in any stage skill's evals.json", src.Case))
 	}
-	unlock, err := lockRun(c.s.Root)
+	unlock, err := lockTree(c.s.Root)
 	if err != nil {
 		return fail(err)
 	}

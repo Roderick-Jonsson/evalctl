@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"evalctl/internal/diff"
+	"evalctl/internal/profile"
 	"evalctl/internal/runner"
 )
 
@@ -74,7 +75,7 @@ func (m *Model) startRevision() tea.Cmd {
 	}
 	skill, iter := m.skill, q.iter
 	m.run = &runState{kind: runRevise, scope: fmt.Sprintf("revision · %s@%d", skill, iter),
-		hint: "one call to " + runner.ReviseProfile + " — nothing is written until you accept it"}
+		hint: "one call to " + m.sandbox(profile.ArmRevise) + " — nothing is written until you accept it"}
 	m.run.live = newLiveRun(m.run.scope, false)
 	m.mode = screenRunLive
 	ch := make(chan runner.Event, 16)
@@ -128,7 +129,7 @@ func (m *Model) revisionRunBody(h int) []string {
 	d := &docWriter{w: m.width, label: 10}
 	d.head("REVISION · "+m.skill, false)
 	d.rule()
-	d.lead(fmt.Sprintf("one call to %s · %s elapsed", runner.ReviseProfile, shortDuration(time.Since(p.started))))
+	d.lead(fmt.Sprintf("one call to %s · %s elapsed", m.sandbox(profile.ArmRevise), shortDuration(time.Since(p.started))))
 	d.para("It reads the failed assertions with the judge's evidence, the feedback on this iteration, and SKILL.md — then answers with a whole new skill. Nothing is written until you accept the proposal.")
 	if p.err != nil {
 		d.lines = append(d.lines, "", "  "+statusBad.Render("! "+p.err.Error()))
@@ -145,6 +146,13 @@ func (m *Model) revisionRunBody(h int) []string {
 // revisionBody is the proposal: why, and the diff against the skill as it stands. The diff is the
 // screen, because the sentence a reviser writes about its own change is the least reliable thing it
 // produces and the lines are the most.
+// sandbox is the profile an arm of this tree runs in, derived the way the runner derives it. The
+// screens name that sandbox in prose, and a compiled name would be a lie the moment the tree is
+// measured in another profile.
+func (m *Model) sandbox(arm string) string {
+	return runner.New(m.store).Profiles.Name(arm)
+}
+
 func (m *Model) revisionBody(h int) []string {
 	st := m.revision
 	if st == nil {
@@ -176,7 +184,7 @@ func (m *Model) revisionBody(h int) []string {
 
 	d := &docWriter{w: w, label: 10}
 	d.para(fmt.Sprintf("from iteration %d · read %s failed · %d with feedback · %s",
-		rev.Iteration, plural(st.inputs.Failed, "case"), st.inputs.Feedbacks, runner.ReviseProfile))
+		rev.Iteration, plural(st.inputs.Failed, "case"), st.inputs.Feedbacks, m.sandbox(profile.ArmRevise)))
 	if strings.TrimSpace(rev.Why) != "" {
 		d.card("why")
 		// The reviser's own account is the least reliable thing it produces; it gets three lines above

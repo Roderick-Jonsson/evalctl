@@ -88,7 +88,7 @@ func runAdd(args []string) int {
 		if q.ID == 0 {
 			q.ID = c.s.NextTriggerID(*skill)
 		}
-		adoptWarning(c.s.Root, store.LaneTrigger, *skill, q.ID)
+		adoptWarning(c.s.SkillsDir, store.LaneTrigger, *skill, q.ID)
 		var err error
 		if q.Query, err = value(*query); err != nil {
 			return fail(err)
@@ -115,7 +115,7 @@ func runAdd(args []string) int {
 	if cse.ID == 0 {
 		cse.ID = c.s.NextCaseID(*skill)
 	}
-	adoptWarning(c.s.Root, store.LaneOutput, *skill, cse.ID)
+	adoptWarning(c.s.SkillsDir, store.LaneOutput, *skill, cse.ID)
 	var err error
 	if cse.Prompt, err = value(*prompt); err != nil {
 		return fail(err)
@@ -494,7 +494,7 @@ func confirm(prompt string) (bool, error) {
 // does — and --yes is the answer a script gives. A dry run prints the same warning and writes
 // nothing.
 func idChangeGuard(c *common, lane, skill string, oldID, newID int, dry, yes bool) bool {
-	refs := runner.IDReferences(c.s.Root, lane, skill, oldID)
+	refs := runner.IDReferences(c.s.SkillsDir, lane, skill, oldID)
 	fmt.Println(styleWarn.Render(fmt.Sprintf("  id %d -> %d — earlier iterations record this row as #%d", oldID, newID, oldID)))
 	if len(refs) == 0 {
 		fmt.Println(styleDim.Render("  nothing on disk cites it yet (no result dirs, no reports)"))

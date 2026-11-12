@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"evalctl/internal/store"
 	"evalctl/internal/version"
@@ -51,11 +52,19 @@ func (r *Runner) RunQuality(ctx context.Context, o Options) error {
 		return nil
 	}
 
+	// A cancelled context stops before the gate: provisioning nothing is the point.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := r.Preflight(o); err != nil {
+		return err
+	}
+
 	if !o.DryRun {
 		// Both arms run the same contract; the with arm holds exactly the skill under test, the
 		// baseline holds none, and neither keeps memory from a previous case. The sandboxes are
 		// created here, when they are missing, and removed when the run that used them ends.
-		arms := armSandboxes(o.Arms)
+		arms := r.armSandboxes(o.Arms)
 		if err := r.provisionSandboxes(arms); err != nil {
 			return err
 		}
@@ -147,7 +156,7 @@ func (r *Runner) runSkillIteration(ctx context.Context, cases []Case, o Options)
 
 	profiles := map[string]bool{}
 	for _, arm := range o.Arms {
-		profiles[ArmProfiles[arm]] = true
+		profiles[r.ArmProfile(arm)] = true
 	}
 	start := fmt.Sprintf("%s iteration %d · %d case(s) × %d arm(s) · profiles %s · evalctl %s",
 		skill, iteration, len(cases), len(o.Arms), strings.Join(keysOf(profiles), ", "), version.Resolve().Short())
@@ -162,7 +171,7 @@ func (r *Runner) runSkillIteration(ctx context.Context, cases []Case, o Options)
 		r.emit(Event{Kind: EventCase, Lane: LaneOutput, Case: c.Slug,
 			Message: fmt.Sprintf("%s  ·  %s case %d", c.Slug, c.Skill, c.ID)})
 		if !o.DryRun && contains(o.Arms, ArmWith) {
-			line, err := r.Profiles.SyncSkills(ArmProfiles[ArmWith], []string{c.Skill}, false)
+			line, err := r.Profiles.SyncSkills(r.ArmProfile(ArmWith), []string{c.Skill}, false)
 			if err != nil {
 				return err
 			}
@@ -240,7 +249,7 @@ func (r *Runner) runSkillIteration(ctx context.Context, cases []Case, o Options)
 	meta.Provenance.ContractSHA256 = contractSHA
 	meta.Provenance.Profiles = map[string]metaProfile{}
 	for _, arm := range o.Arms {
-		name := ArmProfiles[arm]
+		name := r.ArmProfile(arm)
 		meta.Provenance.Profiles[arm] = metaProfile{Name: name, SoulSHA256: r.Profiles.SoulSHA(name),
 			Skills: r.Profiles.InstalledSkills(name)}
 	}
@@ -396,9 +405,16 @@ type metaTool struct {
 	BuiltAt string `json:"built_at,omitempty"`
 }
 
+// toolInfo is the build that measured this run. built_at is the build's own clock and only that: an
+// unstamped `go build` carries the commit's time in BuiltAt, and recording it as the build time is
+// how a stale binary would look fresh in the artifact — the same rule the TUI's corner follows.
 func toolInfo() metaTool {
 	info := version.Resolve()
-	return metaTool{Version: info.Version, Commit: info.Commit, Dirty: info.Dirty, BuiltAt: info.BuiltAt}
+	built := ""
+	if t, ok := info.Built(); ok {
+		built = t.UTC().Format(time.RFC3339)
+	}
+	return metaTool{Version: info.Version, Commit: info.Commit, Dirty: info.Dirty, BuiltAt: built}
 }
 
 // metaFixture is one case's fixture as the run staged it, plus its promotion ancestry.

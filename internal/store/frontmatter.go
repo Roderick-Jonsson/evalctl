@@ -26,7 +26,7 @@ const DescriptionLimit = 1024
 // SkillDescription is the `description:` value in a skill's SKILL.md frontmatter, block scalars
 // folded flat — the text the router actually reads, not the bytes it is written in.
 func (s *Store) SkillDescription(skill string) string {
-	b, err := os.ReadFile(filepath.Join(s.Root, skill, "SKILL.md"))
+	b, err := os.ReadFile(filepath.Join(s.SkillDir(skill), "SKILL.md"))
 	if err != nil {
 		return ""
 	}
@@ -46,7 +46,7 @@ func (s *Store) SkillDescriptionHash(skill string) string { return HashText(s.Sk
 // from what was asked for is a description the router would read as something else, and finding that
 // out from a trigger run twenty minutes later is the failure this check exists to prevent.
 func (s *Store) SetSkillDescription(skill, text string) error {
-	path := filepath.Join(s.Root, skill, "SKILL.md")
+	path := filepath.Join(s.SkillDir(skill), "SKILL.md")
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err

@@ -27,12 +27,20 @@ func TestReportsNameTheBuild(t *testing.T) {
 func TestToolInfoMatchesTheBinary(t *testing.T) {
 	info := version.Resolve()
 	tool := toolInfo()
-	if tool.Version != info.Version || tool.Commit != info.Commit || tool.Dirty != info.Dirty ||
-		tool.BuiltAt != info.BuiltAt {
+	if tool.Version != info.Version || tool.Commit != info.Commit || tool.Dirty != info.Dirty {
 		t.Errorf("meta tool = %+v, binary = %+v", tool, info)
 	}
 	if tool.Version == "" {
 		t.Error("meta tool has no version")
+	}
+	// The suite runs an unstamped build, so buildinfo supplies the commit's time and there is no
+	// build time to record. A stamped release carries one; either way built_at is never a guess.
+	_, stamped := info.Built()
+	if stamped && tool.BuiltAt == "" {
+		t.Error("a stamped build must record built_at")
+	}
+	if !stamped && tool.BuiltAt != "" {
+		t.Errorf("an unstamped build recorded built_at=%q, which is the commit's time, not a build time", tool.BuiltAt)
 	}
 }
 

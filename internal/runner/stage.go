@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"evalctl/internal/stage"
 )
 
 // FileInfo is one file's fingerprint inside a run root.
@@ -85,16 +87,18 @@ func Diff(before, after map[string]FileInfo) Changes {
 	return out
 }
 
-// Containment is the contract check: a stage writes inside MC-[topic]/ (archives may sit in
-// _archive/).
+// Containment is the tree's own layout check: a run writes where the project says it should.
 type Containment struct {
 	OK      bool     `json:"ok"`
 	Outside []string `json:"outside"`
 	Touched int      `json:"touched"`
 }
 
-// CheckContainment flags any touched file outside MC-*/ or _archive/.
-func CheckContainment(before, after map[string]FileInfo) Containment {
+// CheckContainment flags any touched file outside what the tree lets a run write. With no prefixes
+// declared nothing is outside: the run root is the boundary, and the harness keeps it itself. The
+// prefixes are the project's own convention (a workspace folder, an archive folder) and come from
+// its evalctl.json.
+func CheckContainment(before, after map[string]FileInfo, rules stage.Rules) Containment {
 	outside := []string{}
 	touched := 0
 	for path, a := range after {
@@ -103,7 +107,7 @@ func CheckContainment(before, after map[string]FileInfo) Containment {
 			continue
 		}
 		touched++
-		if !strings.HasPrefix(path, "MC-") && !strings.HasPrefix(path, "_archive/") {
+		if !rules.Allows(path) {
 			outside = append(outside, path)
 		}
 	}
@@ -191,7 +195,7 @@ func within(root, target string) bool {
 	return strings.HasPrefix(target, root+string(os.PathSeparator))
 }
 
-// Snapshot is a cheap fingerprint of the production masterclass root — a run must leave it
+// Snapshot is a cheap fingerprint of the production root — a run must leave it
 // untouched.
 type Snapshot struct {
 	Exists  bool              `json:"exists"`

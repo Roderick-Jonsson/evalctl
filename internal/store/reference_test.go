@@ -14,6 +14,7 @@ import (
 func referenceTree(t *testing.T) (*Store, string) {
 	t.Helper()
 	root := t.TempDir()
+	declarePipeline(t, root)
 	mustWrite(t, filepath.Join(root, "source-research", "evals", "evals.json"), `{
   "skill_name": "source-research",
   "evals": [

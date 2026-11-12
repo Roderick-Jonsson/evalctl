@@ -132,7 +132,7 @@ func (r *Runner) BuildDescriptionPrompt(skill string, candidate int) (string, De
 // the opening is taken: the procedure, the output format and the pitfalls are not what a description
 // is about, and they are the parts most likely to be copied verbatim into it.
 func (r *Runner) skillSummary(skill string) string {
-	b, err := os.ReadFile(filepath.Join(r.Store.Root, skill, "SKILL.md"))
+	b, err := os.ReadFile(filepath.Join(r.Store.SkillDir(skill), "SKILL.md"))
 	if err != nil {
 		return ""
 	}

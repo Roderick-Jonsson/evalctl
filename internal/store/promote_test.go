@@ -5,13 +5,33 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"evalctl/internal/stage"
 )
+
+// declarePipeline writes this repo's own conventions into a test tree: the harness reads them from
+// the tree, so a test that wants pipeline behaviour has to say so the way a project does.
+func declarePipeline(t *testing.T, root string) {
+	t.Helper()
+	mustWrite(t, filepath.Join(root, stage.FileName), `{
+  "skill_order": ["source-research", "learning-path", "slide-builder", "av-production"],
+  "skill_outputs": {
+    "source-research": ["PS-*.md", "sources"],
+    "learning-path": ["LP-*.md", "PO-RevA-*.md", "PO-RevB-*.md"],
+    "slide-builder": ["SL-*.md", "pages"],
+    "av-production": ["AV"]
+  },
+  "containment_prefixes": ["MC-", "_archive/"],
+  "workspace_prefixes": ["MC-"]
+}`)
+}
 
 // promotionTree is a tree with one hand-made learning-path case plus a finished source-research
 // run whose arm dir holds both the workspace it produced and the runner's own artifacts.
 func promotionTree(t *testing.T) (*Store, string) {
 	t.Helper()
 	root := t.TempDir()
+	declarePipeline(t, root)
 	mustWrite(t, filepath.Join(root, "learning-path", "evals", "evals.json"), `{
   "skill_name": "learning-path",
   "evals": [

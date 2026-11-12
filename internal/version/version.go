@@ -20,7 +20,7 @@ import (
 // Version is the declared version of the tool: bump it when the runner, the store rules, the
 // profiles or the case format change, because an iteration measured by a different harness is not
 // comparable with the last one.
-var Version = "0.9.0"
+var Version = "0.14.0"
 
 // Stamped at build time; empty means "ask the build info".
 var (

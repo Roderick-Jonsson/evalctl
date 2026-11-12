@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"evalctl/internal/profile"
 )
 
 // Step 1 of the guide's loop, done by an agent instead of by the operator's clipboard.
@@ -25,8 +27,9 @@ import (
 // frontmatter, because all three make a set that passes and a skill that does not work.
 
 // ReviseProfile is the sandbox the revision is written in: a profile of its own so the call cannot
-// inherit the arms' skills (which would let it read the evals) or the judge's framing.
-const ReviseProfile = "eval-vcc-revise"
+// inherit the arms' skills (which would let it read the evals) or the judge's framing. It is derived
+// from the profile being measured, like every sandbox.
+func (r *Runner) ReviseProfile() string { return r.Profiles.Name(profile.ArmRevise) }
 
 // ReviseOptions is one revision call.
 type ReviseOptions struct {
@@ -217,10 +220,10 @@ func (r *Runner) Revise(ctx context.Context, skill string, iteration int, o Revi
 	}
 	// The reviser gets its own clean room, created for this call when it is not there: it must not
 	// inherit the arms' skills (which would let it read the evals) or the last call's session.
-	if err := r.provisionSandboxes([]string{ReviseProfile}); err != nil {
+	if err := r.provisionSandboxes([]string{r.ReviseProfile()}); err != nil {
 		return Revision{}, err
 	}
-	defer r.releaseSandboxes([]string{ReviseProfile}, o.Keep)
+	defer r.releaseSandboxes([]string{r.ReviseProfile()}, o.Keep)
 	cmdArgs := r.buildReviseCmd(rev.Prompt, r.Store.Skill(skill).Dir, o)
 	callCtx, cancel := context.WithTimeout(ctx, o.Budget)
 	defer cancel()
@@ -260,7 +263,7 @@ func (r *Runner) Revise(ctx context.Context, skill string, iteration int, o Revi
 // buildReviseCmd is the revision call, printed verbatim by --dry-run. --in is the skill's own
 // directory: the reviser may read the skill's scripts and references, and nothing of the workspace.
 func (r *Runner) buildReviseCmd(promptFile, skillDir string, o ReviseOptions) []string {
-	cmd := []string{r.Profiles.Bin, "-p", ReviseProfile, "chat"}
+	cmd := []string{r.Profiles.Bin, "-p", r.ReviseProfile(), "chat"}
 	if o.Model != "" {
 		cmd = append(cmd, "-m", o.Model)
 	}

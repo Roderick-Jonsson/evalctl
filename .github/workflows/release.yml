@@ -1,0 +1,42 @@
+name: release
+
+# A tag is the release: `git tag v0.12.0 && git push --tags` builds every platform, checksums the
+# artifacts and opens a draft release. The build is the project's own `make check`/`make test` first,
+# so a tag on a broken tree fails here instead of shipping.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make check
+      - run: make test
+      - name: cross-compile for Windows
+        run: GOOS=windows GOARCH=amd64 go build ./...
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

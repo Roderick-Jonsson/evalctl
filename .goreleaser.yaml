@@ -1,0 +1,52 @@
+# Release binaries, so nobody has to install Go and clone a repo to try the tool.
+#
+# `goreleaser release --snapshot --clean` builds locally; pushing a tag builds and publishes the
+# same artifacts from .github/workflows/release.yml. The ldflags are the Makefile's, with
+# `Version` filled in from the tag — a release binary must answer `evalctl version` with the number
+# somebody downloaded, and stamp its build time so a stale copy is visible in the TUI's corner.
+version: 2
+
+project_name: evalctl
+
+builds:
+  - id: evalctl
+    main: .
+    binary: evalctl
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X evalctl/internal/version.Version={{.Version}}
+      - -X evalctl/internal/version.Commit={{.Commit}}
+      - -X evalctl/internal/version.BuiltAt={{.Date}}
+      - -X evalctl/internal/version.Modified={{.IsGitDirty}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  draft: true
+  footer: |
+    **evalctl {{ .Tag }}** — the eval runner for Hermes skills. One binary per platform, no runtime.
+
+    Starting a project: `evalctl init --skill <name> --profile <hermes-profile>`, then
+    [docs/getting-started.md](docs/getting-started.md).

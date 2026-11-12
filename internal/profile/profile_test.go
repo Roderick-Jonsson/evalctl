@@ -19,72 +19,75 @@ func writeFile(t *testing.T, path, body string) {
 	}
 }
 
+// testManager builds a tree and the real profile whose SOUL.md is its contract. The contract is
+// hand-written state: nothing renders it, and the arms read a copy of it.
 func testManager(t *testing.T) (*Manager, string) {
 	t.Helper()
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "contract.md"), testContract)
 	writeFile(t, filepath.Join(root, "slide-builder", "SKILL.md"), "---\nname: slide-builder\n---\n")
 	writeFile(t, filepath.Join(root, "slide-builder", "references", "style.md"), "style\n")
 	writeFile(t, filepath.Join(root, "slide-builder", "evals", "evals.json"), "{}")
 	writeFile(t, filepath.Join(root, "slide-builder", "references", ".DS_Store"), "noise")
-	return &Manager{
-		Root:            root,
-		Hermes:          filepath.Join(t.TempDir(), "hermes"),
-		Skills:          []string{"slide-builder"},
-		MasterclassRoot: filepath.Join(t.TempDir(), "masterclasses"),
-		Bin:             "hermes",
-	}, root
+	m := &Manager{
+		Root:       root,
+		SkillsRoot: root,
+		Hermes:     filepath.Join(t.TempDir(), "hermes"),
+		Skills:     []string{"slide-builder"},
+		Bin:        "hermes",
+		Real:       "test-profile",
+		Arms:       map[string]string{},
+	}
+	for _, arm := range Arms {
+		m.Arms[arm] = SandboxName(m.Real, arm)
+	}
+	writeFile(t, m.Soul(m.Real), testContract)
+	return m, root
 }
 
-func TestRenderStampsOnceAndLeavesBothArmsIdentical(t *testing.T) {
+func TestRenderCopiesTheContractIntoBothArms(t *testing.T) {
 	m, _ := testManager(t)
-	for _, name := range []string{With, Without} {
+	contract, err := m.SoulText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{m.Name(ArmWith), m.Name(ArmWithout)} {
 		if _, err := m.Render(name, false); err != nil {
 			t.Fatal(err)
 		}
 	}
-	with, _ := os.ReadFile(m.Soul(With))
-	without, _ := os.ReadFile(m.Soul(Without))
+	with, _ := os.ReadFile(m.Soul(m.Name(ArmWith)))
+	without, _ := os.ReadFile(m.Soul(m.Name(ArmWithout)))
 	if string(with) != string(without) {
 		t.Fatalf("arms differ:\n%s\n---\n%s", with, without)
 	}
-	if n := strings.Count(string(with), "<!-- stage-contract "); n != 1 {
-		t.Fatalf("want exactly one stamp, got %d", n)
+	if string(with) != contract {
+		t.Fatalf("an arm is not byte-identical to the contract:\n%s", with)
 	}
-	if n := strings.Count(string(with), contractHead); n != 1 {
-		t.Fatalf("want exactly one contract heading, got %d", n)
-	}
-	// Re-rendering replaces the block instead of appending a second copy.
-	if _, err := m.Render(With, false); err != nil {
+	// Re-rendering is a no-op, and says so.
+	line, err := m.Render(m.Name(ArmWith), false)
+	if err != nil {
 		t.Fatal(err)
 	}
-	again, _ := os.ReadFile(m.Soul(With))
-	if string(again) != string(with) {
-		t.Fatal("render is not idempotent")
+	if !strings.Contains(line, "already identical") {
+		t.Fatalf("re-render = %q", line)
 	}
 }
 
-func TestRenderKeepsThePersonaAboveTheContract(t *testing.T) {
+// TestTheContractIsNeverWritten: the real profile's SOUL.md is the one hand-written input. A render
+// that "fixed" it — a stamp, a persona cut — would move the contract behind the operator's back.
+func TestTheContractIsNeverWritten(t *testing.T) {
 	m, _ := testManager(t)
-	writeFile(t, m.Soul(With), "You are Hermes, built by Nous Research.\n\nBe concise.\n")
-	if _, err := m.Render(With, false); err != nil {
+	before, _ := os.ReadFile(m.Soul(m.Real))
+	line, err := m.Render(m.Real, false)
+	if err != nil {
 		t.Fatal(err)
 	}
-	text, _ := os.ReadFile(m.Soul(With))
-	if !strings.HasPrefix(string(text), "You are Hermes, built by Nous Research.\n\nBe concise.") {
-		t.Fatalf("persona was cut wrong:\n%s", text)
+	if !strings.Contains(line, "left alone") {
+		t.Fatalf("render real = %q", line)
 	}
-	if !strings.Contains(string(text), "A stage writes inside MC-") {
-		t.Fatalf("contract body missing:\n%s", text)
-	}
-	// A second render must not stack the persona or the block.
-	before := string(text)
-	if _, err := m.Render(With, false); err != nil {
-		t.Fatal(err)
-	}
-	text, _ = os.ReadFile(m.Soul(With))
-	if string(text) != before {
-		t.Fatalf("persona re-render drifted:\n%s", text)
+	after, _ := os.ReadFile(m.Soul(m.Real))
+	if string(before) != string(after) {
+		t.Fatalf("the real SOUL.md was rewritten:\n%s", after)
 	}
 }
 
@@ -113,36 +116,36 @@ func TestSyncSkillsInstallsExactlyTheWantedSet(t *testing.T) {
 	m.Skills = []string{"slide-builder", "source-research"}
 	writeFile(t, filepath.Join(m.Root, "source-research", "SKILL.md"), "---\nname: source-research\n---\n")
 
-	if _, err := m.SyncSkills(With, []string{"slide-builder"}, false); err != nil {
+	if _, err := m.SyncSkills(m.Name(ArmWith), []string{"slide-builder"}, false); err != nil {
 		t.Fatal(err)
 	}
-	if got := m.InstalledSkills(With); len(got) != 1 || got[0] != "slide-builder" {
+	if got := m.InstalledSkills(m.Name(ArmWith)); len(got) != 1 || got[0] != "slide-builder" {
 		t.Fatalf("installed = %v", got)
 	}
-	if _, err := m.SyncSkills(With, []string{"source-research"}, false); err != nil {
+	if _, err := m.SyncSkills(m.Name(ArmWith), []string{"source-research"}, false); err != nil {
 		t.Fatal(err)
 	}
-	if got := m.InstalledSkills(With); len(got) != 1 || got[0] != "source-research" {
+	if got := m.InstalledSkills(m.Name(ArmWith)); len(got) != 1 || got[0] != "source-research" {
 		t.Fatalf("the previous case's skill was left behind: %v", got)
 	}
-	if _, err := m.SyncSkills(With, []string{"not-a-skill"}, false); err == nil {
+	if _, err := m.SyncSkills(m.Name(ArmWith), []string{"not-a-skill"}, false); err == nil {
 		t.Fatal("expected an unknown-skill refusal")
 	}
 	// The installed copy must not carry the evals or the editor noise.
-	if _, err := os.Stat(filepath.Join(m.SkillsDir(Without), "slide-builder", "evals")); err == nil {
+	if _, err := os.Stat(filepath.Join(m.SkillsDir(m.Name(ArmWithout)), "slide-builder", "evals")); err == nil {
 		t.Fatal("evals/ was installed into a sandbox")
 	}
 }
 
 func TestScrubWipesMemoriesButNeverSoul(t *testing.T) {
 	m, _ := testManager(t)
-	if _, err := m.Render(With, false); err != nil {
+	if _, err := m.Render(m.Name(ArmWith), false); err != nil {
 		t.Fatal(err)
 	}
-	mem := filepath.Join(m.Home(With), "memories")
+	mem := filepath.Join(m.Home(m.Name(ArmWith)), "memories")
 	writeFile(t, filepath.Join(mem, "notes.md"), "a lesson")
 	writeFile(t, filepath.Join(mem, "MEMORY.md"), "index")
-	line, err := m.Scrub(With, false)
+	line, err := m.Scrub(m.Name(ArmWith), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,10 +155,10 @@ func TestScrubWipesMemoriesButNeverSoul(t *testing.T) {
 	if entries, _ := os.ReadDir(mem); len(entries) != 0 {
 		t.Fatalf("memories survived: %v", entries)
 	}
-	if _, err := os.Stat(m.Soul(With)); err != nil {
+	if _, err := os.Stat(m.Soul(m.Name(ArmWith))); err != nil {
 		t.Fatal("scrub touched SOUL.md")
 	}
-	if line, _ := m.Scrub(Real, false); !strings.Contains(line, "refused") {
+	if line, _ := m.Scrub(m.Real, false); !strings.Contains(line, "refused") {
 		t.Fatalf("scrub must refuse the real profile: %q", line)
 	}
 }
@@ -164,10 +167,9 @@ func TestScrubWipesMemoriesButNeverSoul(t *testing.T) {
 // ensure shells out to the real `hermes` binary, and a unit test must never touch a real profile.
 func TestCheckNamesEveryDeviation(t *testing.T) {
 	m, _ := testManager(t)
-	m.MasterclassRoot = t.TempDir() // must exist, and only the real profile pins it
-	for _, name := range []string{Real, With, Without, Trigger} {
+	for _, name := range []string{m.Real, m.Name(ArmWith), m.Name(ArmWithout), m.Name(ArmTrigger)} {
 		skills := m.Plan(name)
-		if name == With {
+		if name == m.Name(ArmWith) {
 			skills = []string{"slide-builder"}
 		}
 		if _, err := m.Render(name, false); err != nil {
@@ -176,14 +178,10 @@ func TestCheckNamesEveryDeviation(t *testing.T) {
 		if _, err := m.SyncSkills(name, skills, false); err != nil {
 			t.Fatal(err)
 		}
-		config := "\nmodel:\n  default: test-model\n"
-		if name == Real {
-			config += "\nterminal:\n  cwd: " + m.MasterclassRoot + "\n"
-		}
-		writeFile(t, filepath.Join(m.Home(name), "config.yaml"), config)
+		writeFile(t, filepath.Join(m.Home(name), "config.yaml"), "\nmodel:\n  default: test-model\n")
 		writeFile(t, filepath.Join(m.Home(name), ".env"), "OLLAMA_API_KEY=x\n")
 	}
-	rows, problems := m.Check([]string{Real, With, Without, Trigger})
+	rows, problems := m.Check([]string{m.Real, m.Name(ArmWith), m.Name(ArmWithout), m.Name(ArmTrigger)})
 	if len(problems) != 0 {
 		t.Fatalf("an intended-state tree should be clean, got %v", problems)
 	}
@@ -191,17 +189,27 @@ func TestCheckNamesEveryDeviation(t *testing.T) {
 		t.Fatalf("rows = %d", len(rows))
 	}
 
-	// A stale stamp is the classic drift: contract.md changed, SOUL.md did not.
-	writeFile(t, filepath.Join(m.Root, "contract.md"), testContract+"\n## New rule\nDon't.\n")
-	_, problems = m.Check([]string{Real, With, Without, Trigger})
-	if !strings.Contains(strings.Join(problems, "\n"), "stale contract") {
-		t.Fatalf("stale contract not reported: %v", problems)
+	// The classic drift is now the other way round: the contract changed in SOUL.md and the arms
+	// still read yesterday's copy, which is a different rule set under the same measurement.
+	writeFile(t, m.Soul(m.Real), testContract+"\n## New rule\nDon't.\n")
+	_, problems = m.Check([]string{m.Real, m.Name(ArmWith), m.Name(ArmWithout), m.Name(ArmTrigger)})
+	if !strings.Contains(strings.Join(problems, "\n"), "differs") {
+		t.Fatalf("an arm that is not the contract was not reported: %v", problems)
+	}
+	if _, err := m.Render(m.Name(ArmWith), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Render(m.Name(ArmWithout), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, problems = m.Check([]string{m.Name(ArmWith), m.Name(ArmWithout)}); len(problems) != 0 {
+		t.Fatalf("render did not bring the arms back to the contract: %v", problems)
 	}
 
 	// A sandbox that pins a working directory breaks the --in rule.
-	writeFile(t, filepath.Join(m.Home(Trigger), "config.yaml"),
+	writeFile(t, filepath.Join(m.Home(m.Name(ArmTrigger)), "config.yaml"),
 		"\nmodel:\n  default: test-model\n\nterminal:\n  cwd: /tmp/somewhere\n")
-	_, problems = m.Check([]string{Trigger})
+	_, problems = m.Check([]string{m.Name(ArmTrigger)})
 	if !strings.Contains(strings.Join(problems, "\n"), "must not pin a working directory") {
 		t.Fatalf("pinned sandbox not reported: %v", problems)
 	}
@@ -239,21 +247,21 @@ exit 0
 // finished delete leaves the second, and both would be misread by os.Stat alone.
 func TestLiveAsksForAnIdentityMarker(t *testing.T) {
 	m, _ := testManager(t)
-	if m.Live(With) {
+	if m.Live(m.Name(ArmWith)) {
 		t.Fatal("a profile that was never created reads as live")
 	}
-	if err := os.MkdirAll(m.Home(With), 0o755); err != nil {
+	if err := os.MkdirAll(m.Home(m.Name(ArmWith)), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if m.Live(With) {
+	if m.Live(m.Name(ArmWith)) {
 		t.Fatal("an empty directory reads as a profile — that is the shell a crashed create leaves")
 	}
-	writeFile(t, filepath.Join(m.Home(With), "profile.yaml"), "description: x\n")
-	if !m.Live(With) {
+	writeFile(t, filepath.Join(m.Home(m.Name(ArmWith)), "profile.yaml"), "description: x\n")
+	if !m.Live(m.Name(ArmWith)) {
 		t.Fatal("a directory carrying profile.yaml does not read as live")
 	}
-	writeFile(t, m.Tombstone(With), "deleted\n")
-	if m.Live(With) {
+	writeFile(t, m.Tombstone(m.Name(ArmWith)), "deleted\n")
+	if m.Live(m.Name(ArmWith)) {
 		t.Fatal("a tombstoned directory still reads as live")
 	}
 }
@@ -264,17 +272,17 @@ func TestRemoveOnlyEverDeletesASandbox(t *testing.T) {
 	m, _ := testManager(t)
 	t.Setenv("HERMES_ROOT", m.Hermes)
 	m.Bin = fakeHermesBin(t)
-	writeFile(t, filepath.Join(m.Home(Real), "profile.yaml"), "description: real\n")
+	writeFile(t, filepath.Join(m.Home(m.Real), "profile.yaml"), "description: real\n")
 
-	for _, name := range []string{Real, "default", "someone-elses-profile"} {
+	for _, name := range []string{m.Real, "default", "someone-elses-profile"} {
 		if _, err := m.Remove(name, false); err == nil {
 			t.Fatalf("remove %s was allowed", name)
 		}
 	}
-	if _, err := os.Stat(m.Home(Real)); err != nil {
+	if _, err := os.Stat(m.Home(m.Real)); err != nil {
 		t.Fatal("the refused remove deleted the real profile")
 	}
-	if line, err := m.Remove(With, false); err != nil || !strings.Contains(line, "not provisioned") {
+	if line, err := m.Remove(m.Name(ArmWith), false); err != nil || !strings.Contains(line, "not provisioned") {
 		t.Fatalf("removing a sandbox that is not there = %q, %v", line, err)
 	}
 }
@@ -286,25 +294,25 @@ func TestRemoveTombstonesAndCreateReplaces(t *testing.T) {
 	m, _ := testManager(t)
 	t.Setenv("HERMES_ROOT", m.Hermes)
 	m.Bin = fakeHermesBin(t)
-	if _, err := m.Create(With, false); err != nil {
+	if _, err := m.Create(m.Name(ArmWith), false); err != nil {
 		t.Fatal(err)
 	}
-	if !m.Live(With) {
+	if !m.Live(m.Name(ArmWith)) {
 		t.Fatal("create did not produce a live profile")
 	}
-	if line, err := m.Remove(With, false); err != nil || line != "remove "+With {
+	if line, err := m.Remove(m.Name(ArmWith), false); err != nil || line != "remove "+m.Name(ArmWith) {
 		t.Fatalf("remove = %q, %v", line, err)
 	}
-	if m.Live(With) {
+	if m.Live(m.Name(ArmWith)) {
 		t.Fatal("the profile is still live after remove")
 	}
-	if _, err := os.Stat(m.Tombstone(With)); err != nil {
+	if _, err := os.Stat(m.Tombstone(m.Name(ArmWith))); err != nil {
 		t.Fatalf("remove left no tombstone — the delete did not go through hermes: %v", err)
 	}
-	if _, err := m.Create(With, false); err != nil {
+	if _, err := m.Create(m.Name(ArmWith), false); err != nil {
 		t.Fatalf("create after remove: %v", err)
 	}
-	if !m.Live(With) {
+	if !m.Live(m.Name(ArmWith)) {
 		t.Fatal("the recreated profile is not live")
 	}
 }
@@ -313,16 +321,12 @@ func TestRemoveTombstonesAndCreateReplaces(t *testing.T) {
 // Only the real profile's absence is a problem.
 func TestAMissingSandboxIsNotADeviation(t *testing.T) {
 	m, _ := testManager(t)
-	if err := os.MkdirAll(m.MasterclassRoot, 0o755); err != nil {
+	writeFile(t, filepath.Join(m.Home(m.Real), "config.yaml"), "\nmodel:\n  default: test-model\n")
+	writeFile(t, filepath.Join(m.Home(m.Real), ".env"), "OLLAMA_API_KEY=x\n")
+	if _, err := m.Render(m.Real, false); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(m.Home(Real), "config.yaml"),
-		"\nmodel:\n  default: test-model\n\nterminal:\n  cwd: "+m.MasterclassRoot+"\n")
-	writeFile(t, filepath.Join(m.Home(Real), ".env"), "OLLAMA_API_KEY=x\n")
-	if _, err := m.Render(Real, false); err != nil {
-		t.Fatal(err)
-	}
-	rows, problems := m.Check([]string{Real, With, Without, Trigger, Revise})
+	rows, problems := m.Check([]string{m.Real, m.Name(ArmWith), m.Name(ArmWithout), m.Name(ArmTrigger), m.Name(ArmRevise)})
 	for _, p := range problems {
 		if strings.Contains(p, "missing") {
 			t.Fatalf("a removed sandbox is reported as a problem: %v", problems)

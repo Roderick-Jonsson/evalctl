@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"evalctl/internal/profile"
+	"evalctl/internal/stage"
 	"evalctl/internal/store"
 )
 
@@ -123,9 +125,15 @@ func TestTriggerSplitNeedsBothLabels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := New(s2).LoadTriggerQueries([]string{"slide-builder"}, nil, "all"); err == nil ||
-		!strings.Contains(err.Error(), "should-not-trigger") {
-		t.Fatalf("expected a split-balance error, got %v", err)
+	r := New(s2)
+	var said []string
+	r.Emit = func(e Event) { said = append(said, e.Message) }
+	if _, err := r.LoadTriggerQueries([]string{"slide-builder"}, nil, "all"); err != nil {
+		t.Fatalf("a one-sided split still measures one side of the decision: %v", err)
+	}
+	joined := strings.Join(said, "\n")
+	if !strings.Contains(joined, "no should-not-trigger") {
+		t.Fatalf("the run did not say the train half has one label: %q", joined)
 	}
 }
 
@@ -276,7 +284,8 @@ func TestContainmentFlagsWritesOutsideTheWorkspace(t *testing.T) {
 		"_archive/x.md":  {SHA256: "c", Bytes: 3},
 		"notes/leak.txt": {SHA256: "d", Bytes: 4},
 	}
-	containment := CheckContainment(before, after)
+	// The prefixes are the tree's own convention; without one, nothing is outside the run root.
+	containment := CheckContainment(before, after, stage.Rules{Containment: []string{"MC-", "_archive/"}})
 	if containment.OK || len(containment.Outside) != 1 || containment.Outside[0] != "notes/leak.txt" {
 		t.Fatalf("containment = %+v", containment)
 	}
@@ -361,7 +370,7 @@ func TestDryRunPlansWithoutWriting(t *testing.T) {
 		t.Fatalf("want 4 arm plans (2 cases × 2 arms), got %d: %v", len(plan), plan)
 	}
 	for _, line := range plan {
-		if !strings.Contains(line, "hermes -p eval-vcc-") || !strings.Contains(line, "--format stream-json") {
+		if !strings.Contains(line, "hermes -p "+r.Profiles.Name(profile.ArmWith)) || !strings.Contains(line, "--format stream-json") {
 			t.Fatalf("plan line is not the real command: %q", line)
 		}
 	}
@@ -379,7 +388,7 @@ func TestDryRunPlansWithoutWriting(t *testing.T) {
 		t.Fatalf("want 4 queries × 2 runs, got %d", len(plan))
 	}
 	for _, line := range plan {
-		if !strings.Contains(line, "-p eval-vcc-trigger") || !strings.Contains(line, "--max-turns") {
+		if !strings.Contains(line, "-p "+r.Profiles.Name(profile.ArmTrigger)) || !strings.Contains(line, "--max-turns") {
 			t.Fatalf("trigger plan line is wrong: %q", line)
 		}
 	}
@@ -568,7 +577,7 @@ func TestArmWritesTheProducedTreeIntoOutputs(t *testing.T) {
 	if !fileExists(filepath.Join(armDir, "outputs", "MC-fake", "OUT.md")) {
 		t.Fatalf("the produced tree is not under outputs/: changes = %+v", res.Changes)
 	}
-	if got := store.WorkspaceDirs(armDir); len(got) != 1 || got[0] != "MC-fake" {
+	if got := store.WorkspaceDirs(armDir, stage.Rules{Workspaces: []string{"MC-"}}); len(got) != 1 || got[0] != "MC-fake" {
 		t.Fatalf("workspace dirs = %v, want [MC-fake] under outputs/", got)
 	}
 	if !res.Checks.Containment.OK {

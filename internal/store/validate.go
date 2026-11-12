@@ -146,13 +146,15 @@ func (s *Store) validateTriggerFile(sk *Skill) []Issue {
 		}
 	}
 
-	// the runner hard-fails when a split holds only one label: both halves must carry both.
+	// One label in a half is a warning, not an error: the run measures the side it has, and the
+	// report says so. Refusing here is what made a first set impossible to measure before it was
+	// perfect, and perfection is what a measurement is for.
 	for _, name := range []string{SplitTrain, SplitValidation} {
 		labels := splitLabels[name]
-		if len(labels) != 2 {
-			issues = append(issues, Issue{SeverityError, LaneTrigger, sk.Name, 0, "",
-				fmt.Sprintf("%s split has no %s queries — the runner refuses a split that carries one label",
-					name, missingLabel(labels))})
+		if len(labels) == 1 {
+			issues = append(issues, Issue{SeverityWarning, LaneTrigger, sk.Name, 0, "",
+				fmt.Sprintf("%s split has no %s queries — its rate measures only one side of the decision; "+
+					"add one", name, missingLabel(labels))})
 		}
 		if splitCounts[name] == 0 {
 			issues = append(issues, Issue{SeverityError, LaneTrigger, sk.Name, 0, "",
