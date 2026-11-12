@@ -1011,13 +1011,17 @@ Every read command takes `--json` where it makes sense (`ls`, `show`, `validate`
 `dupes`, `runs`, `profiles status`/`check`). `rm` without refs needs filters or `--lane` +
 `--all`; nothing is deleted without a matching selection and a `--dry-run` shows the list first.
 
-Every verb answers `-h`/`--help` with its own page — what it is for, the grammar, examples, and the
-flags that verb actually parses — and `evalctl help <verb>` is the same page (`evalctl help` alone
-is the index above, in five groups). The page is a two-column layout, one line per flag: the flags
-are grouped under headings that say what they are for (`WHICH ROWS`, `EXECUTION`, `GRADING` …), the
-four global ones appear once at the foot rather than inside every list, and the headings take their
-bold and colour from the active theme — plain text when the page is piped. `--no-input` turns off
-prompting everywhere; a command that would have asked says which flag to pass instead.
+Every verb answers `-h` with its own page — what it is for, the grammar, examples, and the flags that
+verb actually parses — and `--help` adds the prose that would otherwise make it a wall (what a
+sandbox is, `promote`'s three modes, what the profiles link does). `evalctl help <verb>` is the `-h`
+page (`evalctl help` alone is the index above, in six groups). The page is a two-column layout, one
+line per flag: flags are grouped under headings that say what they are for (`WHICH ROWS`,
+`EXECUTION`, `GRADING` …), each carries its allowed values and its default or environment variable
+as a bracket (`[possible values: trigger, output, both] [default: both]`, `[env: EVALCTL_ROOT]`),
+the four global ones appear once at the foot rather than inside every list, headings and flag names
+take their colour from the active theme, and the layout follows `COLUMNS` when the page is piped.
+`--no-input` turns off prompting everywhere; a command that would have asked says which flag to pass
+instead.
 
 Exit codes are meant to be branched on: `0` done · `1` drift (`profiles check`) · `2` refused (bad
 usage, unknown ref, nothing selected, a prompt with no terminal) · `3` validation findings · `130`

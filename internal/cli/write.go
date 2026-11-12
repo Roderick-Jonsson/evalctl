@@ -60,13 +60,13 @@ func splitAssertions(raw string) []string { return model.SplitAssertions(raw) }
 
 func runAdd(args []string) int {
 	fs, c := newFS("add")
-	lane := fs.String("lane", "", "trigger or output (required)")
+	lane := fs.String("lane", "", "which lane the row belongs to (required)")
 	id := fs.Int("id", 0, "row id (default: next free id)")
 	skill := fs.String("skill", "", "stage skill under test (required)")
 	query := fs.String("query", "", "trigger: the user prompt being tested (- for stdin)")
 	why := fs.String("why", "", "trigger: why the row exists (read when it fails)")
-	split := fs.String("split", "", "trigger: train or validation")
-	label := fs.String("label", "", "trigger: yes (should trigger) or no")
+	split := fs.String("split", "", "trigger: which side of the split")
+	label := fs.String("label", "", "trigger: should the skill load?")
 	slug := fs.String("slug", "", "output: case slug, also its fixture dir name")
 	prompt := fs.String("prompt", "", "output: the case prompt (- for stdin)")
 	expected := fs.String("expected", "", "output: expected_output (- for stdin)")
@@ -75,8 +75,8 @@ func runAdd(args []string) int {
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
 	}
-	if *lane != store.LaneTrigger && *lane != store.LaneOutput {
-		return fail(fmt.Errorf("--lane must be trigger or output"))
+	if err := requireOneOf("add", "lane", *lane); err != nil {
+		return fail(err)
 	}
 	if *skill == "" {
 		return fail(fmt.Errorf("--skill is required"))
@@ -104,7 +104,7 @@ func runAdd(args []string) int {
 		case "no":
 			q.ShouldTrigger = false
 		default:
-			return fail(fmt.Errorf("--label must be yes or no"))
+			return fail(requireOneOf("add", "label", *label))
 		}
 		if err := c.s.AddTrigger(*skill, q); err != nil {
 			return fail(err)
@@ -143,13 +143,13 @@ func splitOrLabel(should bool, split string) string {
 
 func runEdit(args []string) int {
 	fs, c := newFS("edit")
-	lane := fs.String("lane", "", "trigger or output (needed for a bare numeric ref)")
+	lane := fs.String("lane", "", "the ref's lane (needed for a bare numeric ref)")
 	id := fs.Int("id", 0, "new id (it is cited by earlier iterations, so this change asks first)")
 	skill := fs.String("skill", "", "new skill")
 	query := fs.String("query", "", "trigger: new query (- for stdin)")
 	why := fs.String("why", "", "trigger: new why")
 	split := fs.String("split", "", "trigger: new split")
-	label := fs.String("label", "", "trigger: yes or no")
+	label := fs.String("label", "", "trigger: should the skill load?")
 	slug := fs.String("slug", "", "output: new slug (moves the fixture dir)")
 	prompt := fs.String("prompt", "", "output: new prompt (- for stdin)")
 	expected := fs.String("expected", "", "output: new expected_output (- for stdin)")
@@ -162,6 +162,12 @@ func runEdit(args []string) int {
 	}
 	if fs.NArg() == 0 {
 		return fail(fmt.Errorf("usage: evalctl edit <ref> [flags]"))
+	}
+	if err := requireOneOf("edit", "lane", *lane); err != nil {
+		return fail(err)
+	}
+	if err := requireOneOf("mv", "lane", *lane); err != nil {
+		return fail(err)
 	}
 	ref, err := parseRef(c.s, *lane, fs.Arg(0))
 	if err != nil {
@@ -194,7 +200,7 @@ func runEdit(args []string) int {
 			case "no":
 				q.ShouldTrigger = false
 			default:
-				return fail(fmt.Errorf("--label must be yes or no"))
+				return fail(requireOneOf("edit", "label", *label))
 			}
 		}
 		if set["query"] {
@@ -361,10 +367,10 @@ func clipText(s string, n int) string {
 
 func runRemove(args []string) int {
 	fs, c := newFS("rm")
-	lane := fs.String("lane", "", "trigger or output (needed for bare numeric refs)")
+	lane := fs.String("lane", "", "which lane to delete from (needed for bare numeric refs)")
 	skill := fs.String("skill", "", "bulk: only rows of this skill")
-	label := fs.String("label", "", "bulk trigger: yes or no")
-	split := fs.String("split", "", "bulk trigger: train or validation")
+	label := fs.String("label", "", "bulk trigger: should the skill load?")
+	split := fs.String("split", "", "bulk trigger: which side of the split")
 	search := fs.String("search", "", "bulk: substring filter")
 	dupes := fs.Bool("dupes", false, "bulk: only near-duplicate rows")
 	all := fs.Bool("all", false, "bulk: every row in the lane(s) — needs --lane")
@@ -375,6 +381,11 @@ func runRemove(args []string) int {
 		return fail(err)
 	}
 
+	for _, f := range [][2]string{{"lane", *lane}, {"label", *label}, {"split", *split}} {
+		if err := requireOneOf("rm", f[0], f[1]); err != nil {
+			return fail(err)
+		}
+	}
 	var refs []store.RowRef
 	if fs.NArg() > 0 {
 		var err error
@@ -566,7 +577,7 @@ func adoptWarning(root, lane, skill string, id int) {
 
 func runMove(args []string) int {
 	fs, c := newFS("mv")
-	lane := fs.String("lane", "", "trigger or output")
+	lane := fs.String("lane", "", "the ref's lane")
 	to := fs.String("to-skill", "", "destination stage skill (required)")
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
@@ -605,7 +616,7 @@ func isPlainName(s string) bool {
 
 func runRenumber(args []string) int {
 	fs, c := newFS("renumber")
-	lane := fs.String("lane", "both", "trigger, output or both")
+	lane := fs.String("lane", "both", "which lanes to renumber")
 	yes := fs.Bool("yes", false, "do not ask")
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
@@ -633,7 +644,7 @@ func runRenumber(args []string) int {
 			touched[name] = true
 		}
 	default:
-		return fail(fmt.Errorf("--lane must be trigger, output or both"))
+		return fail(requireOneOf("renumber", "lane", *lane))
 	}
 	if len(changes) == 0 {
 		fmt.Println(styleDim.Render("ids are already contiguous"))

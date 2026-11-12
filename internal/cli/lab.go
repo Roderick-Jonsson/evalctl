@@ -18,7 +18,7 @@ import (
 func runLab(args []string) int {
 	fs, c := newFS("lab")
 	skill := fs.String("skill", "", "the stage skill whose description is being optimized")
-	lane := fs.String("lane", store.LaneTrigger, "which optimization: trigger (descriptions) or output (cases)")
+	lane := fs.String("lane", store.LaneTrigger, "which optimization the loop runs")
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
@@ -35,8 +35,8 @@ func runLab(args []string) int {
 	if *lane == store.LaneOutput {
 		return qualityLab(c, *skill, *asJSON)
 	}
-	if *lane != store.LaneTrigger {
-		return fail(fmt.Errorf("--lane must be trigger or output"))
+	if err := requireOneOf("lab", "lane", *lane); err != nil {
+		return fail(err)
 	}
 	lab, err := runner.New(c.s).DescriptionLab(*skill)
 	if err != nil {

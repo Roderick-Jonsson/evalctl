@@ -25,6 +25,7 @@ var (
 	styleTitle   = lipgloss.NewStyle()
 	styleGroup   = lipgloss.NewStyle()
 	styleSection = lipgloss.NewStyle()
+	styleFlag    = lipgloss.NewStyle()
 )
 
 func init() { applyTheme(theme.Current()) }
@@ -51,6 +52,10 @@ func applyTheme(p theme.Palette) {
 	// A help page's headings are the same register as a table's group label: bold, secondary
 	// accent, upper case. Lip Gloss renders no escapes without a TTY, so a piped page is plain.
 	styleSection = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Accent2))
+	// Flag names take the primary accent: the three-colour scheme uv and rg use — bright headings,
+	// one colour for what you can type, body text everywhere else. Green is not available to them:
+	// in this palette it already means "passed".
+	styleFlag = lipgloss.NewStyle().Foreground(p.Color(p.Accent))
 }
 
 // takeTheme pulls `--theme NAME` / `--theme=NAME` out of the arguments wherever it appears, and

@@ -13,10 +13,10 @@ import (
 
 func runList(args []string) int {
 	fs, c := newFS("ls")
-	lane := fs.String("lane", "both", "trigger, output or both")
+	lane := fs.String("lane", "both", "which lanes to list")
 	skill := fs.String("skill", "", "only this stage skill")
-	label := fs.String("label", "", "trigger only: yes (should trigger) or no")
-	split := fs.String("split", "", "trigger only: train or validation")
+	label := fs.String("label", "", "trigger rows only: should the skill load?")
+	split := fs.String("split", "", "trigger rows only: which side of the split")
 	search := fs.String("search", "", "case-insensitive substring of query/prompt/slug/why")
 	in := fs.String("in", "", "scope --search to one column: id, skill, slug, text, why …")
 	sortSpec := fs.String("sort", "", "order by a column: skill, id:desc, or skill,id:desc")
@@ -33,11 +33,11 @@ func runList(args []string) int {
 	if err := needSkill(c.s, *skill); err != nil {
 		return fail(err)
 	}
-	if *label != "" && *label != "yes" && *label != "no" {
-		return fail(fmt.Errorf("--label must be yes or no"))
+	if err := requireOneOf("ls", "label", *label); err != nil {
+		return fail(err)
 	}
-	if *split != "" && *split != "train" && *split != "validation" {
-		return fail(fmt.Errorf("--split must be train or validation"))
+	if err := requireOneOf("ls", "split", *split); err != nil {
+		return fail(err)
 	}
 	if *group != "" && *sortSpec == "" {
 		// a grouped table reads best in the group's own order; --sort still overrides it
@@ -56,7 +56,7 @@ func runList(args []string) int {
 		lanes = lanes[1:]
 	case "both":
 	default:
-		return fail(fmt.Errorf("--lane must be trigger, output or both"))
+		return fail(requireOneOf("ls", "lane", *lane))
 	}
 	// A column must exist somewhere in the selected lanes; one lane missing it (split on output)
 	// is not an error — that lane simply keeps its file order. A single lane gets the exact
@@ -225,13 +225,16 @@ func printStats(s *store.Store, lanes []string, f store.Filter) {
 
 func runShow(args []string) int {
 	fs, c := newFS("show")
-	lane := fs.String("lane", "", "trigger or output (required for a bare numeric ref)")
+	lane := fs.String("lane", "", "the ref's lane (needed for a bare numeric ref)")
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
 	}
+	if err := requireOneOf("show", "lane", *lane); err != nil {
+		return fail(err)
+	}
 	if fs.NArg() == 0 {
-		return fail(fmt.Errorf("usage: evalctl show <ref> [--lane]"))
+		return fail(usageErr{fmt.Errorf("usage: evalctl show <ref> [--lane]")})
 	}
 	ref, err := parseRef(c.s, *lane, fs.Arg(0))
 	if err != nil {

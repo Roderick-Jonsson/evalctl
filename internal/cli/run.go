@@ -51,8 +51,8 @@ func (rc *runCommand) register(fs *flag.FlagSet) {
 	fs.BoolVar(&rc.list, "list", false, "list the selected cases and exit")
 	fs.BoolVar(&rc.keep, "keep", false, "keep the sandbox profiles when the run ends (they are removed by default)")
 	fs.IntVar(&rc.iteration, "iteration", 0, "iteration number (default: next free)")
-	fs.StringVar(&rc.lane, "lane", store.LaneOutput, "lane: output (default) or trigger")
-	fs.StringVar(&rc.logLevel, "log", "full", "live agent activity on stderr: full, tools or off")
+	fs.StringVar(&rc.lane, "lane", store.LaneOutput, "which lane to run")
+	fs.StringVar(&rc.logLevel, "log", "full", "live agent activity on stderr")
 }
 
 func (rc *runCommand) skillsList() []string {
@@ -87,14 +87,14 @@ func runRun(args []string) int {
 	rc := runCommand{}
 	rc.register(fs)
 	cases := fs.String("case", "", "comma-separated case ids, default all")
-	arms := fs.String("arms", strings.Join(runner.AllArms, ","), "with_skill,without_skill")
+	arms := fs.String("arms", strings.Join(runner.AllArms, ","), "which arms to run")
 	noVerify := fs.Bool("no-verify", false, "skip the skill's scripts/ verify checks")
 	grade := fs.Bool("grade", true, "output lane: grade the new iteration with the judge after running")
 	noGrade := fs.Bool("no-grade", false, "output lane: run the arms and stop — no verdicts, no iteration in the loop")
 	isolate := fs.Bool("isolate", true, "run in a temp root and copy the result back (default); "+
 		"--isolate=false runs inside the results dir, for debugging only")
 	queries := fs.String("query", "", "trigger lane: comma-separated query ids, default all")
-	split := fs.String("split", "all", "trigger lane: all, train or validation")
+	split := fs.String("split", "all", "trigger lane: which side of the split")
 	runs := fs.Int("runs", 0, "trigger lane: runs per query (default from the file, else 3)")
 	threshold := fs.Float64("threshold", 0, "trigger lane: pass threshold on the trigger rate")
 	maxTurns := fs.Int("max-turns", 0, "trigger lane: --max-turns per run (default 8)")
@@ -269,7 +269,7 @@ func styleActivity(line string) string {
 func runRuns(args []string) int {
 	fs, c := newFS("runs")
 	asJSON := fs.Bool("json", false, "machine-readable output")
-	lane := fs.String("lane", "", "only one lane: output or trigger")
+	lane := fs.String("lane", "", "only one lane")
 	skill := fs.String("skill", "", "only one skill's iterations: its output runs and the trigger runs that measured it")
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
@@ -282,8 +282,8 @@ func runRuns(args []string) int {
 	}
 	r := runner.New(c.s)
 	infos := r.ListRunsFor(*skill)
-	if *lane != "" && *lane != store.LaneTrigger && *lane != store.LaneOutput {
-		return fail(fmt.Errorf("--lane must be output or trigger"))
+	if err := requireOneOf("runs", "lane", *lane); err != nil {
+		return fail(err)
 	}
 	if *asJSON {
 		if err := writeJSON(os.Stdout, infos); err != nil {
@@ -337,15 +337,18 @@ func runRuns(args []string) int {
 
 func runReport(args []string) int {
 	fs, c := newFS("report")
-	lane := fs.String("lane", "", "lane of the ref: output or trigger")
+	lane := fs.String("lane", "", "the ref's lane")
 	raw := fs.Bool("raw", false, "print the markdown source instead of rendering it")
 	width := fs.Int("width", 0, "render at this wrap width, even into a pipe")
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
 	}
+	if err := requireOneOf("report", "lane", *lane); err != nil {
+		return fail(err)
+	}
 	refs := fs.Args()
 	if len(refs) != 1 {
-		return fail(fmt.Errorf("usage: evalctl report <run>   (3, source-research@3, trigger-2)"))
+		return fail(usageErr{fmt.Errorf("usage: evalctl report <run>   (3, source-research@3, trigger-2)")})
 	}
 	r := runner.New(c.s)
 	info, err := r.ResolveRun(refs[0], *lane)

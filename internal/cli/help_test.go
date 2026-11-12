@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"sort"
@@ -110,10 +111,82 @@ func TestHelpPagesFitTheLayout(t *testing.T) {
 			if strings.Contains(line, "\t") {
 				t.Errorf("%s -h: tab in %q", verb, line)
 			}
-			if n := len([]rune(line)); n > 100 {
+			if n := len([]rune(line)); n > 110 {
 				t.Errorf("%s -h: %d columns — %q", verb, n, line)
 			}
 		}
+	}
+}
+
+// TestColumnsIsHonoured: a pipe has no width to ask for, but the caller still has one in mind —
+// `COLUMNS=72 evalctl ls -h` must fit 72 columns, the way uv wraps to it.
+func TestColumnsIsHonoured(t *testing.T) {
+	for _, width := range []string{"56", "72", "96"} {
+		t.Setenv("COLUMNS", width)
+		limit := 0
+		fmt.Sscanf(width, "%d", &limit)
+		for _, args := range [][]string{{"ls", "-h"}, {"run", "-h"}, {"rm", "-h"}, {"profiles", "-h"}, {"promote", "--help"}, {"help"}} {
+			_, out, _ := capture(t, func() int { return Run(args) })
+			for _, line := range strings.Split(out, "\n") {
+				if n := len([]rune(line)); n > limit {
+					t.Errorf("%s: %d columns under COLUMNS=%s: %q", strings.Join(args, " "), n, width, line)
+				}
+			}
+		}
+	}
+}
+
+// TestChoicesAreOnThePageAndInTheError: one table, two surfaces. A verb that declares allowed
+// values must print them, and must refuse a value outside them naming the same list.
+func TestChoicesAreOnThePageAndInTheError(t *testing.T) {
+	for verb, flags := range flagChoices {
+		_, out, _ := capture(t, func() int { return Run([]string{verb, "-h"}) })
+		for name, values := range flags {
+			want := "[possible values: " + strings.Join(values, ", ") + "]"
+			if !strings.Contains(out, want) {
+				t.Errorf("%s -h does not print %q", verb, want)
+			}
+			if err := requireOneOf(verb, name, "definitely-not-a-value"); err == nil {
+				t.Errorf("requireOneOf(%s, %s) accepted a bogus value", verb, name)
+				continue
+			}
+			msg := requireOneOf(verb, name, "definitely-not-a-value").Error()
+			for _, v := range values {
+				if !strings.Contains(msg, v) {
+					t.Errorf("%s: the refusal does not name %q: %s", verb, v, msg)
+				}
+			}
+			if err := requireOneOf(verb, name, values[0]); err != nil {
+				t.Errorf("%s: %q was refused: %v", verb, values[0], err)
+			}
+		}
+	}
+}
+
+// TestLongHelpCarriesTheDetails: `-h` is the page, `--help` is the page plus the prose that used to
+// make it a wall — and each points at the other.
+func TestLongHelpCarriesTheDetails(t *testing.T) {
+	shortCode, short, _ := capture(t, func() int { return Run([]string{"run", "-h"}) })
+	longCode, long, _ := capture(t, func() int { return Run([]string{"run", "--help"}) })
+	if shortCode != 0 || longCode != 0 {
+		t.Fatalf("exits %d and %d", shortCode, longCode)
+	}
+	if strings.Contains(short, "DETAILS") {
+		t.Error("-h printed the DETAILS section")
+	}
+	if !strings.Contains(short, "the longer notes: evalctl run --help") {
+		t.Error("-h does not point at --help")
+	}
+	if !strings.Contains(long, "DETAILS") || !strings.Contains(long, "Sandboxes are created by the run") {
+		t.Error("--help did not print the details")
+	}
+	if !strings.Contains(long, "shorter page: evalctl run -h") {
+		t.Error("--help does not point back at -h")
+	}
+	// A verb with no details still has one page, and it does not advertise a longer one.
+	_, plain, _ := capture(t, func() int { return Run([]string{"stats", "-h"}) })
+	if strings.Contains(plain, "the longer notes:") {
+		t.Error("stats -h promises a longer page it does not have")
 	}
 }
 

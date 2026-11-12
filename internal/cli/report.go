@@ -78,7 +78,7 @@ func runValidate(args []string) int {
 
 func runDupes(args []string) int {
 	fs, c := newFS("dupes")
-	lane := fs.String("lane", "both", "trigger, output or both")
+	lane := fs.String("lane", "both", "which lanes to scan")
 	threshold := fs.Float64("threshold", store.DefaultDupeThreshold, "word-overlap above which two rows are the same test")
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	if err := c.parse(fs, args); err != nil {
@@ -98,7 +98,7 @@ func runDupes(args []string) int {
 		lanes = lanes[1:]
 	case "both":
 	default:
-		return fail(fmt.Errorf("--lane must be trigger, output or both"))
+		return fail(requireOneOf("dupes", "lane", *lane))
 	}
 
 	if *asJSON {

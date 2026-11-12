@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"golang.org/x/term"
@@ -265,6 +266,53 @@ type flagGroup struct {
 	names []string
 }
 
+// flagChoices is the allowed set of every flag whose value is one of a few words. It is one source
+// for three things: the page's [possible values: …], the refusal when a value is not one of them,
+// and the test that keeps the two in step. Keyed by the verb's FlagSet name, so `trigger` inherits
+// `run`'s set by sharing its flag set.
+var flagChoices = map[string]map[string][]string{
+	"ls":       {"lane": {"trigger", "output", "both"}, "label": {"yes", "no"}, "split": {"train", "validation"}},
+	"show":     {"lane": {"trigger", "output"}},
+	"add":      {"lane": {"trigger", "output"}, "label": {"yes", "no"}, "split": {"train", "validation"}},
+	"edit":     {"lane": {"trigger", "output"}, "label": {"yes", "no"}, "split": {"train", "validation"}},
+	"rm":       {"lane": {"trigger", "output"}, "label": {"yes", "no"}, "split": {"train", "validation"}},
+	"mv":       {"lane": {"trigger", "output"}},
+	"dupes":    {"lane": {"trigger", "output", "both"}},
+	"renumber": {"lane": {"trigger", "output", "both"}},
+	"lab":      {"lane": {"trigger", "output"}},
+	"run":      {"lane": {"output", "trigger"}, "split": {"all", "train", "validation"}, "arms": {"with_skill", "without_skill"}, "log": {"full", "tools", "off"}},
+	"runs":     {"lane": {"output", "trigger"}},
+	"report":   {"lane": {"output", "trigger"}},
+	"tui":      {"lane": {"trigger", "output"}, "glyphs": {"auto", "unicode", "ascii"}},
+	"promote":  {"label": {"yes", "no"}, "split": {"train", "validation"}},
+}
+
+// flagEnv names the environment variable a flag's default comes from, where one exists.
+var flagEnv = map[string]string{
+	"root":   "EVALCTL_ROOT",
+	"theme":  "EVALCTL_THEME",
+	"glyphs": "EVALCTL_GLYPHS",
+}
+
+// requireOneOf refuses a value outside a flag's set, naming the set from the same table the page
+// prints — so a new verb gets the message for free and the two can never disagree. A wrong value is
+// a grammar problem, so the refusal also points at the page.
+func requireOneOf(verb, name, value string) error {
+	if value == "" {
+		return nil
+	}
+	choices := flagChoices[verb][name]
+	if len(choices) == 0 {
+		return nil
+	}
+	for _, c := range choices {
+		if value == c {
+			return nil
+		}
+	}
+	return usageErr{fmt.Errorf("--%s %q is not one of: %s", name, value, strings.Join(choices, ", "))}
+}
+
 // flagGroups is declared where grouping earns its keep: a page of eight or more flags. A four-flag
 // verb reads better as one flat list than as three headings with one row each.
 var flagGroups = map[string][]flagGroup{
@@ -315,10 +363,36 @@ var flagGroups = map[string][]flagGroup{
 // globalFlags are taken out of the line before dispatch, so they sit on no verb's FlagSet; they are
 // printed once at the foot of every page instead of repeated through the middle of each list.
 var globalFlags = []flagDoc{
-	{name: "root", arg: "<DIR>", usage: "the eval tree, or a profile naming one (default: nearest dir holding it; $EVALCTL_ROOT)"},
-	{name: "theme", arg: "<NAME>", usage: "auto, midnight, high-contrast, daylight ($EVALCTL_THEME)"},
+	{name: "root", arg: "<DIR>", usage: "the eval tree, or a profile naming one (default: nearest dir holding it)", env: "EVALCTL_ROOT"},
+	{name: "theme", arg: "<NAME>", usage: "the colour scheme", choices: []string{"auto", "midnight", "high-contrast", "daylight"}, env: "EVALCTL_THEME"},
 	{name: "no-input", usage: "never prompt; a command that would have asked names the flag to pass"},
 	{name: "help", usage: "this page"},
+}
+
+// helpDetails is what `--help` adds to `-h`: the prose that used to make the page a wall. It is the
+// material a reader wants once, not every time — promote's three modes, what a sandbox is, what the
+// profiles link does — so it waits behind one more keystroke.
+var helpDetails = map[string][]string{
+	"promote":  {promoteDetail},
+	"run":      {noteSandboxes, noteLog, noteRefs},
+	"trigger":  {noteSandboxes, noteLog, noteRefs},
+	"profiles": {noteLink},
+}
+
+// promoteDetail is promote's prose without the grammar block at its head: the page has a USAGE
+// section of its own, and the error path still prints promoteUsage whole.
+var promoteDetail = dropUsageHeader(promoteUsage)
+
+// dropUsageHeader cuts a leading `usage: …` block (the grammar lines, up to the first blank line)
+// from a verb's help text.
+func dropUsageHeader(text string) string {
+	if !strings.HasPrefix(text, "usage:") {
+		return text
+	}
+	if i := strings.Index(text, "\n\n"); i >= 0 {
+		return strings.TrimSpace(text[i:])
+	}
+	return text
 }
 
 // helpDocsLine is the last line of every page: where the long-form documentation lives.
@@ -358,30 +432,52 @@ func canonicalVerb(v string) string {
 // bad flag rather than being silently reordered.
 func knownVerb(v string) bool { return canonicalVerb(v) != "" }
 
-// wantsHelp reports -h/--help anywhere before the `--` terminator: help is answered from any
-// position, which is how it can be added to the end of an invocation that already works.
-func wantsHelp(args []string) bool {
+// helpDepth answers help from any position before the `--` terminator — the flag can be added to
+// the end of an invocation that already works — and says which of the two pages was asked for.
+// `-h` is the page; `--help` is the page plus its DETAILS section, the progressive disclosure
+// ripgrep and clap use (rg -h is 135 lines, rg --help is 1621).
+func helpDepth(args []string) (long, wanted bool) {
 	for _, a := range args {
 		if a == "--" {
-			return false
+			return false, false
 		}
 		switch a {
-		case "-h", "--help", "-help", "--h":
-			return true
+		case "-h", "--h":
+			return false, true
+		case "--help", "-help", "--help=true":
+			return true, true
 		}
 	}
-	return false
+	return false, false
 }
 
 // ---------------------------------------------------------------- flag rows
 
-// flagDoc is one row of a flags block: a name, its value placeholder, its description and — when
-// it is not the zero value and the prose does not already say so — the default.
+// flagDoc is one row of a flags block: a name, its value placeholder, its description, and the
+// annotations that answer "what can I pass, what happens if I don't, where does it come from".
 type flagDoc struct {
-	name  string
-	arg   string
-	usage string
-	def   string
+	name    string
+	arg     string
+	usage   string
+	def     string
+	choices []string
+	env     string
+}
+
+// annotations prints the brackets in the order uv and clap do: the allowed values, then the
+// default, then the environment variable. Any of them may be absent.
+func (d flagDoc) annotations() string {
+	var parts []string
+	if len(d.choices) > 0 {
+		parts = append(parts, "[possible values: "+strings.Join(d.choices, ", ")+"]")
+	}
+	if d.def != "" {
+		parts = append(parts, d.def)
+	}
+	if d.env != "" {
+		parts = append(parts, "[env: "+d.env+"]")
+	}
+	return strings.Join(parts, " ")
 }
 
 func (d flagDoc) cell() string {
@@ -395,6 +491,7 @@ func (d flagDoc) cell() string {
 // the usage string when there is one, and otherwise from the flag's name, because `<SKILL>` says
 // more at a glance than `<string>`.
 func flagDocs(fs *flag.FlagSet) []flagDoc {
+	verb := strings.TrimPrefix(fs.Name(), "evalctl ")
 	var out []flagDoc
 	fs.VisitAll(func(f *flag.Flag) {
 		if f.Name == "root" {
@@ -424,12 +521,19 @@ func flagDocs(fs *flag.FlagSet) []flagDoc {
 		if !said {
 			switch {
 			case boolFlag && f.DefValue == "true":
-				def = "(default: true)"
+				def = "[default: true]"
 			case !boolFlag && f.DefValue != "" && f.DefValue != "0" && f.DefValue != "false":
-				def = "(default: " + f.DefValue + ")"
+				def = "[default: " + f.DefValue + "]"
 			}
 		}
-		out = append(out, flagDoc{name: f.Name, arg: arg, usage: f.Usage, def: def})
+		choices := flagChoices[verb][f.Name]
+		if def != "" && len(choices) > 1 && strings.Join(choices, ",") == f.DefValue {
+			def = "" // the default is every value, which the values line already lists
+		}
+		out = append(out, flagDoc{
+			name: f.Name, arg: arg, usage: f.Usage, def: def,
+			choices: choices, env: flagEnv[f.Name],
+		})
 	})
 	return out
 }
@@ -492,16 +596,23 @@ func namesOf(docs []flagDoc) []string {
 // helpWidth is the column the page lays out to: the terminal's, clamped so a wide window does not
 // stretch descriptions into an unreadable ribbon and a narrow one still gets a description column.
 func helpWidth() int {
-	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
-		if w > 100 {
-			return 100
-		}
-		if w < 60 {
-			return 60
-		}
-		return w
+	w := 0
+	if n, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && n > 0 {
+		w = n
+	} else if n, err := strconv.Atoi(os.Getenv("COLUMNS")); err == nil {
+		// A pipe has no width to ask, but `evalctl ls -h > page.txt` and a pager still have one in
+		// mind; clap reads COLUMNS for exactly this, and uv wraps to it.
+		w = n
 	}
-	return 100
+	switch {
+	case w <= 0:
+		return 100
+	case w > 110:
+		return 110
+	case w < 56:
+		return 56
+	}
+	return w
 }
 
 // descriptionColumn is where every description starts: two cells of indent, the widest name cell on
@@ -521,21 +632,73 @@ func descriptionColumn(sets ...[]flagDoc) int {
 	return 2 + widest + 2
 }
 
-// wrap breaks text on spaces to width, preserving newlines the author wrote.
+// wrap breaks text on spaces to width, preserving newlines the author wrote. A bracketed
+// annotation — [possible values: …], [default: …], [env: …] — is one token: split across two lines
+// it stops reading as an annotation at all.
 func wrap(text string, width int) []string {
+	lines := wrapWords(holdBrackets(text), width)
+	for i := range lines {
+		lines[i] = strings.ReplaceAll(lines[i], nbsp, " ")
+		if n := len([]rune(lines[i])); n > width {
+			// Holding the bracket together overflowed the page; a broken annotation is the lesser
+			// fault, so this block is re-wrapped with its spaces back.
+			return wrapWords(strings.ReplaceAll(text, nbsp, " "), width)
+		}
+	}
+	return lines
+}
+
+// nbsp stands in for a space while a bracketed run is kept together. It is a control character,
+// not U+00A0: strings.Fields treats a non-breaking space as whitespace and would split there anyway.
+const nbsp = "\x1f"
+
+// holdBrackets swaps every space inside [...] for nbsp, so the wrapper cannot break there.
+func holdBrackets(text string) string {
+	var b strings.Builder
+	depth := 0
+	for _, r := range text {
+		switch {
+		case r == '[':
+			depth++
+			b.WriteRune(r)
+		case r == ']':
+			if depth > 0 {
+				depth--
+			}
+			b.WriteRune(r)
+		case r == ' ' && depth > 0:
+			b.WriteString(nbsp)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func wrapWords(text string, width int) []string {
 	if width < 10 {
 		width = 10
 	}
 	var out []string
 	for _, para := range strings.Split(text, "\n") {
-		words := strings.Fields(para)
+		var words []string
+		for _, w := range strings.Fields(para) {
+			// A single token wider than the page — a slash-list, a URL — is chopped, because an
+			// overlong line is worse than a broken word.
+			r := []rune(w)
+			for len(r) > width {
+				words = append(words, string(r[:width]))
+				r = r[width:]
+			}
+			words = append(words, string(r))
+		}
 		if len(words) == 0 {
 			out = append(out, "")
 			continue
 		}
 		line := words[0]
 		for _, word := range words[1:] {
-			if len(line)+1+len(word) > width {
+			if len([]rune(line))+1+len([]rune(word)) > width {
 				out = append(out, line)
 				line = word
 				continue
@@ -560,21 +723,23 @@ func printGroup(w io.Writer, title string, docs []flagDoc, col, width int) {
 	fmt.Fprintln(w, section(title))
 	for _, d := range docs {
 		text := d.usage
-		if d.def != "" {
-			text += "  " + d.def
+		if a := d.annotations(); a != "" {
+			text += "  " + a
 		}
 		cell := d.cell()
 		lines := wrap(text, width-col)
 		if len(cell) > col-4 {
 			// A name too long for the column keeps its description on the next line rather than
 			// pushing every other description right.
-			fmt.Fprintln(w, "  "+cell)
+			fmt.Fprintln(w, "  "+styleFlag.Render(cell))
 			for _, l := range lines {
 				fmt.Fprintln(w, strings.Repeat(" ", col)+l)
 			}
 			continue
 		}
-		fmt.Fprintf(w, "  %s%s%s\n", cell, strings.Repeat(" ", col-2-len(cell)), lines[0])
+		// The name is coloured; the padding is computed from the plain cell, so the column holds
+		// whether or not the palette is active.
+		fmt.Fprintf(w, "  %s%s%s\n", styleFlag.Render(cell), strings.Repeat(" ", col-2-len(cell)), lines[0])
 		for _, l := range lines[1:] {
 			fmt.Fprintln(w, strings.Repeat(" ", col)+l)
 		}
@@ -583,34 +748,60 @@ func printGroup(w io.Writer, title string, docs []flagDoc, col, width int) {
 }
 
 // printExamples draws the examples block. Every line gets the shell's own prompt, so a copy of it
-// runs as it reads.
-func printExamples(w io.Writer, examples []string) {
+// runs as it reads. Comments are aligned into a column when the page is wide enough for it and
+// squeezed to one space when it is not, before the line is ever broken.
+func printExamples(w io.Writer, examples []string, width int) {
 	if len(examples) == 0 {
 		return
 	}
 	fmt.Fprintln(w, section("EXAMPLES"))
 	for _, e := range examples {
-		e = strings.TrimPrefix(e, "$ ")
-		fmt.Fprintln(w, "  $ "+e)
+		line := "$ " + strings.TrimPrefix(e, "$ ")
+		if len([]rune(line))+2 <= width {
+			// It fits: print it as written, keeping the comment's column alignment.
+			fmt.Fprintln(w, "  "+line)
+			continue
+		}
+		line = alignedComment.ReplaceAllString(line, " #")
+		lines := wrap(line, width-2)
+		fmt.Fprintln(w, "  "+lines[0])
+		for _, l := range lines[1:] {
+			fmt.Fprintln(w, "    "+l)
+		}
 	}
 	fmt.Fprintln(w)
 }
 
-// printFooter closes the page: the codes a script branches on, then the documentation.
-func printFooter(w io.Writer) {
+// alignedComment is the padding a hand-aligned example comment uses ("  # …"), which a narrow page
+// cannot afford.
+var alignedComment = regexp.MustCompile(` {2,}#`)
+
+// exitCodes is one sentence, wrapped to whatever page it lands on.
+const exitCodes = "0 done · 1 drift (profiles check) · 2 refused (bad usage, unknown ref, nothing " +
+	"selected, a prompt with no terminal) · 3 validation findings · 130 Ctrl-C"
+
+// printFooter closes the page: the codes a script branches on, then the documentation, then the
+// pointer to the other half of the help — short page or long one, whichever this is not.
+func printFooter(w io.Writer, other string, width int) {
 	fmt.Fprintln(w, section("EXIT CODES"))
-	fmt.Fprintln(w, "  0 done · 1 drift (profiles check) · 2 refused (bad usage, unknown ref, nothing")
-	fmt.Fprintln(w, "  selected, a prompt with no terminal) · 3 validation findings · 130 Ctrl-C")
+	for _, l := range wrap(exitCodes, width-2) {
+		fmt.Fprintln(w, "  "+l)
+	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, section("LEARN MORE"))
-	fmt.Fprintln(w, "  "+helpDocsLine)
+	for _, l := range wrap(helpDocsLine, width-2) {
+		fmt.Fprintln(w, "  "+l)
+	}
+	if other != "" {
+		fmt.Fprintln(w, "  "+other)
+	}
 	fmt.Fprintln(w)
 }
 
 // ---------------------------------------------------------------- the pages
 
 // helpPage is the page a verb's own FlagSet produces.
-func helpPage(fs *flag.FlagSet) string {
+func helpPage(fs *flag.FlagSet, long bool) string {
 	name := currentVerb
 	if name == "" || name == "help" {
 		name = strings.TrimPrefix(fs.Name(), "evalctl ")
@@ -647,23 +838,61 @@ func helpPage(fs *flag.FlagSet) string {
 	if len(doc.usage) > 0 {
 		b.WriteString(section("USAGE") + "\n")
 		for _, u := range doc.usage {
-			b.WriteString("  " + u + "\n")
+			lines := wrap(u, width-2)
+			b.WriteString("  " + lines[0] + "\n")
+			for _, l := range lines[1:] {
+				b.WriteString("    " + l + "\n")
+			}
 		}
 		b.WriteString("\n")
 	}
-	printExamples(&b, doc.examples)
+	printExamples(&b, doc.examples, width)
 	for _, g := range groups {
 		printGroup(&b, g.title, filterDocs(docs, g.names), col, width)
 	}
 	printGroup(&b, "GLOBAL FLAGS", globalFlags, col, width)
-	printFooter(&b)
+	if long {
+		printDetails(&b, name, width)
+	}
+	other := ""
+	if _, hasDetails := helpDetails[name]; hasDetails {
+		if long {
+			other = "shorter page: evalctl " + name + " -h"
+		} else {
+			other = "the longer notes: evalctl " + name + " --help"
+		}
+	}
+	printFooter(&b, other, width)
 	return b.String()
+}
+
+// printDetails is the half of the documentation only `--help` prints.
+func printDetails(w io.Writer, verb string, width int) {
+	paras := helpDetails[verb]
+	if len(paras) == 0 {
+		return
+	}
+	fmt.Fprintln(w, section("DETAILS"))
+	for _, p := range paras {
+		// A paragraph written hard-wrapped for a 110-column page must be rejoined before it is
+		// wrapped to this one, or every source line break becomes a ragged short line.
+		for _, block := range strings.Split(p, "\n\n") {
+			flat := strings.Join(strings.Fields(block), " ")
+			if flat == "" {
+				continue
+			}
+			for _, l := range wrap(flat, width-4) {
+				fmt.Fprintln(w, "  "+l)
+			}
+			fmt.Fprintln(w)
+		}
+	}
 }
 
 // printHelp writes the page to stdout: help is the primary output of a help request, so it can be
 // piped and paged like any other output.
-func printHelp(w io.Writer, fs *flag.FlagSet) {
-	fmt.Fprint(w, helpPage(fs))
+func printHelp(w io.Writer, fs *flag.FlagSet, long bool) {
+	fmt.Fprint(w, helpPage(fs, long))
 }
 
 // printVerbHelp answers `evalctl help <verb>` and `evalctl <verb> -h` from the verb's own flag set
@@ -690,17 +919,21 @@ var indexGroups = []struct {
 		{"evalctl", "the TUI workbench, step by step (no arguments)"},
 		{"evalctl help [verb]", "this page, or one verb's page with its flags and examples"},
 	}},
-	{"MANAGE THE SETS", []indexEntry{
+	{"READ THE SETS", []indexEntry{
 		{"evalctl skills", "the set by skill: cases, fixtures, trigger rows, health"},
 		{"evalctl ls", "list rows from either lane, as one table"},
 		{"evalctl show <ref>", "one row in full: prompt, expected output, assertions, fixture"},
+		{"evalctl dupes", "near-duplicate rows, grouped — the shortlist for a trim"},
+		{"evalctl stats", "counts per skill, label and split"},
+	}},
+	{"WRITE THE SETS", []indexEntry{
 		{"evalctl add --lane L", "create a trigger query or an output case"},
 		{"evalctl edit <ref>", "change only the flags you pass"},
 		{"evalctl rm <ref...>", "delete rows by ref, by filter, or by lane"},
 		{"evalctl mv <ref>", "move an output case, and its fixture, to another skill"},
 		{"evalctl promote", "a run's output becomes a case, a reference, or a trigger row"},
-		{"evalctl dupes", "near-duplicate rows, grouped — the shortlist for a trim"},
-		{"evalctl stats", "counts per skill, label and split"},
+	}},
+	{"KEEP THEM HONEST", []indexEntry{
 		{"evalctl validate", "check the tree against the runner's rules"},
 		{"evalctl renumber", "close id gaps (breaks comparability with old results)"},
 	}},
@@ -725,13 +958,29 @@ var indexGroups = []struct {
 // notes are the paragraphs that used to sit in the middle of the command list. They hold for the
 // whole tool — the sandboxes' lifetime, the profiles link, the lanes' logs, refs and backups — so
 // they close the page rather than interrupting the index.
+var (
+	noteSandboxes = "Sandboxes are created by the run that needs them and removed when it ends: one " +
+		"that outlives its run carries that run's caches and sessions into the next measurement. " +
+		"--keep holds them for inspection; \"profiles reap\" clears what a killed run left behind, " +
+		"and \"profiles ensure\" provisions them on purpose. ensure/sync/render/scrub leave the real " +
+		"profile alone unless --real is passed: those verbs write."
+	noteRefs = "Refs: 12 --lane trigger | t12 | trigger:12 | o:slide-builder:3 | slide-builder:3. " +
+		"Every write to the sets is atomic and leaves a copy in .evalctl/backups/."
+	noteLink = "\"profiles link [PROFILE]\" makes a profile scan this project folder via " +
+		"skills.external_dirs, so the profile you open in the desktop holds the same skills evalctl " +
+		"measures — by reference, with nothing copied. Eval sandboxes never get a link: they are " +
+		"throwaway copies with the evals stripped."
+	noteLog = "--log full (default) streams each arm's tool calls and prose to stderr while it runs, " +
+		"and writes the same lines to activity.log beside stream.jsonl; tools drops the prose, off " +
+		"writes nothing."
+)
+
+// notes close the top-level page: what is true of every command, in the space of three paragraphs.
 var notes = []string{
-	"Sandboxes are created by the run that needs them and removed when it ends: one that outlives " +
-		"its run carries that run's caches and sessions into the next measurement. --keep holds them " +
-		"for inspection; \"profiles reap\" clears what a killed run left behind.",
-	"Refs: 12 --lane trigger | t12 | trigger:12 | o:slide-builder:3 | slide-builder:3. Every write " +
-		"to the sets is atomic and leaves a copy in .evalctl/backups/.",
-	"The rest — the profiles link, --log levels, what a sandbox is made of — is in README § CLI.",
+	noteSandboxes,
+	noteRefs,
+	"The rest — the profiles link, --log levels, what a sandbox is made of — is in README § CLI, or " +
+		"`evalctl run --help` / `evalctl profiles --help`.",
 }
 
 // printUsage draws the top-level page: the index of commands, the notes that hold for all of them,
@@ -750,8 +999,13 @@ func printUsage(w io.Writer) {
 		col = width / 2
 	}
 
-	fmt.Fprintf(w, "%s — %s\n\n", styleTitle.Render("evalctl"),
-		"manage and run a skill's eval sets: trigger queries and output cases.")
+	const blurb = "manage and run a skill's eval sets: trigger queries and output cases."
+	title := wrap("evalctl — "+blurb, width)
+	fmt.Fprintln(w, styleTitle.Render("evalctl")+" — "+strings.TrimPrefix(title[0], "evalctl — "))
+	for _, l := range title[1:] {
+		fmt.Fprintln(w, "  "+l)
+	}
+	fmt.Fprintln(w)
 	for _, g := range indexGroups {
 		fmt.Fprintln(w, section(g.title))
 		for _, e := range g.entries {
@@ -779,7 +1033,7 @@ func printUsage(w io.Writer) {
 		}
 		fmt.Fprintln(w)
 	}
-	printFooter(w)
+	printFooter(w, "", width)
 }
 
 // ---------------------------------------------------------------- suggestions

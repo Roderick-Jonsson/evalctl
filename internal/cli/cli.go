@@ -270,8 +270,8 @@ func wrapUsage(err error) error {
 // parseFlags runs the flag set and answers -h/--help from anywhere before `--`: the page is printed
 // to stdout and flag.ErrHelp comes back, which fail() turns into exit 0.
 func parseFlags(fs *flag.FlagSet, args []string) error {
-	if wantsHelp(args) {
-		printHelp(os.Stdout, fs)
+	if long, asked := helpDepth(args); asked {
+		printHelp(os.Stdout, fs, long)
 		return flag.ErrHelp
 	}
 	return parseInterspersed(fs, args)
@@ -723,17 +723,17 @@ func saveTouched(c *common, changes []string, touched map[string]bool) int {
 
 func runTUI(args []string, lane string) int {
 	fs, c := newFS("tui")
-	laneFlag := fs.String("lane", lane, "lane to open: trigger or output")
+	laneFlag := fs.String("lane", lane, "lane to open")
 	skillFlag := fs.String("skill", "", "open this skill's loop directly (default: the door)")
 	// A terminal without UTF-8 gets the frame's marks and rules in ASCII rather than a row of
 	// replacement boxes. auto follows the locale; $EVALCTL_GLYPHS is the default for callers that
 	// wrap the binary and cannot pass a flag.
-	glyphFlag := fs.String("glyphs", os.Getenv("EVALCTL_GLYPHS"), "glyph profile: auto, unicode or ascii")
+	glyphFlag := fs.String("glyphs", os.Getenv("EVALCTL_GLYPHS"), "the glyph profile, for a terminal without a UTF-8 locale")
 	if err := parseFlags(fs, args); err != nil {
 		return fail(err)
 	}
-	if *laneFlag != store.LaneTrigger && *laneFlag != store.LaneOutput {
-		return fail(fmt.Errorf("--lane must be trigger or output"))
+	if err := requireOneOf("tui", "lane", *laneFlag); err != nil {
+		return fail(err)
 	}
 	if _, err := tui.Glyphs(*glyphFlag, os.Getenv("LANG"), os.Getenv("LC_CTYPE"), os.Getenv("LC_ALL")); err != nil {
 		return fail(err)
