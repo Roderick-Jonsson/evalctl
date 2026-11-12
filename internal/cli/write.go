@@ -9,6 +9,8 @@ import (
 
 	"strings"
 
+	"golang.org/x/term"
+
 	"evalctl/internal/model"
 	"evalctl/internal/runner"
 	"evalctl/internal/store"
@@ -206,7 +208,11 @@ func runEdit(args []string) int {
 			}
 		}
 		if set["id"] && q.ID != before.ID {
-			if !idChangeGuard(c, store.LaneTrigger, before.Skill, before.ID, q.ID, *dry, *yes) {
+			ok, err := idChangeGuard(c, store.LaneTrigger, before.Skill, before.ID, q.ID, *dry, *yes)
+			if err != nil {
+				return fail(err)
+			}
+			if !ok {
 				return 0
 			}
 		}
@@ -253,7 +259,11 @@ func runEdit(args []string) int {
 		cse.Assertions = splitAssertions(*assertions)
 	}
 	if set["id"] && cse.ID != before.ID {
-		if !idChangeGuard(c, store.LaneOutput, ref.Skill, before.ID, cse.ID, *dry, *yes) {
+		ok, err := idChangeGuard(c, store.LaneOutput, ref.Skill, before.ID, cse.ID, *dry, *yes)
+		if err != nil {
+			return fail(err)
+		}
+		if !ok {
 			return 0
 		}
 	}
@@ -426,7 +436,7 @@ func runRemove(args []string) int {
 			return fail(err)
 		}
 		if !ok {
-			fmt.Println("aborted")
+			fmt.Fprintln(os.Stderr, "aborted")
 			return 0
 		}
 	}
@@ -473,8 +483,16 @@ func boolShort(b bool) string {
 	return "no"
 }
 
+// confirm asks on the terminal, and only when there is one. A pipe, a cron job or an agent's shell
+// has no one to ask: reading EOF there used to print "aborted" and exit 0, which reads to a script
+// as "done" — the one answer worse than "no". --yes is the answer those callers give.
 func confirm(prompt string) (bool, error) {
-	fmt.Printf("%s [y/N] ", prompt)
+	if noInput || !term.IsTerminal(int(os.Stdin.Fd())) {
+		return false, fmt.Errorf("%s — nothing to ask: pass --yes to go ahead without a prompt", prompt)
+	}
+	// The question is messaging, not output: it goes to stderr so `evalctl rm ... > list.txt`
+	// keeps a clean file whether or not a human was at the keyboard.
+	fmt.Fprintf(os.Stderr, "%s [y/N] ", prompt)
 	reader := bufio.NewReader(os.Stdin)
 	line, err := reader.ReadString('\n')
 	if err != nil && err != io.EOF {
@@ -493,7 +511,7 @@ func confirm(prompt string) (bool, error) {
 // it. That is the one silent cost this tool must not charge, so the change asks the way renumber
 // does — and --yes is the answer a script gives. A dry run prints the same warning and writes
 // nothing.
-func idChangeGuard(c *common, lane, skill string, oldID, newID int, dry, yes bool) bool {
+func idChangeGuard(c *common, lane, skill string, oldID, newID int, dry, yes bool) (bool, error) {
 	refs := runner.IDReferences(c.s.SkillsDir, lane, skill, oldID)
 	fmt.Println(styleWarn.Render(fmt.Sprintf("  id %d -> %d — earlier iterations record this row as #%d", oldID, newID, oldID)))
 	if len(refs) == 0 {
@@ -510,14 +528,17 @@ func idChangeGuard(c *common, lane, skill string, oldID, newID int, dry, yes boo
 		}
 	}
 	if dry || yes {
-		return true
+		return true, nil
 	}
 	ok, err := confirm(fmt.Sprintf("change #%d -> #%d anyway?", oldID, newID))
-	if err != nil || !ok {
-		fmt.Println("aborted")
-		return false
+	if err != nil {
+		return false, err
 	}
-	return true
+	if !ok {
+		fmt.Fprintln(os.Stderr, "aborted")
+		return false, nil
+	}
+	return true, nil
 }
 
 // adoptWarning says that a row is being created with an id that history still cites. A gap in the
@@ -628,7 +649,7 @@ func runRenumber(args []string) int {
 			return fail(err)
 		}
 		if !ok {
-			fmt.Println("aborted")
+			fmt.Fprintln(os.Stderr, "aborted")
 			return 0
 		}
 	}

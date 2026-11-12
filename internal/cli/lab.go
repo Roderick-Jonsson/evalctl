@@ -23,6 +23,9 @@ func runLab(args []string) int {
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
 	}
+	if err := noPositional(fs); err != nil {
+		return fail(err)
+	}
 	if *skill == "" {
 		return fail(usageErr{fmt.Errorf("--skill is required: the loop runs on one skill")})
 	}

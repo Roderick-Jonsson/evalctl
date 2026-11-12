@@ -27,6 +27,12 @@ func runList(args []string) int {
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
 	}
+	if err := noPositional(fs); err != nil {
+		return fail(err)
+	}
+	if err := needSkill(c.s, *skill); err != nil {
+		return fail(err)
+	}
 	if *label != "" && *label != "yes" && *label != "no" {
 		return fail(fmt.Errorf("--label must be yes or no"))
 	}

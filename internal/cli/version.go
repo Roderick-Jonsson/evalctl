@@ -3,6 +3,7 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"evalctl/internal/version"
@@ -12,10 +13,11 @@ import (
 // instead of going through common.parse: `evalctl version` has to work from anywhere.
 func runVersion(args []string) int {
 	fs := flag.NewFlagSet("evalctl version", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	short := fs.Bool("short", false, "the version alone, for scripts")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if err := parseFlags(fs, args); err != nil {
+		return fail(err)
 	}
 	info := version.Resolve()
 	if *asJSON {

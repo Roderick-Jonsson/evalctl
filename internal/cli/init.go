@@ -18,8 +18,11 @@ func runInit(args []string) int {
 	dir := fs.String("dir", ".", "where to create the tree")
 	profileFlag := fs.String("profile", "", "the Hermes profile this tree is measured in (default: whoever runs it)")
 	force := fs.Bool("force", false, "overwrite files that already exist")
-	if err := fs.Parse(args); err != nil {
-		return fail(wrapUsage(err))
+	if err := parseFlags(fs, args); err != nil {
+		return fail(err)
+	}
+	if err := noPositional(fs); err != nil {
+		return fail(err)
 	}
 
 	root, err := filepath.Abs(*dir)

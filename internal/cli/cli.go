@@ -23,76 +23,6 @@ import (
 	"evalctl/internal/tui"
 )
 
-// usage is the whole command surface. It is the one place an operator finds a verb they half
-// remember, so it stays complete — but every line states a grammar and nothing else, and it is only
-// printed for `evalctl help`, never after an error (that is one line plus a pointer).
-const usage = `evalctl — manage and run a skill's eval sets: trigger queries and output cases.
-
-  evalctl init [--skill S] [--dir D]  start a project: evalctl.json + one skill with both sets
-  evalctl adopt [--profile P] [--link]  declare an existing folder: add the sets its skills miss
-  evalctl                            the TUI: trigger optimization, step by step
-  evalctl tui [--skill S] [--lane L]  skip the door, or start on the output lane
-  evalctl skills                     the set by skill: cases, fixtures, trigger rows, health
-  evalctl ls                         list rows
-      --lane trigger|output|both  --skill S  --label yes|no  --split train|validation|holdout
-      --search Q [--in COL]  --sort skill,id:desc  --group COL  --dupes  --json  --width N
-  evalctl show <ref> [--lane]        one row in full (ref: t12, o:skill:3, or 12 --lane)
-  evalctl add  --lane trigger ...    create a row
-  evalctl edit <ref> ...             change only the flags you pass
-  evalctl rm   <ref...>              delete rows by ref
-  evalctl rm   --skill S --label yes|no --split … --search Q --dupes   delete by filter
-  evalctl rm   --all --lane L        delete every row of a lane
-      --with-fixture  --dry-run  --yes
-  evalctl mv   <ref> --to-skill S    move an output case to another stage skill
-  evalctl promote --from R/C[/A] ...  a run's output becomes the next stage's fixture + case
-  evalctl promote --to-references ...  that run output becomes the skill's references/ example
-  evalctl promote --to-trigger ...    a case's prompt becomes a trigger query
-  evalctl dupes [--lane] [--threshold 0.60]   near-duplicate groups, the trim shortlist
-  evalctl stats                      counts per skill / label / split
-  evalctl lab --skill S [--lane trigger|output] [--json]
-                                     where that loop stands, and the guide's next move
-  evalctl describe --skill S [--candidate N] [--write] [--dry-run] [--model M] [--json]
-                                     ask a model for a new description from the train failures;
-                                     prints the character-level diff, writes nothing
-  evalctl grade --skill S [--iteration N]   output lane: the judge grades every arm's assertions
-  evalctl validate [--strict] [--json]  check the tree against the runner's rules
-  evalctl renumber                   close id gaps (breaks comparability with old results)
-  evalctl version                    which build this is (version, commit, dirty, go)
-
-  evalctl run [flags]                output lane: each case with and without the skill
-  evalctl trigger [flags]            trigger lane: does the right skill load?
-  evalctl runs [--lane] [--skill]     iterations per workspace, with pass rates
-  evalctl report <run>               an iteration's report.md, rendered (--raw for the source)
-  evalctl profiles [cmd] [--real]     status/check/ensure/reap/render/sync/scrub/link/unlink/attach
-  evalctl theme [name]               the colour schemes, with each role's contrast on its background
-
-Run flags: --skill, --case, --iteration, --arms, --model, --budget, --resume, --force, --no-grade,
-           --no-verify, --isolate=false, --dry-run, --list, --keep, --log full|tools|off
-Trigger:   --query, --split, --runs, --threshold, --max-turns (same shared flags)
-
-The four eval sandboxes are created by the run that needs them and removed when it ends: a sandbox
-that outlives its run carries that run's caches and sessions into the next measurement, and every
-profile picker lists it as a worker. --keep holds them for inspection; "profiles reap" removes what
-a killed run left behind, and "profiles ensure" provisions them on purpose (a manual chat in an
-arm, a "profiles check" diff). ensure/sync/render/scrub leave the real profile alone unless --real
-is passed: those verbs write, and the real profile is where you actually work.
-
-"profiles link [PROFILE]" is the other half of that: it makes a profile scan this project folder
-via skills.external_dirs, so the profile you open in the desktop holds the same skills evalctl
-measures — by reference, with nothing copied. Eval sandboxes never get a link: they are throwaway
-copies with the evals stripped.
-
---log full (default) streams each arm's tool calls and prose to stderr while it runs, and writes
-the same lines to activity.log beside stream.jsonl; tools drops the prose, off writes nothing.
-
-Global: --root DIR (default: nearest dir with the eval tree, or $EVALCTL_ROOT)
-         --theme NAME (auto, midnight, high-contrast, daylight; or $EVALCTL_THEME)
-Refs:   12 --lane trigger | t12 | trigger:12 | o:slide-builder:3 | slide-builder:3
-
-Exit codes: 0 done · 1 interrupted · 2 refused (bad usage, unknown ref, validation errors).
-Every write to the sets is atomic and leaves a copy in .evalctl/backups/.
-`
-
 // verbFirst moves a verb that follows global flags in front of them: `--root DIR validate --json`
 // becomes `validate --root DIR --json`. Flags that belong to the TUI alone (`--glyphs`, an unknown
 // flag) leave the line untouched — a line with no verb is the TUI, and the TUI parses its own.
@@ -130,18 +60,26 @@ func verbFirst(args []string) []string {
 	return append(out, rest[1:]...)
 }
 
-// knownVerb is the dispatch table's own list, so `--root X nonsense` stays a TUI invocation with a
-// bad flag rather than being silently reordered.
-func knownVerb(v string) bool {
-	switch v {
-	case "help", "-h", "--help", "version", "--version", "tui", "init", "new", "scaffold", "adopt",
-		"skills", "skill", "ls", "list", "show", "add", "edit", "rm", "delete", "mv", "move",
-		"promote", "dupes", "duplicates", "stats", "validate", "check", "renumber", "run",
-		"trigger", "lab", "grade", "revise", "describe", "runs", "results", "report",
-		"profiles", "profile", "theme", "themes", "colour", "color":
-		return true
+// noInput is set by --no-input on any command: prompting is off everywhere, and a command that
+// would have asked says what to pass instead. It is taken out of the line before dispatch, like
+// --theme, so it works on a verb that registers no flags of its own.
+var noInput bool
+
+// takeNoInput removes --no-input / --no-input=false wherever it appears and reports the verdict.
+func takeNoInput(args []string) (bool, []string) {
+	out := make([]string, 0, len(args))
+	off := false
+	for _, a := range args {
+		switch a {
+		case "--no-input", "-no-input":
+			off = true
+			continue
+		case "--no-input=false", "-no-input=false":
+			continue
+		}
+		out = append(out, a)
 	}
-	return false
+	return off, out
 }
 
 // Run dispatches a command line and returns the process exit code.
@@ -149,10 +87,12 @@ func Run(args []string) int {
 	// Colour is process-wide, so the global --theme is taken out here, before any flag set sees
 	// it: one flag works on every command, and $EVALCTL_THEME is the way to make it stick.
 	name, args := takeTheme(args)
+	noInput, args = takeNoInput(args)
 	if err := resolveTheme(name); err != nil {
 		return fail(err)
 	}
 	if len(args) == 0 {
+		currentVerb = "tui"
 		return runTUI(nil, store.LaneTrigger)
 	}
 	// Global flags may precede the verb (`evalctl --root DIR validate`), which is how every other
@@ -161,12 +101,22 @@ func Run(args []string) int {
 	args = verbFirst(args)
 	// `evalctl --root DIR` is the TUI with a global flag, not a command named "--root".
 	if strings.HasPrefix(args[0], "-") && args[0] != "-h" && args[0] != "--help" && args[0] != "--version" {
+		currentVerb = "tui"
 		return runTUI(args, store.LaneTrigger)
 	}
 	cmd, rest := args[0], args[1:]
+	currentVerb = canonicalVerb(cmd)
 	switch cmd {
 	case "help", "-h", "--help":
-		fmt.Print(usage)
+		// `evalctl help <verb>` is the same page as `evalctl <verb> -h`: the verb is dispatched
+		// with -h, which every verb answers before it opens a tree or does any work.
+		if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+			if !knownVerb(rest[0]) {
+				return unknownVerb(rest[0])
+			}
+			return printVerbHelp(rest[0])
+		}
+		printUsage(os.Stdout)
 		return 0
 	case "version", "--version":
 		return runVersion(rest)
@@ -222,11 +172,19 @@ func Run(args []string) int {
 	case "theme", "themes", "colour", "color":
 		return runTheme(rest)
 	default:
-		// One line, then a pointer. Dumping 45 lines of usage to stderr scrolls the actual error
-		// off the screen, which is the opposite of what an error is for.
-		fmt.Fprintf(os.Stderr, "evalctl: unknown command %q\ntry: evalctl help   (or evalctl <verb> -h)\n", cmd)
-		return 2
+		return unknownVerb(cmd)
 	}
+}
+
+// unknownVerb is one line, then a pointer — never 65 lines of usage, which scrolls the actual error
+// off the screen. A near-miss gets named, since the fix is then one keystroke away.
+func unknownVerb(cmd string) int {
+	fmt.Fprintf(os.Stderr, "evalctl: unknown command %q\n", cmd)
+	if s := suggestVerb(cmd); s != "" {
+		fmt.Fprintf(os.Stderr, "did you mean: evalctl %s\n", s)
+	}
+	fmt.Fprintln(os.Stderr, "try: evalctl help   (or evalctl help <verb>)")
+	return 2
 }
 
 // ---------------------------------------------------------------- plumbing
@@ -239,6 +197,10 @@ type common struct {
 func newFS(name string) (*flag.FlagSet, *common) {
 	c := &common{}
 	fs := flag.NewFlagSet("evalctl "+name, flag.ContinueOnError)
+	// The flag package's own output is discarded: it prints "Usage of evalctl ls:" plus its
+	// single-dash listing on every parse error, which is not the page this CLI shows and not where
+	// it shows it. Errors come back from Parse and are rewritten by fail().
+	fs.SetOutput(io.Discard)
 	fs.StringVar(&c.root, "root", "", "the eval tree, or a profile naming one (default: nearest dir holding it)")
 	return fs, c
 }
@@ -305,9 +267,19 @@ func wrapUsage(err error) error {
 	return usageErr{err}
 }
 
+// parseFlags runs the flag set and answers -h/--help from anywhere before `--`: the page is printed
+// to stdout and flag.ErrHelp comes back, which fail() turns into exit 0.
+func parseFlags(fs *flag.FlagSet, args []string) error {
+	if wantsHelp(args) {
+		printHelp(os.Stdout, fs)
+		return flag.ErrHelp
+	}
+	return parseInterspersed(fs, args)
+}
+
 // parse runs the flag set and opens the tree.
 func (c *common) parse(fs *flag.FlagSet, args []string) error {
-	if err := parseInterspersed(fs, args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	root := c.root
@@ -334,9 +306,32 @@ func fail(err error) int {
 	fmt.Fprintln(os.Stderr, "evalctl:", err)
 	var ue usageErr
 	if errors.As(err, &ue) {
-		fmt.Fprintln(os.Stderr, "try: evalctl <verb> -h")
+		if currentVerb != "" && currentVerb != "help" {
+			fmt.Fprintf(os.Stderr, "try: evalctl %s -h\n", currentVerb)
+		} else {
+			fmt.Fprintln(os.Stderr, "try: evalctl help")
+		}
 	}
 	return 2
+}
+
+// noPositional rejects arguments a verb did not ask for. A stray word is a typo or a flag missing
+// its dash; ignoring it turns either into a command that quietly did something else.
+func noPositional(fs *flag.FlagSet) error {
+	if fs.NArg() > 0 {
+		return usageErr{fmt.Errorf("unexpected argument %q — this command takes no positional arguments", fs.Arg(0))}
+	}
+	return nil
+}
+
+// needSkill rejects a --skill that names nothing. The filter is not an error of omission: a typo
+// ("--skill slide-buildr") otherwise prints an empty table and exits 0, which a script reads as
+// "this skill has no rows".
+func needSkill(s *store.Store, name string) error {
+	if name == "" || s.Skill(name) != nil {
+		return nil
+	}
+	return fmt.Errorf("unknown skill %q (known: %s)", name, strings.Join(s.SkillNames(), ", "))
 }
 
 // The CLI's style table lives in theme.go, built from the active palette.
@@ -734,8 +729,8 @@ func runTUI(args []string, lane string) int {
 	// replacement boxes. auto follows the locale; $EVALCTL_GLYPHS is the default for callers that
 	// wrap the binary and cannot pass a flag.
 	glyphFlag := fs.String("glyphs", os.Getenv("EVALCTL_GLYPHS"), "glyph profile: auto, unicode or ascii")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if err := parseFlags(fs, args); err != nil {
+		return fail(err)
 	}
 	if *laneFlag != store.LaneTrigger && *laneFlag != store.LaneOutput {
 		return fail(fmt.Errorf("--lane must be trigger or output"))
@@ -796,6 +791,9 @@ func runSkills(args []string) int {
 	fs, c := newFS("skills")
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	if err := c.parse(fs, args); err != nil {
+		return fail(err)
+	}
+	if err := noPositional(fs); err != nil {
 		return fail(err)
 	}
 	sums := c.s.Summaries()

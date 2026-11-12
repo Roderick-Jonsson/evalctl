@@ -19,6 +19,9 @@ func runValidate(args []string) int {
 	if err := c.parse(fs, args); err != nil {
 		return fail(err)
 	}
+	if err := noPositional(fs); err != nil {
+		return fail(err)
+	}
 	issues := c.s.Validate()
 	errs, warns := 0, 0
 	for _, i := range issues {
@@ -63,8 +66,10 @@ func runValidate(args []string) int {
 			fmt.Printf("%s, %s\n", format.Plural(errs, "error"), format.Plural(warns, "warning"))
 		}
 	}
+	// 3, not 2: a tree that fails its own rules is a different answer from a command that could not
+	// be parsed, and a script that gates on `validate` should be able to tell the two apart.
 	if errs > 0 || (*strict && warns > 0) {
-		return 2
+		return 3
 	}
 	return 0
 }
@@ -77,6 +82,9 @@ func runDupes(args []string) int {
 	threshold := fs.Float64("threshold", store.DefaultDupeThreshold, "word-overlap above which two rows are the same test")
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	if err := c.parse(fs, args); err != nil {
+		return fail(err)
+	}
+	if err := noPositional(fs); err != nil {
 		return fail(err)
 	}
 	if *threshold <= 0 || *threshold > 1 {
@@ -153,6 +161,9 @@ func runStats(args []string) int {
 	fs, c := newFS("stats")
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	if err := c.parse(fs, args); err != nil {
+		return fail(err)
+	}
+	if err := noPositional(fs); err != nil {
 		return fail(err)
 	}
 	trigger := c.s.Stats(store.LaneTrigger)

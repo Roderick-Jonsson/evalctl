@@ -49,7 +49,7 @@ func runGrade(args []string) int {
 	}
 	defer unlock()
 	level, _ := runner.ParseActivity("off")
-	r.Emit = progressPrinter(os.Stdout, os.Stderr, level)
+	r.Emit = progressPrinter(os.Stdout, os.Stderr, os.Stderr, level)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

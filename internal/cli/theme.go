@@ -14,16 +14,17 @@ import (
 // The CLI's style table, built from the active palette (see internal/theme). Like the TUI's it is
 // package state, because a printed report has no model to carry styles around in.
 var (
-	styleDim    = lipgloss.NewStyle()
-	styleHead   = lipgloss.NewStyle()
-	styleYes    = lipgloss.NewStyle()
-	styleNo     = lipgloss.NewStyle()
-	styleDupe   = lipgloss.NewStyle()
-	styleChange = lipgloss.NewStyle()
-	styleErr    = lipgloss.NewStyle()
-	styleWarn   = lipgloss.NewStyle()
-	styleTitle  = lipgloss.NewStyle()
-	styleGroup  = lipgloss.NewStyle()
+	styleDim     = lipgloss.NewStyle()
+	styleHead    = lipgloss.NewStyle()
+	styleYes     = lipgloss.NewStyle()
+	styleNo      = lipgloss.NewStyle()
+	styleDupe    = lipgloss.NewStyle()
+	styleChange  = lipgloss.NewStyle()
+	styleErr     = lipgloss.NewStyle()
+	styleWarn    = lipgloss.NewStyle()
+	styleTitle   = lipgloss.NewStyle()
+	styleGroup   = lipgloss.NewStyle()
+	styleSection = lipgloss.NewStyle()
 )
 
 func init() { applyTheme(theme.Current()) }
@@ -47,6 +48,9 @@ func applyTheme(p theme.Palette) {
 	styleWarn = lipgloss.NewStyle().Foreground(p.Color(p.Warn))
 	styleTitle = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Text))
 	styleGroup = lipgloss.NewStyle().Foreground(p.Color(p.Accent2)).Bold(true)
+	// A help page's headings are the same register as a table's group label: bold, secondary
+	// accent, upper case. Lip Gloss renders no escapes without a TTY, so a piped page is plain.
+	styleSection = lipgloss.NewStyle().Bold(true).Foreground(p.Color(p.Accent2))
 }
 
 // takeTheme pulls `--theme NAME` / `--theme=NAME` out of the arguments wherever it appears, and
@@ -91,11 +95,22 @@ func resolveTheme(flagName string) error {
 // colour is worth on its own background; with a name it draws a sample screen in that palette and
 // says how to keep it.
 func runTheme(args []string) int {
-	if len(args) > 0 && args[0] == "list" {
-		args = args[1:]
+	fs, _ := newFS("theme")
+	if err := parseFlags(fs, args); err != nil {
+		return fail(err)
 	}
-	if len(args) > 0 {
-		if err := resolveTheme(args[0]); err != nil {
+	// `theme list` and `theme NAME` are the same command; "list" is spelled out for symmetry with
+	// `profiles`, and the name is a positional either way, so a global flag before the verb
+	// (`evalctl --root X theme daylight`) is parsed instead of being read as a palette.
+	rest := fs.Args()
+	if len(rest) > 0 && rest[0] == "list" {
+		rest = rest[1:]
+	}
+	if len(rest) > 1 {
+		return fail(usageErr{fmt.Errorf("unexpected argument %q — theme takes one name", rest[1])})
+	}
+	if len(rest) > 0 {
+		if err := resolveTheme(rest[0]); err != nil {
 			return fail(err)
 		}
 		active := theme.Current()

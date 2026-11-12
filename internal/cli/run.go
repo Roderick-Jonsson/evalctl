@@ -119,9 +119,21 @@ func runRun(args []string) int {
 		return fail(err)
 	}
 	opts.Log = level
+	for _, name := range rc.skillsList() {
+		if err := needSkill(c.s, name); err != nil {
+			return fail(err)
+		}
+	}
 
 	r := runner.New(c.s)
-	r.Emit = progressPrinter(os.Stdout, os.Stderr, level)
+	// A dry run's "progress" lines are its document: the banner and the case headers belong to the
+	// plan, so they stay on stdout with the commands under them. A real run's are messaging, and go
+	// to stderr where a redirected stdout cannot collect them.
+	progress := os.Stderr
+	if rc.dryRun {
+		progress = os.Stdout
+	}
+	r.Emit = progressPrinter(os.Stdout, progress, os.Stderr, level)
 	return execute(c.s, r, opts)
 }
 
@@ -203,17 +215,20 @@ func lockTree(root string) (func(), error) {
 
 // progressPrinter is the CLI face of the runner's events: one line per thing that happened.
 //
-// The arm's own activity goes to stderr so it never lands in a redirected stdout. Arms run one at
-// a time, and each announces itself on stdout before its first line, so no per-line tag is needed.
-func progressPrinter(out, activity io.Writer, level runner.ActivityLevel) func(runner.Event) {
+// Two writers, because the two kinds of line are read differently: out (stdout) carries what the
+// command was asked for — the plan, the case list, the closing summary — and progress (stderr)
+// carries the fact that it is happening, so `evalctl run --list > cases.txt` never collects
+// "with_skill: running…" between its lines. Arms run one at a time and announce themselves before
+// their first activity line, so the activity needs no per-line tag.
+func progressPrinter(out, progress, activity io.Writer, level runner.ActivityLevel) func(runner.Event) {
 	return func(e runner.Event) {
 		switch e.Kind {
 		case runner.EventStart:
-			fmt.Fprintln(out, "\n"+styleTitle.Render(e.Message))
+			fmt.Fprintln(progress, "\n"+styleTitle.Render(e.Message))
 		case runner.EventCase:
-			fmt.Fprintln(out, "\n"+styleTitle.Render(e.Message))
+			fmt.Fprintln(progress, "\n"+styleTitle.Render(e.Message))
 		case runner.EventArmStart, runner.EventTriggerRun:
-			fmt.Fprintf(out, "  %s: running…\n", e.Arm)
+			fmt.Fprintf(progress, "  %s: running…\n", e.Arm)
 		case runner.EventActivity:
 			if level == runner.ActivityOff {
 				return
@@ -222,10 +237,10 @@ func progressPrinter(out, activity io.Writer, level runner.ActivityLevel) func(r
 		case runner.EventArmDone:
 			line := "  " + e.Message
 			if e.Result != nil && !e.Result.Checks.Containment.OK {
-				fmt.Fprintln(out, styleErr.Render(line))
+				fmt.Fprintln(progress, styleErr.Render(line))
 				return
 			}
-			fmt.Fprintln(out, styleYes.Render(line))
+			fmt.Fprintln(progress, styleYes.Render(line))
 		case runner.EventPlan:
 			fmt.Fprintln(out, styleDim.Render(e.Message))
 		case runner.EventMessage:
@@ -257,6 +272,12 @@ func runRuns(args []string) int {
 	lane := fs.String("lane", "", "only one lane: output or trigger")
 	skill := fs.String("skill", "", "only one skill's iterations: its output runs and the trigger runs that measured it")
 	if err := c.parse(fs, args); err != nil {
+		return fail(err)
+	}
+	if err := noPositional(fs); err != nil {
+		return fail(err)
+	}
+	if err := needSkill(c.s, *skill); err != nil {
 		return fail(err)
 	}
 	r := runner.New(c.s)

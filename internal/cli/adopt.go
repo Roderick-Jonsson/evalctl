@@ -20,8 +20,11 @@ func runAdopt(args []string) int {
 	profileFlag := fs.String("profile", "", "the Hermes profile this tree is measured in")
 	link := fs.Bool("link", false, "also create that profile if it is missing, and link it to this folder")
 	skillsFlag := fs.String("skills", "", "only these skills (default: every skill the folder holds)")
-	if err := fs.Parse(args); err != nil {
-		return fail(wrapUsage(err))
+	if err := parseFlags(fs, args); err != nil {
+		return fail(err)
+	}
+	if err := noPositional(fs); err != nil {
+		return fail(err)
 	}
 
 	root, err := filepath.Abs(*dir)
