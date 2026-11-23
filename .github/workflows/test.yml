@@ -1,0 +1,72 @@
+name: test
+
+# Everything except the release: `main` and every pull request. The release workflow only runs on a
+# tag, so without this a broken commit lands silently and is discovered by whoever tags next —
+# including a dependabot bump that nobody watched run.
+#
+# Same rules as the release: pinned actions, read-only token, no credentials left in the checkout.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The reference page is generated (`make docs`) and a test fails when it is stale, so a flag
+      # change without its page is caught here rather than by a reader.
+      - run: make check
+      - run: make test
+
+      - name: cross-compile for Windows
+        run: GOOS=windows GOARCH=amd64 go build ./...
+
+      - name: the docs links and anchors resolve
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import glob, os, re, sys
+          LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
+          HEAD = re.compile(r"^#{1,6}\s+(.*)$")
+          bad = 0
+          def anchors(p):
+              out = set()
+              for line in open(p, encoding="utf-8"):
+                  m = HEAD.match(line)
+                  if m:
+                      t = re.sub(r"[^\w\s-]", "", m.group(1).replace("`", "").lower())
+                      out.add(re.sub(r"\s+", "-", t.strip()))
+              return out
+          cache = {}
+          for f in ["README.md", "contributing.md"] + glob.glob("docs/**/*.md", recursive=True):
+              base = os.path.dirname(f)
+              for i, line in enumerate(open(f, encoding="utf-8"), 1):
+                  for target in LINK.findall(line):
+                      if target.startswith(("http://", "https://", "mailto:")):
+                          continue
+                      path, _, frag = target.partition("#")
+                      dest = os.path.normpath(os.path.join(base, path)) if path else f
+                      if not os.path.exists(dest):
+                          print(f"{f}:{i}: missing file {target}"); bad += 1; continue
+                      if frag:
+                          cache.setdefault(dest, anchors(dest))
+                          if frag not in cache[dest]:
+                              print(f"{f}:{i}: missing anchor {target}"); bad += 1
+          sys.exit(1 if bad else 0)
+          PY
