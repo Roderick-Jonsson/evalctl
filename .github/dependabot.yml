@@ -13,6 +13,12 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+    # Minor and patch bumps land as a pull request that the test workflow runs. A major bump changes
+    # the runtime and the inputs of the action that publishes releases, and no pull request
+    # exercises the tag path — so those are read and applied by hand, not merged on a green check.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: gomod
     directory: "/"
