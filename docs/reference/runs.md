@@ -8,7 +8,7 @@ evidence on disk, and refuses a tree that could not be staged.
 Every non-dry run prints four things first, because each one used to be a silent assumption:
 
 ```
-hermes Hermes Agent v0.23.1 … · evalctl v0.12.0 · /path/to/hermes
+hermes Hermes Agent v0.23.1 … · evalctl v0.16.0 · /path/to/hermes
 contract: SOUL.md of profile notes (evalctl.json) · arms sign in with env OLLAMA_API_KEY
 ```
 

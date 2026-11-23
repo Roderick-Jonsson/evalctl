@@ -19,6 +19,12 @@ builds:
     ignore:
       - goos: windows
         goarch: arm64
+    # -trimpath keeps the builder's directory out of the binary (a release should not carry
+    # /home/runner/work/...), and the timestamp is the commit's, so the same tag builds the same
+    # bytes twice: a rebuild that differs is then a fact worth explaining rather than noise.
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
       - -X evalctl/internal/version.Version={{.Version}}

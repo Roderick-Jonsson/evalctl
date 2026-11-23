@@ -1,24 +1,63 @@
 name: release
 
-# A tag is the release: `git tag v0.12.0 && git push --tags` builds every platform, checksums the
-# artifacts and opens a draft release. The build is the project's own `make check`/`make test` first,
-# so a tag on a broken tree fails here instead of shipping.
+# A tag is the release: `git tag v0.16.0 && git push origin main --tags` builds every platform,
+# checksums the artifacts, attests them and opens a draft release. The project's own `make check`
+# and `make test` run first, so a tag on a broken tree fails here instead of shipping.
+#
+# The pipeline is written to be hard to abuse:
+#   - every third-party action is pinned to a commit SHA, not a moving tag, so a re-pointed tag
+#     cannot quietly run somebody else's code with this repository's token;
+#   - the workflow's default permission is read-only. One job may write, and it may only write
+#     releases — there is no path from a build step to the repository's settings;
+#   - the token is never left in .git/config (persist-credentials: false) and is handed to
+#     goreleaser for that one step, not exported to the job;
+#   - the tag must equal the version declared in internal/version/version.go and must be an
+#     ancestor of main, so a stray tag on a side branch cannot publish a build;
+#   - nothing evaluates text from an issue, a pull request or a commit message: the inputs are this
+#     file and the tagged tree, which removes the usual script-injection surface;
+#   - goreleaser is pinned to an exact release, not a version range, and the build is trimmed and
+#     timestamped from the commit, so the binary does not carry the builder's paths and the same
+#     tag produces the same bytes;
+#   - the artifacts are attested (GitHub build provenance), so a download can be proved to have
+#     come from this workflow: `gh attestation verify evalctl_0.16.0_linux_amd64.tar.gz -R
+#     Roderick-Jonsson/evalctl`.
 on:
   push:
     tags:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
+          cache: true
+
+      # The number a tag promises and the number the binary reports are the same number: a release
+      # that prints a different version than its tag is worse than no release.
+      - name: the tag agrees with the declared version
+        run: |
+          set -eu
+          declared="$(sed -n 's/^var Version = "\(.*\)"/\1/p' internal/version/version.go)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ -z "$declared" ] || [ "$tag" != "$declared" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} but internal/version/version.go declares '${declared}'"
+            exit 1
+          fi
+          echo "tag ${GITHUB_REF_NAME} matches the declared version ${declared}"
+
       - run: make check
       - run: make test
       - name: cross-compile for Windows
@@ -27,16 +66,39 @@ jobs:
   release:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the draft release and upload its assets
+      id-token: write # sign the provenance (OIDC, no secret stored)
+      attestations: write # attach that provenance to the repository
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          fetch-depth: 0
-      - uses: actions/setup-go@v5
+          fetch-depth: 0 # the changelog is the range of the tag, so it needs the history
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
-      - uses: goreleaser/goreleaser-action@v6
+          cache: true
+
+      # A tag is reachable from main or it is not a release: this refuses the latter.
+      - name: the tag is on main
+        run: |
+          set -eu
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          echo "${GITHUB_SHA} is an ancestor of origin/main"
+
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
-          version: "~> v2"
+          version: "v2.20.3" # an exact release: a version range is a moving target
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: attest the release artifacts
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt

@@ -7,9 +7,19 @@ It knows no project: the skills, the tree's conventions and the Hermes profile a
 point it.
 
 ```bash
-make install        # or `go install .` — a stamped binary on PATH
+# a release binary — no toolchain needed: darwin, linux, windows · amd64, arm64
+gh release download -R Roderick-Jonsson/evalctl -p '*darwin_arm64.tar.gz'
+tar xzf evalctl_*_darwin_arm64.tar.gz evalctl && mv evalctl /usr/local/bin/    # or: make install
+
 evalctl             # the TUI, on whatever tree you are standing in
 evalctl init --skill meeting-notes --profile notes    # or scaffold one from nothing
+```
+
+Downloads carry GitHub build provenance, so a binary can be checked against this repository's
+release workflow before it runs:
+
+```bash
+gh attestation verify evalctl_0.16.0_darwin_arm64.tar.gz -R Roderick-Jonsson/evalctl
 ```
 
 ## Highlights
@@ -35,7 +45,7 @@ evalctl init --skill meeting-notes --profile notes    # or scaffold one from not
 ## The front screen
 
 ```
- what to optimize                                                                   v0.12.0 · 11:06
+ what to optimize                                                                   v0.16.0 · 11:06
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                                     │
 ▌ OPTIMIZATIONS                     │   TRIGGER OPTIMIZATION
@@ -90,7 +100,7 @@ three files, run both lanes, read what each run left behind.
 
 ## Where it is
 
-`v0.12.0`, used daily against a real tree — a course pipeline whose five stage skills feed each
+`v0.16.0`, used daily against a real tree — a course pipeline whose five stage skills feed each
 other's fixtures. The screens in these docs are that project, and `slide-builder` is one of its
 skills; nothing in the tool knows either name.
 
