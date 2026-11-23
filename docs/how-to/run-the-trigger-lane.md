@@ -1,8 +1,8 @@
 # Run the trigger lane: tune a description
 
 The trigger lane asks one question — *given this request, does the right skill load?* — and the
-description in `SKILL.md` is the whole of what decides it. This page works one skill's loop in
-the TUI: the door, the skill, the two sections, the iteration, the run.
+description in `SKILL.md` is the whole of what decides it. This page works one skill's loop in the
+TUI: the door, the skill, the two sections, the iteration, the run.
 
 ## The loop, one question at a time
 
@@ -11,9 +11,9 @@ names in the screenshots (`SL-*.md`, `MC-…`) are that project's conventions in
 `evalctl.json`. Nothing in the tool knows any of them.
 
 It walks one loop and asks one question at a time: **which optimization**, **which skill**, **which
-of the skill's two activities**, then that activity's own screens. There is no table to sort, no column
-to focus and no second menu — what used to be four tabs is the rail at the top of every step, which is
-also the resume point.
+of the skill's two activities**, then that activity's own screens. There is no table to sort, no
+column to focus and no second menu — what used to be four tabs is the rail at the top of every step,
+which is also the resume point.
 
 ## Which skill
 
@@ -66,14 +66,14 @@ started with, and an open form or question, which holds the index of the row it 
 Both re-read on the tick after they hand the keys back.
 
 The table is the shape the eval tables had: a two-cell gutter where the cursor lives, fixed columns,
-counts right-aligned so 1 and 47 end on one edge, a quiet header and no rule under it. Beside it, the
-pane says what the row under the cursor is — the activity and step its loop opens in, what both splits
-hold (queries, and how many should trigger), how many wordings its runs have measured, whether a
-draft is staged, and that skill's validation findings.
+counts right-aligned so 1 and 47 end on one edge, a quiet header and no rule under it. Beside it,
+the pane says what the row under the cursor is — the activity and step its loop opens in, what both
+splits hold (queries, and how many should trigger), how many wordings its runs have measured,
+whether a draft is staged, and that skill's validation findings.
 
 `STATE` is the column that gives way first: the pane already says it in words. Below the width that
-buys a pane, the row under the cursor is spelled out in a block under the table instead — same facts,
-one column.
+buys a pane, the row under the cursor is spelled out in a block under the table instead — same
+facts, one column.
 
 ## The two sections
 
@@ -111,45 +111,47 @@ j k rows · tab the run · n e d new·edit·delete · space trigger · enter the
 
 The loop is two activities, not four steps in a row, because the two sets are used for opposite
 things. **Iteration** works the train set — the only measurement a revision may learn from.
-**Generalization** works the validation set — the instrument that judges a wording and must never shape
-one. Each owns its query set and its own steps, so the rail inside a section only ever lists the work
-that belongs to it, and `esc` goes up one level: a step back to its section, a section back to the
-skills.
+**Generalization** works the validation set — the instrument that judges a wording and must never
+shape one. Each owns its query set and its own steps, so the rail inside a section only ever lists
+the work that belongs to it, and `esc` goes up one level: a step back to its section, a section back
+to the skills.
 
-The pane beside the two is the split the section works, as a table: the train set beside iteration, the
-validation set beside generalization, with the same columns and the same keys the step screen's own set
-has. That is the moment a set wants fixing — a label that is wrong, a why that is missing — and cards
-about it would be a paragraph where a table belongs. `tab` moves the keys between the two
-halves: the half that has them is the accent, with a block in front of its name; the other is quiet, and
-the status row says which one it is in words.
+The pane beside the two is the split the section works, as a table: the train set beside iteration,
+the validation set beside generalization, with the same columns and the same keys the step screen's
+own set has. That is the moment a set wants fixing — a label that is wrong, a why that is missing —
+and cards about it would be a paragraph where a table belongs. `tab` moves the keys between the two
+halves: the half that has them is the accent, with a block in front of its name; the other is quiet,
+and the status row says which one it is in words.
 
 The pane reads in the order the work is decided. **THE RUN** leads — two knobs, the settings that
 govern every row below them, drawn whether or not they have the keys, because what a run costs is
-decided before it is started. **TRAIN SET** follows: the split as a table. Then, under the table, the
-fields of the row under the cursor. `tab` walks down that order: from the table into the run's block,
-and from one knob to the other; the knob under the cursor takes the accent and the cursor mark, and
-the table above goes quiet, so exactly one region is lit. `←`/`→` change it. Runs per query steps
-between 1 and 9 and is the set's own number, so it is written into `trigger-evals.json` and every run
-reads it from there, this session's or the CLI's. `space` flips the dry run, which prints the commands
-a run would issue and writes nothing — the one setting that is not the file's, because it is what the
-next run is asked to be; while it is on the status row says so. `enter` or `esc` hands the keys back to
-the table; every change is already written, so there is nothing to save.
+decided before it is started. **TRAIN SET** follows: the split as a table. Then, under the table,
+the fields of the row under the cursor.
+
+`tab` walks down that order: from the table into the run's block, and from one knob to the other;
+the knob under the cursor takes the accent and the cursor mark, and the table above goes quiet, so
+exactly one region is lit. `←`/`→` change it. Runs per query steps between 1 and 9 and is the set's
+own number, so it is written into `trigger-evals.json` and every run reads it from there, this
+session's or the CLI's. `space` flips the dry run, which prints the commands a run would issue and
+writes nothing — the one setting that is not the file's, because it is what the next run is asked to
+be; while it is on the status row says so. `enter` or `esc` hands the keys back to the table; every
+change is already written, so there is nothing to save.
 
 `enter` goes deeper from either side, and the two are not the same move: from the list it opens the
-workbench at the step the disk is at, and from the pane it opens the step that owns the set on screen.
-Below the width that buys a pane (about 65 columns, once the list has its own) the set is managed one
-screen in, and the list carries its own counts.
+workbench at the step the disk is at, and from the pane it opens the step that owns the set on
+screen. Below the width that buys a pane (about 65 columns, once the list has its own) the set is
+managed one screen in, and the list carries its own counts.
 
 ## Iteration — four quadrants
 
-The loop is a comparison, not a queue. Four things belong to one decision: **what failed**, **how much
-of the set failed**, **what the wording says now**, and **what the last five revisions bought**. They
-share one screen as four quadrants, because you look at them together — a rung-by-rung screen hid
-three of them while you worked on the fourth.
+The loop is a comparison, not a queue. Four things belong to one decision: **what failed**, **how
+much of the set failed**, **what the wording says now**, and **what the last five revisions
+bought**. They share one screen as four quadrants, because you look at them together — a
+rung-by-rung screen hid three of them while you worked on the fourth.
 
-Only the description is edited here, because a revision is an edit to `SKILL.md` and nothing else. The
-set is drawn with the run's verdicts and read; the rows are written beside the two sections, where the
-set is the thing on screen.
+Only the description is edited here, because a revision is an edit to `SKILL.md` and nothing else.
+The set is drawn with the run's verdicts and read; the rows are written beside the two sections,
+where the set is the thing on screen.
 
 Each quadrant's name is closed by a rule, the way every other region in the app is drawn: four areas
 sharing one screen need the same edge under their titles as a screen with one region, or the pane's
@@ -162,26 +164,26 @@ name and the first row of its content read as one paragraph.
  br  ITERATIONS        every measured wording, and the rate it scored
 ```
                                                │
-  FAILED QUERY · q3                            │ ▌ TRAIN SET                                              2 queries
-  ──────────────────────────────────────────── │   ──────────────────────────────────────────────────────────────
-  Query     build the deck from the retro      │     ID   TRIGGER RESULT  QUERY
+FAILED QUERY · q3                            │ ▌ TRAIN SET
+2 queries ──────────────────────────────────────────── │
+────────────────────────────────────────────────────────────── Query     build the deck from the
+retro      │     ID   TRIGGER RESULT  QUERY
             notes                              │ ▶    1   yes     pass    build me slides from this outline
                                                │      2   no      FAIL    research the operator pattern for me
-  Expected  to trigger                         │
-  Fired     0 of 3 runs                        │
+Expected  to trigger                         │ Fired     0 of 3 runs                        │
                                                │
-  Verdict   too narrow                         │
-  Hint 1    Name the context this belongs to.  │
-  Hint 2    Be pushy: say it applies unnamed.  │
-  Hint 3    Describe the intent, not the tool. │   2 rows · 1 should trigger · 1 should not · 50% of the set
+Verdict   too narrow                         │ Hint 1    Name the context this belongs to.  │ Hint 2
+Be pushy: say it applies unnamed.  │ Hint 3    Describe the intent, not the tool. │   2 rows · 1
+should trigger · 1 should not · 50% of the set
                                                │   (the guide asks ~60/40)
                                                │
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
                                                │
-  THE DESCRIPTION                   52 / 1024  │   ITERATIONS                                                1 of 5
-  ──────────────────────────────────────────── │   ──────────────────────────────────────────────────────────────
-  Use this skill when an outline has to        │    ITER        TRAIN  CHARS  NOTE
-  become slides.                               │       1          50%     52  the description in SKILL.md when t…
+THE DESCRIPTION                   52 / 1024  │   ITERATIONS
+1 of 5 ──────────────────────────────────────────── │
+────────────────────────────────────────────────────────────── Use this skill when an outline has to
+│    ITER        TRAIN  CHARS  NOTE become slides.                               │       1
+50%     52  the description in SKILL.md when t…
                                                │   4 iterations to go before generalization
                                                │
                                                │
@@ -189,10 +191,11 @@ name and the first row of its content read as one paragraph.
                                                │
                                                │
                                                │
-  note  the description in SKILL.md when the … │
+note  the description in SKILL.md when the … │
                                                │
-enter run the train set · tab the description · R run again · f the failures · esc sections              ? keys
- the wording may learn from these rows — nothing else shapes a revision                            train set · failure 1 of 1
+enter run the train set · tab the description · R run again · f the failures · esc sections
+? keys the wording may learn from these rows — nothing else shapes a revision
+train set · failure 1 of 1
 ```
 
 | quadrant | what it holds |
@@ -202,12 +205,16 @@ enter run the train set · tab the description · R run again · f the failures 
 | **the description** (bottom left) | the wording itself, in a field with a caret, because a revision is an edit and not a screen you navigate to. The counter is the format's 1024-character ceiling |
 | **iterations** (bottom right) | every run, its train rate, its length, and the note that says why it exists — the only place you can see whether five revisions moved anything |
 
-**Typing.** `tab` walks the three panes: the set, the description, the note. Only the last two type —
+### Typing
+
+`tab` walks the three panes: the set, the description, the note. Only the last two type —
 the set takes `j k` as row commands, and the description is the one thing this screen writes. A pane
 that has the caret says so — the footer changes, and a `q` types a `q` instead of quitting. `esc` gives
 the keys back to the set; a second `esc` leaves the section.
 
-**The set is one pane: table above, the row's fields below.** Every set draws the row under the
+### The set is one pane: table above, the row's fields below
+
+Every set draws the row under the
 cursor in its fields as part of itself — `query`, `why`, `should the skill load?`, `split` — so there is
 nothing between looking at a row and changing it, and no key that has to reveal the fields first. This
 is the set on the screen that owns it: beside the two sections, and the validation set's own step. The
@@ -219,7 +226,9 @@ for. The `split` field is how a row moves between the train set, the validation 
 save says so out loud (**moved train → validation**), because that row stops being part of what this
 screen measures. The id is left to the tool: it indexes the result directories.
 
-**The loop in one key.** `enter` on the set does the next thing and the footer names it: it stages
+### The loop in one key
+
+`enter` on the set does the next thing and the footer names it: it stages
 the wording you typed (if it changed) and measures it. `ctrl+s` stages without measuring, `R` measures
 again on purpose, and `enter` on an unchanged draft just runs — a run is not a revision.
 
@@ -240,12 +249,13 @@ way. What a run costs is decided before, on the section's pane — the runs per 
 run are there, beside the rows they multiply — so the one thing left to read is the run itself:
 
 ```
-  trigger eval 11 · 10 quer(y/ies) × 3 run(s) · threshold 0.5 · profile eval-video-course-creator-trigger
-  ────────────────────────────────────────────────────────────────────────────────────
-  q01 · slide-builder · should_trigger=true · train          ✓ ✓ ✓
-  q02 · slide-builder · should_trigger=false · train         ✓ ✗ ✓
-  ────────────────────────────────────────────────────────────────────────────────────
-  run q01 #1 → skill loaded, evidence found
+trigger eval 11 · 10 quer(y/ies) × 3 run(s) · threshold 0.5 · profile
+eval-video-course-creator-trigger
+──────────────────────────────────────────────────────────────────────────────────── q01 ·
+slide-builder · should_trigger=true · train          ✓ ✓ ✓ q02 · slide-builder ·
+should_trigger=false · train         ✓ ✗ ✓
+──────────────────────────────────────────────────────────────────────────────────── run q01 #1 →
+skill loaded, evidence found
 ```
 
 While it runs, one row per query carries a mark per attempt (`·` pending, `⟳` running, `✓` done, `✗`

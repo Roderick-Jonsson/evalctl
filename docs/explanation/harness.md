@@ -64,22 +64,23 @@ nothing (a pure prompt, e.g. web research the skill must fetch itself) keeps `fi
 has no dir on disk. The key itself always stays present so the standard's pre-flight check
 passes.
 
-`assertions` is a list of strings: one verifiable statement each ("the manifest lists one entry
-per slide"), graded PASS or FAIL with evidence. The key is written only when the case has any —
-per the guide they are added after the first graded iteration, so a case without them is a case
-whose shape is not known yet, not a case with an empty list. `evalctl` treats them as part of the
-format rather than a stray key: `evalctl skills` counts them per skill (`ASR 2/3`), the case view
-lists them, `evalctl edit … --assertions` replaces them (one per line), and a search reads them.
+`assertions` is a list of strings: one verifiable statement each ("the manifest lists one entry per
+slide"), graded PASS or FAIL with evidence. The key is written only when the case has any — per the
+guide they are added after the first graded iteration, so a case without them is a case whose shape
+is not known yet, not a case with an empty list. `evalctl` treats them as part of the format rather
+than a stray key: `evalctl skills` counts them per skill (`ASR 2/3`), the case view lists them,
+`evalctl edit … --assertions` replaces them (one per line), and a search reads them.
+
 The output lane's initialization view shows the whole list with both arms' verdicts and writes it in
 place: `e` opens it as the list it is — one bullet per assertion, the bullet drawn by the pane and
 never part of the text, the caret a bar inside the sentence — with `enter` starting the next
 assertion, `↑ ↓` walking them, `ctrl+s` saving and `esc` discarding. The block grows with the list
 instead of scrolling to the height it opened at; rows are lost only when the window itself is too
-short, and then the assertion being typed stays in view. Facts an assertion is checked against ride in its own sentence
-(`… — facts: …`), because the format's list is strings and the judge reads it in order.
-`evalctl run` grades them as part of the run: the judge writes one verdict per assertion into each
-arm's `grading.json` (see *Grading and iterating*), so an iteration is outputs and verdicts in one
-command. `--no-grade` stops after the arms and leaves `assertion_results` empty, and that arm is
+short, and then the assertion being typed stays in view. Facts an assertion is checked against ride
+in its own sentence (`… — facts: …`), because the format's list is strings and the judge reads it in
+order. `evalctl run` grades them as part of the run: the judge writes one verdict per assertion into
+each arm's `grading.json` (see *Grading and iterating*), so an iteration is outputs and verdicts in
+one command. `--no-grade` stops after the arms and leaves `assertion_results` empty, and that arm is
 ungraded until `evalctl grade` (or `g`) finishes it.
 
 > The four stage skills are still drafts. The runner, the profiles and the cases are ready; the
