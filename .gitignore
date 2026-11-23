@@ -15,3 +15,6 @@ __pycache__/
 # SpecStory internals (rewritten on every session update)
 .specstory/debug/
 .specstory/statistics.json
+
+# goreleaser output
+dist/
