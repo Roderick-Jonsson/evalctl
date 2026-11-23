@@ -96,6 +96,10 @@ skills; nothing in the tool knows either name.
 A tag is a release: `.github/workflows/release.yml` runs `make check` and `make test`, then goreleaser
 builds every platform, so a tag on a broken tree fails before it ships.
 
+Built with Bubble Tea, Bubbles, Lip Gloss, Huh and Glamour, on Go 1.26; `internal/theme` maps each
+palette colour to the nearest xterm-256 entry in CIE Lab so a 256-colour terminal draws what the
+docs claim.
+
 ## Licence
 
 Not decided yet — ask, or open an issue if you want to use it.
