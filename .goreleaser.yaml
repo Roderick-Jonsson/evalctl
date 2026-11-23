@@ -49,4 +49,4 @@ release:
     **evalctl {{ .Tag }}** — the eval runner for Hermes skills. One binary per platform, no runtime.
 
     Starting a project: `evalctl init --skill <name> --profile <hermes-profile>`, then
-    [docs/getting-started.md](docs/getting-started.md).
+    [docs/tutorials/first-eval.md](docs/tutorials/first-eval.md).

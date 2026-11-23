@@ -405,7 +405,7 @@ func dropUsageHeader(text string) string {
 }
 
 // helpDocsLine is the last line of every page: where the long-form documentation lives.
-const helpDocsLine = "README.md § CLI · docs/getting-started.md · evalctl help <verb>"
+const helpDocsLine = "docs/reference/cli.md · docs/tutorials/first-eval.md · evalctl help <verb>"
 
 // currentVerb is the canonical verb of the command line being run. It exists so an error can
 // point at the page the operator needs (`try: evalctl ls -h`) instead of a placeholder.
@@ -990,7 +990,7 @@ var (
 var notes = []string{
 	noteSandboxes,
 	noteRefs,
-	"The rest — the profiles link, --log levels, what a sandbox is made of — is in README § CLI, or " +
+	"The rest — the profiles link, --log levels, what a sandbox is made of — is in docs/reference/cli.md, or " +
 		"`evalctl run --help` / `evalctl profiles --help`.",
 }
 

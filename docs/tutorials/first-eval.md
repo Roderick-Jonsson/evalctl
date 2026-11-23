@@ -1,4 +1,4 @@
-# Getting started with evalctl, on your own project
+# Your first eval: measure one skill, from nothing
 
 evalctl measures one thing: whether a skill earns its place. It runs a Hermes agent twice — once
 with your skill installed, once without it — and asks whether the skill changed the output. For the
@@ -231,7 +231,18 @@ git clone <the repo> && cd evalctl && make install     # builds, stamps, puts it
 was built), and the TUI's top-right corner repeats it — a stale binary looks exactly like a fresh one
 until that corner says when it was made.
 
-## Reading the rest of these docs
+## Where next
 
-The README's screens and examples use one sample project — a course pipeline with a `slide-builder`
-skill. Nothing in the tool knows that name; wherever you see it, your skill's name goes there.
+The screens and examples in these docs come from one sample project — a course pipeline with a
+`slide-builder` skill. Nothing in the tool knows that name; wherever you see it, your skill's name
+goes there.
+
+From here, by what you are trying to do:
+
+- **tune the description** — [Run the trigger lane](../how-to/run-the-trigger-lane.md), then
+  [rank the wordings and apply the winner](../how-to/generalize-and-apply.md);
+- **measure the work itself** — [Run the output lane](../how-to/run-the-output-lane.md);
+- **look a verb up** — [CLI reference](../reference/cli.md);
+- **understand the split** — [Deliberate choices](../explanation/deliberate-choices.md).
+
+The whole map is in [`docs/README.md`](../README.md).
