@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# build output
+/bin/
+
+# evalctl's own state and the pre-write backups the manager keeps
+/.evalctl/
+
+# eval sandboxes: one workspace per skill
+/*-workspace/
+__pycache__/
+*.pyc
+
+# SpecStory internals (rewritten on every session update)
+.specstory/debug/
+.specstory/statistics.json
