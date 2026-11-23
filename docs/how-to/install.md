@@ -18,9 +18,16 @@ go build -o bin/evalctl .     # plain build: commit comes from the Go build info
 ## From a release binary
 
 ```bash
-# download evalctl_<version>_<os>_<arch>.tar.gz from the release page, then
-chmod +x evalctl && mv evalctl "$(go env GOPATH)/bin/"
+# darwin, linux, windows · amd64, arm64 — the latest tag, no toolchain needed
+gh release download -R Roderick-Jonsson/evalctl -p '*darwin_arm64.tar.gz'
+tar xzf evalctl_*_darwin_arm64.tar.gz evalctl && mv evalctl /usr/local/bin/
 ```
+
+Or take the archive from the [releases page](https://github.com/Roderick-Jonsson/evalctl/releases)
+and check it first: `shasum -a 256 -c <(grep darwin_arm64 checksums.txt)`. Every artifact also carries
+GitHub build provenance — `gh attestation verify evalctl_0.16.0_darwin_arm64.tar.gz -R
+Roderick-Jonsson/evalctl` — which proves the bytes came out of this repository's release workflow at
+a named commit, not out of somebody's laptop.
 
 A release binary answers `evalctl version` with the tag it was built from, the commit, and the time
 it was built, so a binary copied between machines says which one it is.
