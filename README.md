@@ -77,6 +77,7 @@ three files, run both lanes, read what each run left behind.
   [Generalize and apply the winner](docs/how-to/generalize-and-apply.md)
 - [Run the output lane](docs/how-to/run-the-output-lane.md) ·
   [Promote a run's output](docs/how-to/promote-a-run.md)
+- [Work the sets from the shell](docs/how-to/manage-the-sets.md) — the CLI patterns
 - [Undo a bad trim](docs/how-to/recover-and-backup.md)
 
 **Look something up:** [CLI](docs/reference/cli.md) · [TUI and keys](docs/reference/tui.md) ·

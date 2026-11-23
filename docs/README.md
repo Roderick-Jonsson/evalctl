@@ -1,6 +1,6 @@
 # The evalctl docs
 
-Eighteen pages, four kinds. Pick by what you are trying to do, not by where the file sits:
+Nineteen pages, four kinds. Pick by what you are trying to do, not by where the file sits:
 
 | kind | answers | where |
 |---|---|---|
@@ -33,13 +33,16 @@ Working the loop:
 
 Moving results:
 
+- [Work the sets from the shell](how-to/manage-the-sets.md) — the CLI patterns worth copying:
+  sorting a set, a bulk trim, a run from a script, `--json` everywhere.
 - [Promote a run's output](how-to/promote-a-run.md) — into the next stage's fixture, into the skill's
   own `references/`, or into the trigger lane as a query.
 - [Undo a bad trim: backups and renumbering](how-to/recover-and-backup.md)
 
 ## Reference
 
-- [CLI](reference/cli.md) — every verb, grammar and flag; `--json`, help pages, completion, exit codes.
+- [CLI](reference/cli.md) — every verb, its grammar and its flags in tables, generated from the
+  binary by `make docs`; global flags, notes and exit codes once at the foot.
 - [TUI and keys](reference/tui.md) — the frame, where the keys are, and what the TUI deliberately
   does not do.
 - [The tree and its conventions](reference/tree.md) — what counts as a skill, how the walk finds one,

@@ -24,7 +24,7 @@ LDFLAGS := -X $(MODULE).Commit=$(COMMIT) -X $(MODULE).BuiltAt=$(BUILT) -X $(MODU
 
 .DEFAULT_GOAL := install
 
-.PHONY: all build install uninstall hooks version test check clean
+.PHONY: all build install uninstall hooks version docs test check clean
 
 all: install
 
@@ -50,6 +50,14 @@ hooks:
 
 version: build
 	./bin/evalctl version
+
+# `make docs` writes the CLI reference from the binary itself: every verb's page, re-laid out as
+# markdown. A test compares the file with the same function and fails when they differ, so the
+# reference cannot describe a flag the binary does not have, and `make check` catches a stale page
+# before a release does.
+docs:
+	@go run . help --markdown > docs/reference/cli.md
+	@echo "wrote docs/reference/cli.md ($$(wc -l < docs/reference/cli.md | tr -d ' ') lines)"
 
 test:
 	go test ./...

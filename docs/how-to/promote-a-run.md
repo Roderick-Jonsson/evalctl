@@ -94,5 +94,5 @@ file).
 
 ## Where next
 
-- [The `promote` grammar, flag by flag](../reference/cli.md#managing-the-sets)
+- [The `promote` grammar, flag by flag](../reference/cli.md#evalctl-promote)
 - [Fixtures: what a case stages](../reference/runs.md)

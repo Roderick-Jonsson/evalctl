@@ -108,6 +108,14 @@ func Run(args []string) int {
 	currentVerb = canonicalVerb(cmd)
 	switch cmd {
 	case "help", "-h", "--help":
+		// `evalctl help --markdown` is the reference page for a reader with no terminal: the same
+		// pages the shell prints, re-laid out as one markdown document. `make docs` writes it to
+		// docs/reference/cli.md, so the page cannot drift from the flags it documents.
+		for _, a := range rest {
+			if a == "--markdown" {
+				return printMarkdownReference()
+			}
+		}
 		// `evalctl help <verb>` is the same page as `evalctl <verb> -h`: the verb is dispatched
 		// with -h, which every verb answers before it opens a tree or does any work.
 		if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {

@@ -13,6 +13,14 @@ stale-binary warning — never a failed commit. It rebuilds **both** copies: the
 `./bin/evalctl`, because both get run — refreshing only PATH is how `./bin/evalctl` ended up two
 commits behind the screen someone was looking at. It is per-clone: run it once after cloning.
 
+## The reference page is generated
+
+`docs/reference/cli.md` is not written by hand: `make docs` renders it from the binary, by running
+every verb's `--help` page through `internal/cli/reference.go` and re-laying it out as markdown, so a
+flag cannot exist in the command and be missing from the page. `TestReferencePageIsCurrent` compares
+the file with `ReferenceMarkdown()` and fails when they differ, which means `make test` — and so the
+release workflow — refuses a stale reference. Change a flag: run `make docs`, commit both.
+
 ## Layout
 
 ```
