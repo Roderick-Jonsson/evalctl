@@ -3,15 +3,15 @@ module evalctl
 go 1.26.4
 
 require (
-	github.com/charmbracelet/bubbles v0.21.1
+	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/glamour v1.0.0
-	github.com/charmbracelet/huh v0.7.0
+	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
-	github.com/charmbracelet/x/ansi v0.11.5
+	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/muesli/termenv v0.16.0
-	golang.org/x/sys v0.38.0
-	golang.org/x/term v0.36.0
+	golang.org/x/sys v0.50.0
+	golang.org/x/term v0.48.0
 )
 
 require (
